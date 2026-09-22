@@ -1,0 +1,26 @@
+From b948e50bdb64e5a4ab50c3ee89a0ea55071a43a6 Mon Sep 17 00:00:00 2001
+From: Salvo Giangreco <giangrecosalvo9@gmail.com>
+Date: Fri, 3 Oct 2025 16:22:12 +0200
+Subject: [PATCH] Bypass ICD verification on Android 16
+
+Do not request the Samsung verifiable-integrity KeyMint tag. Android 16
+constructs AttestParameterSpec through mutable fields, so removing fields and
+changing its constructor ABI (as older versions did) is no longer valid.
+---
+ .../samsung/android/security/keystore/AttestationUtils.smali | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali b/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali
+--- a/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali
++++ b/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali
+@@ -360,7 +360,7 @@
+ 
+     invoke-virtual {v1, v0}, Ljava/util/ArrayList;->add(Ljava/lang/Object;)Z
+ 
+-    iget-boolean v0, p1, Lcom/samsung/android/security/keystore/AttestParameterSpec;->mVerifiableIntegrity:Z
++    const/4 v0, 0x0
+ 
+     const-string v3, "AttestationUtils"
+ 
+-- 
+2.51.1
