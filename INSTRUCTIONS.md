@@ -1,5 +1,59 @@
 # Current One UI 9 Port Handoff Instructions
 
+## Configurable About-phone device image (2026-09-25)
+
+The two upstream commits `8565ced8f8390c954a9eea34df7b61b6da1825c0` and
+`3a052e7a69ef80b356f70005a9515e6cd693c8d9`, originally authored and signed
+off by **Android-Artisan <romartisan2025@gmail.com>**, were adapted for this
+tree's SecSettings module.
+
+- Adds a **Set device image** preference to UN1CA UI settings. It stores an
+  optional product code in `persist.sys.unica.device_image`; reset clears the
+  property. In either case it deletes the cached about-phone image so SCPM
+  reloads it next time About phone opens.
+- `DeviceImageManager$1` first reads that property and falls back to
+  `ril.product_code`, preserving stock behaviour when no custom value exists.
+- This branch has `DeviceImageManager$1` in `smali_classes3`, unlike the
+  upstream source's `smali_classes5`; the adapted patch targets the actual
+  One UI 9 layout.
+- The first upstream commit's `Utils.smali` conversion of
+  `AlertDialog.Builder` calls to `void` is required here: the Android 17
+  SecSettings copy declares those methods with `void` return types. The new
+  controller uses the same descriptors, avoiding a linkage failure.
+- `unica/mods/settings/customize.sh` was made idempotent for full XML
+  overlays such as `unica_ui_settings.xml`. On an incremental work-dir those
+  files can already exist; they must be copied rather than treated as a
+  `sed` expression beginning with `<?xml`.
+
+Validation required after a build: open UN1CA UI settings, set and reset a
+test code, then open About phone and confirm that the device image reloads.
+
+## x1s HDR10+ and y2s LOG camera gates (2026-09-25)
+
+The target camera XML always overrides the target firmware's
+`system/cameradata/camera-feature.xml`. Stock Android 13 camera XMLs from
+the public Android Dumps collection were inspected as a hardware-capability
+reference only; their framework generation is older than the One UI 9 source.
+
+- Stock x1s (`G980FXXSJHXC1`) advertises `hdr10=true` for 13 rear recording
+  profiles. The x1s target had changed all 30 profiles to `false` and added
+  `SUPPORT_HDR10_PLUS_RECORDING=false`; the 13 stock-supported profiles were
+  restored and the contradictory explicit disable was removed.
+- The y2s dump (`G985FXXSFHWB1`) does not advertise LOG video, so
+  `SUPPORT_LOG_VIDEO=true` in y2s is an explicit UN1CA parity experiment with
+  x1s rather than a stock-derived claim. Do not add `SUPPORT_DEFAULT_HEVC` as
+  part of this change; it changes the default recording codec independently.
+- The same stock comparison found the all-disabled HDR10+ pattern in `c2s`,
+  `r8s`, and `z3s`. `unica/patches/camera/customize.sh` restores only the
+  stock-advertised rear profiles for those targets after their target XML is
+  copied. r8s has two `1920x1440` entries, so only its final effective
+  physical-camera entry is enabled. `c1s` remains unchanged because no
+  matching dump was available.
+
+Validation required after a build: x1s should expose HDR10+ only at the
+stock-supported rear resolutions; y2s should expose LOG video and must be
+tested for preview, recording, playback and saved-file validity.
+
 This document records the investigation and changes made after the request to inspect the latest `y2s` boot logs. It is intended as a handoff for other developers or AI assistants working on the same branch.
 
 ## Repository state
@@ -3557,19 +3611,41 @@ so legacy vendor clients could not find `ISystemSuspend/default`.
 dual-transport daemon while retaining the source service path and adds only
 the target HIDL bridge library and `libSuspendProperties.so`. It also replaces
 the AIDL-only suspend manifest with the target manifest that advertises both
-transports. `unica/patches/selinux/customize.sh` grants the `system_suspend`
-domain read access to the target kernel's labeled `debugfs/wakeup_sources`
-tree (including traversal of the parent debugfs directory), fixing the accompanying `Error opening wakeup*/...: Permission denied`
-spam without broadening access to other domains.
+transports. A later policy inspection established that both suspend binaries
+read `/sys/class/wakeup`, labeled `sysfs_wakeup`, rather than debugfs. The
+Android 17 base already contains the necessary `system_suspend` read/search
+and HIDL-registration rules; `unica/patches/selinux/customize.sh` now verifies
+those exact rules instead of adding unrelated debugfs permissions.
 
-The six `CCodecConfig ... BAD_INDEX` lines are different: they occur while
-querying optional AAC/Vorbis fields, after which Codec2 initializes, allocates,
-and releases the component normally. They are not the cause of the
-`C2_NO_MEMORY`/DMA-BUF pressure events, so no unsafe codec XML or binary patch
-was added for them. No ROM build or flash was executed; validate the suspend
-fix in the next build by checking that `ISystemSuspend::getService() failed`
-and `Error opening wakeup` disappear while `dumpsys suspend_control_internal`
-still reports the service.
+The six `CCodecConfig ... BAD_INDEX` lines occur while querying optional
+AAC/Vorbis fields, after which Codec2 initializes, allocates, and releases the
+component normally. `BAD_INDEX` is the defined Codec2 response for an
+unsupported optional parameter; changing the vendor component to fabricate
+support would be unsafe. The actionable Android 17 incompatibility was its
+new availability accounting repeatedly querying resource parameters that the
+legacy component store cannot expose.
+
+`platform/exynos990/patches/miscs/customize.sh` patches the ARM64 copy, while
+the later `platform/exynos990/patches/zzz_runtime32_compat/customize.sh`
+patches the ARM32 r11s donor copy after it is imported. Both make only the
+optional global and per-component availability-accounting routines inside
+`libsfplugin_ccodec.so` return an empty resource set/success. This matches
+CCodec's feature-disabled fallback, so the unsupported resource queries are
+never issued. Patching the exported aconfig wrapper would not be sufficient
+because this beta compiled the flag as a constant in the internal call sites;
+the compatibility patch therefore targets the accounting routines that those
+call sites actually execute.
+Codec enumeration, hardware acceleration, buffer allocation, and real errors
+remain enabled. The patch validates exact instruction signatures and accepts
+an already-patched binary. No ROM build or flash was executed; after the next
+build, confirm that `Failed to query component ... system resources: 6`
+disappears and that codecs still reach `STARTED`. Occasional informational
+`CCodecConfig ... BAD_INDEX` for other optional fields may remain and is not a
+failure.
+
+Validate the suspend fix in the same build by checking that
+`ISystemSuspend::getService() failed` and `Error opening wakeup` disappear
+while `dumpsys suspend_control_internal` still reports the service.
 
 ### AVC HDR-static discovery and decoder-buffer verdict (2026-09-24)
 
@@ -3690,3 +3766,130 @@ Static validation confirmed that the target layout root is
 `sec_settings_main_switch_bar`, and the incompatible nested cast path was
 removed. `git diff --check` passed. No APK/ROM build or flash was performed;
 build `SecSettings.apk` and open both UN1CA screens to validate on-device.
+
+### Suspend HIDL bridge and SELinux diagnosis (2026-09-24)
+
+The installed build still ran the S24+ AIDL-only
+`android.system.suspend-service`. Runtime evidence was explicit: the AIDL
+service registered and remained running, but legacy Exynos 990 clients logged
+`ISystemSuspend::getService() failed` because
+`android.system.suspend@1.0::ISystemSuspend/default` was absent. The build log
+also reported that no target dual service had been found.
+
+The target S20+ dump does contain the required dual HIDL/AIDL daemon,
+`android.system.suspend@1.0.so`, `libSuspendProperties.so`, and its dual
+manifest. The module failed to find them because it converted the complete
+`MODEL/CSC/SERIAL` firmware identifier to `MODEL_CSC_SERIAL`, while extracted
+firmware directories use only `MODEL_CSC`. The suspend block in
+`platform/exynos990/patches/miscs/customize.sh` now resolves the directory in
+the same way as `make_rom.sh` and aborts instead of silently producing another
+known-incompatible AIDL-only image when any required target component is
+missing.
+
+Directly loading the Android 13 target daemon against Android 17 is not ABI
+safe. Symbol comparison found two concrete incompatibilities: `libbase.so`
+changed the `WriteStringToFd`/`Trim` string ABI, and
+`android.system.suspend.control-V1-cpp.so` changed its Binder object layout.
+The module now imports only those two target libraries under private SONAMEs
+(`libbase_suspend_compat.so` and
+`android.system.suspend.control-V1-cpp-compat.so`) and rewrites only the
+suspend daemon's `DT_NEEDED` entries with `patchelf`. Global Android 17
+libraries remain untouched. The remaining daemon dependencies are present in
+the source system and the target-only HIDL/property libraries are imported as
+before.
+
+The repeated `Error opening wakeup*/...: Permission denied` was previously
+misattributed to `debugfs_wakeup_sources`. Both suspend binaries actually
+enumerate `/sys/class/wakeup`, and the final Android 17 policy already labels
+that tree `sysfs_wakeup` and grants `system_suspend` directory, file and link
+read/search access. It also already permits `system_suspend_server` to add the
+legacy HIDL hwservice. The custom debugfs allows were therefore removed;
+`unica/patches/selinux/customize.sh` now verifies the required sysfs and HIDL
+registration rules and aborts if a future source policy omits them.
+
+Validation performed: both modified shell modules pass `bash -n`,
+`git diff --check` passes, all four target suspend components resolve under
+`out/fw/SM-G986B_AUT`, all direct library dependencies have providers, the
+private-library transformation was reproduced on temporary copies, and the
+rewritten daemon contains the expected private `DT_NEEDED` names and SONAMEs.
+No ROM build, flash, or live service replacement was performed. After the
+next installed build, verify the HIDL and AIDL registrations and confirm that
+`ISystemSuspend::getService() failed` and the wakeup-entry EACCES messages are
+absent.
+
+### Android 17 suspend wakeup labels on Exynos 990 (2026-09-25)
+
+The previous conclusion that every `/sys/class/wakeup` object was labelled
+`sysfs_wakeup` was incomplete. Runtime label inspection on the S20+ showed
+that those class links resolve to a mixture of `sysfs` (sensor and biometric
+wakeups) and target-vendor `sysfs_battery` (USB, wireless and battery wakeups),
+in addition to `sysfs_wakeup`. This explains why the AIDL service registered
+correctly while it still emitted repeated `event_count` and kernel-wakelock
+`EACCES` errors.
+
+`unica/patches/selinux/customize.sh` now appends read-only `system_suspend`
+rules for generic `sysfs`. When the target vendor declares the existing
+`system_suspend_access_sysnode` compatibility attribute, it also adds the same
+read-only rules through that narrow attribute; on the S20+ it covers
+`sysfs_battery`, `sysfs_sec`, `sysfs_ss_writable` and `sysfs_uhid`. It neither
+grants write access nor permits `debugfs_wakeup_sources`. Other targets are
+left unchanged when they do not declare that attribute.
+
+After installing a new build, reproduce a charge/wakeup event and verify:
+
+```sh
+adb logcat -d | grep -E 'system\.suspend-service.*(event_count|kernel wakelock stats).*Permission denied'
+```
+
+The command should produce no output. The AIDL registration and absence of
+`ISystemSuspend::getService() failed` were already verified before this
+follow-up policy correction.
+
+### Android 17 RAM Plus / SLMK premature kills (2026-09-24)
+
+DMA-BUF growth from roughly 634 MB to 723 MB was investigated because it
+coincided with Chromium and social-app processes being killed. The allocation
+was predominantly normal `ion_system_heap` display buffers shared by
+SurfaceFlinger/SystemUI; camera and video heaps were not retaining a matching
+amount. The direct kill trigger was instead SLMKD: it logged
+`low watermark is breached and swap is low` with about 7.2 GB still free.
+
+The target S20+ vendor policy provides `ro.slmk.base_swaptotal=2560` but no
+explicit swap-free threshold. Android 17 RAM Plus expands the live zram device
+to 8 GB (`persist.sys.zram.ram_expand_size=4096`), after which the Android 17
+SLMKD calculated `SwapFreeLow: 55 -> 86`. That made it treat 86% free swap as
+low and kill cached apps aggressively.
+
+`platform/exynos990/patches/miscs/customize.sh` now preserves the S24+ source
+policy values `ro.slmk.swap_free_low_percentage=10` and
+`ro.slmk.2nd.swap_free_low_percentage=10` in the final target vendor
+`build.prop`. On-device validation with `resetprop` followed by an `lmkd`
+restart changed the daemon log from `SwapFreeLow: init 55 -> 86` to
+`SwapFreeLow: init done 10 -> 10`; the temporary DeviceConfig override was
+then removed and the result remained. This does not resize zram, change DMA-
+BUF allocation, or change OOM scores—only the free-swap reclaim threshold.
+
+After flashing a build, verify with:
+
+```sh
+adb shell getprop ro.slmk.swap_free_low_percentage
+adb shell getprop ro.slmk.2nd.swap_free_low_percentage
+adb logcat -d -s lmkd | grep SwapFreeLow
+```
+
+Both props must be `10`, and the log must show `10 -> 10`, not `55 -> 86`.
+
+### Legacy Samsung Camera OCR / Scene Detection (2026-09-25)
+
+The Samsung Camera source used by Android 17 reads the `Y0` text-detection
+metadata key, which is not emitted by the legacy camera HAL used on pre-API 34
+targets. The source app does still receive scene-detection events from its own
+node; event values `2` and `39` are the corresponding positive states.
+
+`unica/patches/legacy/camera/SamsungCamera.apk/0002-Backport-legacy-Scene-detection-code.patch`
+stores that event in `TextDetectionInfoCallbackForwarder` and translates it to
+the text-detection callback state for the current Android 17 SamsungCamera
+layout. It is enabled only for non-MASS pre-API 34 targets. This is an
+adaptation of HackMeGG's original Scene Detection backport, with the original
+author and upstream commit `ec9e5c1abda401d32d72e962ae6d2fd0d5abf31a`
+preserved in the patch header and `unica/patches/legacy/customize.sh`.

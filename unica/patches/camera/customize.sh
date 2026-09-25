@@ -42,6 +42,41 @@ else
     _LOG "File not found: $SRC_DIR/target/$TARGET_CODENAME/camera/camera-feature.xml"
 fi
 
+# Restore only HDR10+ profiles advertised by stock Android 13 camera XMLs.
+# c2s, r8s and z3s target overlays had disabled every hdr10 attribute even
+# though their corresponding stock firmwares advertise these rear profiles.
+# Keep higher-frame-rate and front-camera profiles disabled as stock does.
+case "$TARGET_CODENAME" in
+    c2s|r8s|z3s)
+        HDR10_STOCK_PROFILES="
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_3840X2160
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_2400X1080
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_2320X1080
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1920X1080
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1440X1440
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1280X720
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_640X480
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_3840X1644_24FPS
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_3840X1644
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_3840X2160_24FPS
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1920X824_24FPS
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1920X824
+BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1920X1080_24FPS
+"
+        for HDR10_PROFILE in $HDR10_STOCK_PROFILES; do
+            EVAL "sed -i '/name=\"$HDR10_PROFILE\"/s/hdr10=\"false\"/hdr10=\"true\"/' \"$WORK_DIR/system/system/cameradata/camera-feature.xml\""
+        done
+        if [[ "$TARGET_CODENAME" == "r8s" ]]; then
+            # r8s has two 1920x1440 entries; only the final, physical-camera
+            # entry is effective and maps to the stock HDR10+ capability.
+            EVAL "sed -i '/name=\"BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1920X1440\".*physical-zoom-supported=/s/hdr10=\"false\"/hdr10=\"true\"/' \"$WORK_DIR/system/system/cameradata/camera-feature.xml\""
+        else
+            EVAL "sed -i '/name=\"BACK_CAMCORDER_RESOLUTION_FEATURE_MAP_1920X1440\"/s/hdr10=\"false\"/hdr10=\"true\"/' \"$WORK_DIR/system/system/cameradata/camera-feature.xml\""
+        fi
+        unset HDR10_STOCK_PROFILES HDR10_PROFILE
+        ;;
+esac
+
 LOG_STEP_IN
 if grep -q "DURING_SMARTVIEW" "$WORK_DIR/system/system/cameradata/camera-feature.xml" 2> /dev/null; then
     LOG "- Removing Smart View limitations flags"
