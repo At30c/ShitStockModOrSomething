@@ -8411,6 +8411,7 @@ hunks passarem no `git apply --check`.
 O kernel usa `CONFIG_CC_STACKPROTECTOR_STRONG`. O clang Android 14 usado pelo
 checkout recebe `-fuse-ld=lld` também nos probes de compilação sem link; com o
 `-Werror` do kernel isso transforma o aviso de argumento não usado em falha.
-`customize.sh` acrescenta `-Wno-unused-command-line-argument` apenas durante a
+O patch `0003-clang21-allow-legacy-kernel-initializers.patch` e o
+`customize.sh` acrescentam `-Wno-unused-command-line-argument` apenas durante a
 compilação, preservando o teste e a opção de stack protector. As flags
 `-Wno-default-const-init-*` continuam condicionadas ao clang 20 ou mais novo.
