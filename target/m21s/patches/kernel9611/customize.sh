@@ -157,6 +157,35 @@ KERNEL_PATCH_ALREADY_PRESENT()
     return 1
 }
 
+REPAIR_PARTIAL_KERNEL_PATCH()
+{
+    local PATCH="$1"
+    local PATCH_NAME="$(basename "$PATCH")"
+    local RINGBUF_REL="kernel/bpf/ringbuf.c"
+    local RINGBUF="$KERNEL_TMP_DIR/kernel/bpf/ringbuf.c"
+    local BACKUP="$KERNEL_TMP_DIR/kernel/bpf/.ringbuf.c.unica-partial.$$"
+
+    # A failed git apply can leave a newly-created file behind even though the
+    # rest of the patch was not applied.  On the next incremental build that
+    # lone file makes --check fail with "already exists", while the tracked
+    # hunks are still at their pre-patch state.  Validate that exact situation
+    # before removing anything, then apply the complete patch atomically.
+    [ "$PATCH_NAME" = "0012-bpf-ringbuf-backport.patch" ] || return 1
+    [ -f "$RINGBUF" ] || return 1
+    git -C "$KERNEL_TMP_DIR" ls-files --error-unmatch -- "$RINGBUF_REL" >/dev/null 2>&1 && return 1
+
+    mv -- "$RINGBUF" "$BACKUP" || return 1
+    if git -C "$KERNEL_TMP_DIR" apply --check "$PATCH" >/dev/null 2>&1; then
+        LOG "- Repairing incomplete kernel patch: $PATCH_NAME"
+        if git -C "$KERNEL_TMP_DIR" apply --whitespace=nowarn "$PATCH"; then
+            rm -f -- "$BACKUP"
+            return 0
+        fi
+    fi
+    mv -- "$BACKUP" "$RINGBUF"
+    return 1
+}
+
 APPLY_KERNEL_PATCHES()
 {
     local PATCH
@@ -175,6 +204,8 @@ APPLY_KERNEL_PATCHES()
         elif git -C "$KERNEL_TMP_DIR" apply --check "$PATCH" >/dev/null 2>&1; then
             LOG "- Applying kernel compatibility patch: $(basename "$PATCH")"
             EVAL "git -C \"$KERNEL_TMP_DIR\" apply --whitespace=nowarn \"$PATCH\"" || return 1
+        elif REPAIR_PARTIAL_KERNEL_PATCH "$PATCH"; then
+            :
         else
             ABORT "Kernel patch does not apply cleanly: ${PATCH//$SRC_DIR\//}"
             return 1
@@ -423,13 +454,19 @@ BUILD_KERNEL_IMAGE()
     local CLANG_MAJOR
     CLANG_MAJOR="$("$KERNEL_TOOLCHAIN_BIN/clang" --version 2>/dev/null |
         sed -n 's/.*clang version \([0-9][0-9]*\).*/\1/p' | head -n1)"
+    # The 4.14 Makefile passes -fuse-ld=lld to compile-only cc-option probes.
+    # Android clang 14 diagnoses that driver-only option as unused, and the
+    # probe then fails under the kernel's global -Werror before any source is
+    # compiled. Suppress only that diagnostic; keep stack-protector checks and
+    # all other warnings as errors.
+    local LLVM_COMPAT_FLAGS="-Wno-unused-command-line-argument"
     if [[ "$CLANG_MAJOR" =~ ^[0-9]+$ ]] && [ "$CLANG_MAJOR" -ge 20 ]; then
-        local LLVM21_COMPAT_FLAGS="-Wno-default-const-init-field-unsafe -Wno-default-const-init-var-unsafe"
-        if [[ -n "$KCFLAGS" ]]; then
-            export KCFLAGS="$KCFLAGS $LLVM21_COMPAT_FLAGS"
-        else
-            export KCFLAGS="$LLVM21_COMPAT_FLAGS"
-        fi
+        LLVM_COMPAT_FLAGS="$LLVM_COMPAT_FLAGS -Wno-default-const-init-field-unsafe -Wno-default-const-init-var-unsafe"
+    fi
+    if [[ -n "$KCFLAGS" ]]; then
+        export KCFLAGS="$KCFLAGS $LLVM_COMPAT_FLAGS"
+    else
+        export KCFLAGS="$LLVM_COMPAT_FLAGS"
     fi
     # Keep the kernel build incremental and expose the real compiler/linker
     # diagnostics. The log lives outside the cleaned kernel output directory

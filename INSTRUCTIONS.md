@@ -8397,3 +8397,20 @@ como um novo filho do Zygote; ambos ficaram em
 `blocked transaction_write`. Os registros finais estão em
 `out/logs/runtime/systemui16/logcat-kernel16-validation.txt` e
 `out/logs/runtime/systemui16/dmesg-kernel16-validation.txt`.
+
+### M21s: recuperação de patch incremental e teste do stack protector (2026-10-07)
+
+O patch `target/m21s/patches/kernel9611/patches/0012-bpf-ringbuf-backport.patch`
+aplica limpo na revisão fixada `933cc29fad7b2cfcfd0a529684c7377cbd6cd8cd`.
+Uma tentativa interrompida de `git apply` pode deixar somente o novo
+`kernel/bpf/ringbuf.c` na árvore incremental; nesse estado o próximo build acusa
+`already exists` e aborta. `customize.sh` agora valida esse caso, move o arquivo
+órfão temporariamente e reaplica o patch completo somente se todos os demais
+hunks passarem no `git apply --check`.
+
+O kernel usa `CONFIG_CC_STACKPROTECTOR_STRONG`. O clang Android 14 usado pelo
+checkout recebe `-fuse-ld=lld` também nos probes de compilação sem link; com o
+`-Werror` do kernel isso transforma o aviso de argumento não usado em falha.
+`customize.sh` acrescenta `-Wno-unused-command-line-argument` apenas durante a
+compilação, preservando o teste e a opção de stack protector. As flags
+`-Wno-default-const-init-*` continuam condicionadas ao clang 20 ou mais novo.
