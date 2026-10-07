@@ -8422,3 +8422,10 @@ Na revisão antiga do `verifier.c`, o backport também precisa preservar o rótu
 `err_release_maps:`. Ele é o destino dos caminhos de erro que liberam os mapas;
 removê-lo deixa `goto err_release_maps` sem destino e interrompe a compilação em
 `kernel/bpf/verifier.o`.
+
+O método `ZoomView.m(Lcd/b;)V` declara `.locals 20`; portanto `p0` é um
+registrador físico alto e não pode ser usado diretamente por uma instrução que
+aceita somente `v0..v15`. O patch de zoom copia `p0` para `v1` com
+`move-object/from16` antes do `iput-object`, permitindo que o SamsungCamera
+seja remontado pelo Apktool. A instrução deve permanecer sem pontuação após
+`p0`, como exige a sintaxe Smali.
