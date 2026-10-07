@@ -8413,5 +8413,7 @@ checkout recebe `-fuse-ld=lld` também nos probes de compilação sem link; com 
 `-Werror` do kernel isso transforma o aviso de argumento não usado em falha.
 O patch `0003-clang21-allow-legacy-kernel-initializers.patch` e o
 `customize.sh` acrescentam `-Wno-unused-command-line-argument` apenas durante a
-compilação, preservando o teste e a opção de stack protector. As flags
+compilação, preservando o teste e a opção de stack protector. O mesmo conjunto
+ignora somente opções de warning desconhecidas para que o clang 14 não trate as
+flags destinadas ao clang 20 como erro. As flags
 `-Wno-default-const-init-*` continuam condicionadas ao clang 20 ou mais novo.

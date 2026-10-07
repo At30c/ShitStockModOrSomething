@@ -7,6 +7,6 @@ index 0000000..0000000 100644
          'CROSS_COMPILE=aarch64-linux-gnu-', 'CC=clang', 'LD=ld.lld', 
          'AS=llvm-as', 'AR=llvm-ar', 'OBJDUMP=llvm-objdump', 
          'READELF=llvm-readelf', 'NM=llvm-nm', 'OBJCOPY=llvm-objcopy', 
-+        'KCFLAGS=-Wno-unused-command-line-argument -Wno-default-const-init-field-unsafe -Wno-default-const-init-var-unsafe',
++        'KCFLAGS=-Wno-unused-command-line-argument -Wno-default-const-init-field-unsafe -Wno-default-const-init-var-unsafe -Wno-unknown-warning-option',
          'ARCH=arm64', f'-j{os.cpu_count()}'
      ]
