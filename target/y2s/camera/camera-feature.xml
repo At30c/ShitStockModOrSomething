@@ -168,6 +168,9 @@
     <!-- VDIS+Tracking AF -->
     <local name="SUPPORT_VIDEO_STABILIZATION_WITH_TRACKING_AF" value="true"/>
 
+    <!-- Autoframe backport: SamsungCamera already contains the UI/pipeline. -->
+    <local name="SUPPORT_VIDEO_AUTO_FRAMING" value="true"/>
+
     <local name="SUPPORT_SWITCH_FACING_WHILE_RECORDING" value="true"/>
 
     <local name="SUPPORT_HYPER_LAPSE_NIGHT_AUTO" value="true"/>

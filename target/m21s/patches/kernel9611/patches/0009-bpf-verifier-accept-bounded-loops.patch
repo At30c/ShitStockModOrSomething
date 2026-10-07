@@ -1,0 +1,429 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Sat, 3 Oct 2026 00:20:00 -0300
+Subject: [PATCH] [PATCH] bpf: verifier: accept bounded loops
+
+NetBpfLoad loads 23 programs for this device from the Android 17 tethering
+APEX.  Fourteen of them contain back-edges (13 real loops spanning 166..557
+instructions, plus one trivial loop in skfilter/egress_xtbpf), and check_cfg()
+in 4.14 rejects every back-edge unconditionally with -EINVAL, so those
+programs never reach do_check().  No amount of userland fixup helps: the
+verifier has to simulate the loop.
+
+Backport "bpf: introduce bounded loops"
+(2589726d12a1b12eaaa93c7f1ea64287e383c7a5) onto this tree.  check_cfg() learns
+which edges may close a loop and push_insn() accepts them only for a
+privileged loader, while do_check() gains the branch accounting that decides
+when a recorded state has been fully explored:
+
+  - bpf_verifier_state grows 'branches' plus a separate 'branch_parent'.
+    'parent' keeps its original meaning as the liveness chain and must not be
+    reused for branch accounting.
+  - push_stack() registers the extra outstanding path, and reaching bpf_exit
+    (or a prune) calls update_branch_counts() to walk the parentage chain.
+  - is_state_visited() skips states whose branch count is still non-zero, so
+    loop iterations do not prune each other, and detects a true infinite loop
+    with states_maybe_looping() as a cheap pre-check for states_equal().
+  - Recording states is throttled by jmps_processed/insn_processed to keep
+    memory bounded on long loops.
+
+The exploration budget is raised to 1M instructions and 8192 stack frames so a
+legitimate bounded loop can run to completion, while a program that really
+never terminates is still rejected (-EINVAL on an identical repeated state, or
+-E2BIG once the budget is exhausted).
+
+bpf_analyzer() is deliberately left untouched: it never sets allow_ptr_leaks,
+so programs verified through that path still reject loops as before.
+---
+ include/linux/bpf_verifier.h |  35 ++++++++++
+ kernel/bpf/verifier.c        | 155 +++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 170 insertions(+), 20 deletions(-)
+
+diff --git a/include/linux/bpf_verifier.h b/include/linux/bpf_verifier.h
+index c0b1cd9..8a9a565 100644
+--- a/include/linux/bpf_verifier.h
++++ b/include/linux/bpf_verifier.h
+@@ -101,10 +101,41 @@ struct bpf_stack_state {
+  */
+ struct bpf_verifier_state {
+ 	struct bpf_reg_state regs[MAX_BPF_REG];
++	/* 'parent' is the state whose straight-line code leads to this state;
++	 * it is the chain used for register liveness propagation.  It is NOT
++	 * the same relation as 'branch_parent' below.
++	 */
+ 	struct bpf_verifier_state *parent;
+ 	int allocated_stack;
+ 	struct bpf_stack_state *stack;
+ 	bool speculative;
++	/*
++	 * Bounded loop support (backport of "bpf: introduce bounded loops").
++	 *
++	 * 'branches' is the number of branches left to explore:
++	 * 0 - all possible paths from this state reached bpf_exit or
++	 * were safely pruned
++	 * 1 - at least one path is being explored.
++	 * 2 - this state is an immediate parent of two children: one is the
++	 * fallthrough branch and the other was pushed into the stack to be
++	 * explored later.
++	 *
++	 * Once do_check() reaches bpf_exit it calls update_branch_counts(),
++	 * which decrements the counters walking up the 'branch_parent' chain.
++	 * A recorded state is only eligible for equivalence-based pruning once
++	 * its 'branches' has dropped back to zero, i.e. after all of its
++	 * descendant paths have been fully verified.
++	 *
++	 * If is_state_visited() sees such a fully-verified state that is also
++	 * exactly equal to the current state, the program loops forever and is
++	 * rejected.  states_maybe_looping() is a cheaper pre-check for that.
++	 *
++	 * This may not find every infinite loop, and a loop may legitimately
++	 * need many iterations; in those cases the BPF_COMPLEXITY_LIMIT_INSNS
++	 * budget kicks in and the load fails with -E2BIG.
++	 */
++	u32 branches;
++	struct bpf_verifier_state *branch_parent;
+ };
+ 
+ /* linked list of verifier states used to prune search */
+@@ -189,6 +220,10 @@ struct bpf_verifier_env {
+ 	bool allow_ptr_leaks;
+ 	bool seen_direct_write;
+ 	struct bpf_insn_aux_data *insn_aux_data; /* array of per-insn state */
++	/* number of instructions analyzed by the verifier */
++	u32 prev_insn_processed, insn_processed;
++	/* number of jmps/calls/exits analyzed so far */
++	u32 prev_jmps_processed, jmps_processed;
+ };
+ 
+ static inline struct bpf_reg_state *cur_regs(struct bpf_verifier_env *env)
+diff --git a/kernel/bpf/verifier.c b/kernel/bpf/verifier.c
+index bdb778a..793cf40 100644
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -140,8 +140,8 @@ struct bpf_verifier_stack_elem {
+ 	struct bpf_verifier_stack_elem *next;
+ };
+ 
+-#define BPF_COMPLEXITY_LIMIT_INSNS	131072
+-#define BPF_COMPLEXITY_LIMIT_STACK	1024
++#define BPF_COMPLEXITY_LIMIT_INSNS	1000000
++#define BPF_COMPLEXITY_LIMIT_STACK	8192
+ 
+ #define BPF_MAP_PTR_POISON ((void *)0xeB9F + POISON_POINTER_DELTA)
+ 
+@@ -208,7 +208,8 @@ static __printf(1, 2) void verbose(const char *fmt, ...)
+ 		return;
+ 
+ 	va_start(args, fmt);
+-	bpf_verifier_vlog(&verifier_log, fmt, args);
++	if (bpf_verifier_log_needed(&verifier_log))
++		bpf_verifier_vlog(&verifier_log, fmt, args);
+ 	va_end(args);
+ }
+ 
+@@ -546,9 +547,27 @@ static int copy_verifier_state(struct bpf_verifier_state *dst,
+ 	if (err)
+ 		return err;
+ 	memcpy(dst, src, offsetof(struct bpf_verifier_state, allocated_stack));
++	/* bounded loop accounting lives past 'allocated_stack' so it is not
++	 * covered by the memcpy() above
++	 */
++	dst->branches = src->branches;
++	dst->branch_parent = src->branch_parent;
+ 	return copy_stack_state(dst, src);
+ }
+ 
++/* Called when a state reaches bpf_exit (or is pruned): one exploration path
++ * of that state finished.  Walk up the branch parentage chain decrementing the
++ * outstanding-branch counters until a state that still has work left is found.
++ */
++static void update_branch_counts(struct bpf_verifier_state *st)
++{
++	while (st) {
++		if (--st->branches)
++			break;
++		st = st->branch_parent;
++	}
++}
++
+ static int pop_stack(struct bpf_verifier_env *env, int *prev_insn_idx,
+ 		     int *insn_idx)
+ {
+@@ -601,6 +620,11 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
+ 		verbose("BPF program is too complex\n");
+ 		goto err;
+ 	}
++	/* This new state is a second path branching off our branch parent, so
++	 * the parent now has two outstanding paths to explore.
++	 */
++	if (elem->st.branch_parent)
++		++elem->st.branch_parent->branches;
+ 	return &elem->st;
+ err:
+ 	/* pop all elements and return */
+@@ -3710,8 +3734,10 @@ static int *insn_state;
+  * t - index of current instruction
+  * w - next instruction
+  * e - edge
++ * loop_ok - this edge may be a back-edge closing a bounded loop
+  */
+-static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
++static int push_insn(int t, int w, int e, struct bpf_verifier_env *env,
++		     bool loop_ok)
+ {
+ 	if (e == FALLTHROUGH && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
+ 		return 0;
+@@ -3737,6 +3763,13 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
+ 		insn_stack[cur_stack++] = w;
+ 		return 1;
+ 	} else if ((insn_state[w] & 0xF0) == DISCOVERED) {
++		/* back-edge: a loop.  Accept it only when the caller declared
++		 * this edge loop-capable and the loader is trusted to be
++		 * allowed to leak pointers (i.e. a privileged load).  Loops are
++		 * then validated by simulating their iterations in do_check().
++		 */
++		if (loop_ok && env->allow_ptr_leaks)
++			return 0;
+ 		verbose("back-edge from insn %d to %d\n", t, w);
+ 		return -EINVAL;
+ 	} else if (insn_state[w] == EXPLORED) {
+@@ -3784,7 +3817,7 @@ peek_stack:
+ 		if (opcode == BPF_EXIT) {
+ 			goto mark_explored;
+ 		} else if (opcode == BPF_CALL) {
+-			ret = push_insn(t, t + 1, FALLTHROUGH, env);
++			ret = push_insn(t, t + 1, FALLTHROUGH, env, false);
+ 			if (ret == 1)
+ 				goto peek_stack;
+ 			else if (ret < 0)
+@@ -3798,7 +3831,7 @@ peek_stack:
+ 			}
+ 			/* unconditional jump with single edge */
+ 			ret = push_insn(t, t + insns[t].off + 1,
+-					FALLTHROUGH, env);
++					FALLTHROUGH, env, true);
+ 			if (ret == 1)
+ 				goto peek_stack;
+ 			else if (ret < 0)
+@@ -3811,13 +3844,14 @@ peek_stack:
+ 		} else {
+ 			/* conditional jump with two edges */
+ 			env->explored_states[t] = STATE_LIST_MARK;
+-			ret = push_insn(t, t + 1, FALLTHROUGH, env);
++			ret = push_insn(t, t + 1, FALLTHROUGH, env, true);
+ 			if (ret == 1)
+ 				goto peek_stack;
+ 			else if (ret < 0)
+ 				goto err_free;
+ 
+-			ret = push_insn(t, t + insns[t].off + 1, BRANCH, env);
++			ret = push_insn(t, t + insns[t].off + 1, BRANCH, env,
++					true);
+ 			if (ret == 1)
+ 				goto peek_stack;
+ 			else if (ret < 0)
+@@ -3827,7 +3861,7 @@ peek_stack:
+ 		/* all other non-branch instructions with single
+ 		 * fall-through edge
+ 		 */
+-		ret = push_insn(t, t + 1, FALLTHROUGH, env);
++		ret = push_insn(t, t + 1, FALLTHROUGH, env, false);
+ 		if (ret == 1)
+ 			goto peek_stack;
+ 		else if (ret < 0)
+@@ -4175,12 +4209,30 @@ static void propagate_liveness(const struct bpf_verifier_state *state,
+ 	}
+ }
+ 
++/* Cheap pre-check for "could these two states be part of a non-terminating
++ * loop?".  It compares every register byte-exactly while ignoring the
++ * liveness marks, which is much cheaper than a full states_equal() walk.  A
++ * true result only means "worth calling states_equal() to confirm".
++ */
++static bool states_maybe_looping(struct bpf_verifier_state *old,
++				 struct bpf_verifier_state *cur)
++{
++	int i;
++
++	for (i = 0; i < MAX_BPF_REG; i++)
++		if (memcmp(&old->regs[i], &cur->regs[i],
++			   offsetof(struct bpf_reg_state, live)))
++			return false;
++	return true;
++}
++
+ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
+ {
+ 	struct bpf_verifier_state_list *new_sl;
+ 	struct bpf_verifier_state_list *sl;
+ 	struct bpf_verifier_state *cur = env->cur_state;
+ 	int i, err;
++	bool add_new_state = false;
+ 
+ 	sl = env->explored_states[insn_idx];
+ 	if (!sl)
+@@ -4189,7 +4241,43 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
+ 		 */
+ 		return 0;
+ 
++	/* BPF programs typically reach a pruning point every 4 instructions.
++	 * Do not record a state for future pruning until we have seen at
++	 * least 2 jumps and 8 instructions; this keeps the number of stored
++	 * states (and therefore verifier memory and time) down without losing
++	 * the states that are actually useful for pruning.
++	 */
++	if (env->jmps_processed - env->prev_jmps_processed >= 2 &&
++	    env->insn_processed - env->prev_insn_processed >= 8)
++		add_new_state = true;
++
+ 	while (sl != STATE_LIST_MARK) {
++		if (sl->state.branches) {
++			/* This recorded state still has paths left to explore,
++			 * which means we are inside a loop that revisits this
++			 * instruction.  Two cases:
++			 *
++			 * 1) the loop can never finish -> reject
++			 * 2) it can, but we are on another iteration
++			 */
++			if (states_maybe_looping(&sl->state, cur) &&
++			    states_equal(env, &sl->state, cur)) {
++				verbose("infinite loop detected at insn %d\n",
++					insn_idx);
++				return -EINVAL;
++			}
++			/* Consecutive loop iterations have distinct states, so
++			 * recording every one of them rarely helps pruning and
++			 * blows up memory.  Throttle state recording while a
++			 * loop is hot, but keep the threshold low enough that a
++			 * loop with a huge trip count still hits the
++			 * complexity limit quickly.
++			 */
++			if (env->jmps_processed - env->prev_jmps_processed < 20 &&
++			    env->insn_processed - env->prev_insn_processed < 100)
++				add_new_state = false;
++			goto miss;
++		}
+ 		if (states_equal(env, &sl->state, cur)) {
+ 			/* reached equivalent register/stack state,
+ 			 * prune the search.
+@@ -4207,15 +4295,25 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
+ 		sl = sl->next;
+ 	}
+ 
+-	/* there were no equivalent states, remember current one.
+-	 * technically the current state is not proven to be safe yet,
+-	 * but it will either reach bpf_exit (which means it's safe) or
+-	 * it will be rejected. Since there are no loops, we won't be
+-	 * seeing this 'insn_idx' instruction again on the way to bpf_exit
++miss:
++	if (!add_new_state)
++		/* Not recording this state, so it can neither prune a later
++		 * path nor be pruned by an earlier one.  That is always safe,
++		 * it only costs exploration effort.
++		 */
++		return 0;
++
++	/* There were no equivalent states, remember the current one.
++	 * Technically the current state is not proven to be safe yet, but it
++	 * will either reach bpf_exit (which means it's safe) or it will be
++	 * rejected.  When looping, this state will not be considered for
++	 * equivalence until its 'branches' count drops back to zero.
+ 	 */
+ 	new_sl = kzalloc(sizeof(struct bpf_verifier_state_list), GFP_KERNEL);
+ 	if (!new_sl)
+ 		return -ENOMEM;
++	env->prev_jmps_processed = env->jmps_processed;
++	env->prev_insn_processed = env->insn_processed;
+ 
+ 	/* add new state to the head of linked list */
+ 	err = copy_verifier_state(&new_sl->state, cur);
+@@ -4228,6 +4326,10 @@ static int is_state_visited(struct bpf_verifier_env *env, int insn_idx)
+ 	env->explored_states[insn_idx] = new_sl;
+ 	/* connect new state to parentage chain */
+ 	cur->parent = &new_sl->state;
++	/* The clone is the branch parent of everything that descends from
++	 * here; it starts with exactly one outstanding path (this one).
++	 */
++	cur->branch_parent = &new_sl->state;
+ 	/* clear write marks in current state: the writes we did are not writes
+ 	 * our child did, so they don't screen off its reads from us.
+ 	 * (There are no read marks in current state, because reads always mark
+@@ -4260,7 +4362,6 @@ static int do_check(struct bpf_verifier_env *env)
+ 	struct bpf_insn *insns = env->prog->insnsi;
+ 	struct bpf_reg_state *regs;
+ 	int insn_cnt = env->prog->len;
+-	int insn_processed = 0;
+ 	bool do_print_state = false;
+ 
+ 	state = kzalloc(sizeof(struct bpf_verifier_state), GFP_KERNEL);
+@@ -4269,6 +4370,9 @@ static int do_check(struct bpf_verifier_env *env)
+ 	env->cur_state = state;
+ 	init_reg_state(state->regs);
+ 	state->parent = NULL;
++	state->branch_parent = NULL;
++	/* Exactly one path (this one) is being explored from the root state. */
++	state->branches = 1;
+ 	for (;;) {
+ 		struct bpf_insn *insn;
+ 		u8 class;
+@@ -4283,9 +4387,9 @@ static int do_check(struct bpf_verifier_env *env)
+ 		insn = &insns[env->insn_idx];
+ 		class = BPF_CLASS(insn->code);
+ 
+-		if (++insn_processed > BPF_COMPLEXITY_LIMIT_INSNS) {
++		if (++env->insn_processed > BPF_COMPLEXITY_LIMIT_INSNS) {
+ 			verbose("BPF program is too large. Processed %d insn\n",
+-				insn_processed);
++				env->insn_processed);
+ 			return -E2BIG;
+ 		}
+ 
+@@ -4453,6 +4557,8 @@ static int do_check(struct bpf_verifier_env *env)
+ 		} else if (class == BPF_JMP) {
+ 			u8 opcode = BPF_OP(insn->code);
+ 
++			env->jmps_processed++;
++
+ 			if (opcode == BPF_CALL) {
+ 				if (BPF_SRC(insn->code) != BPF_K ||
+ 				    insn->off != 0 ||
+@@ -4506,6 +4612,12 @@ static int do_check(struct bpf_verifier_env *env)
+ 				if (err)
+ 					return err;
+ process_bpf_exit:
++				/* This path is finished; account for it in the
++				 * branch parentage chain so that a recorded state
++				 * only becomes eligible for pruning once all of
++				 * its descendant paths are done.
++				 */
++				update_branch_counts(env->cur_state);
+ 				err = pop_stack(env, &env->prev_insn_idx, &env->insn_idx);
+ 				if (err < 0) {
+ 					if (err != -ENOENT)
+@@ -4548,7 +4660,7 @@ process_bpf_exit:
+ 	}
+ 
+ 	verbose("processed %d insns, stack depth %d\n",
+-		insn_processed, env->prog->aux->stack_depth);
++		env->insn_processed, env->prog->aux->stack_depth);
+ 	return 0;
+ }
+ 
+@@ -5224,12 +5336,15 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr)
+ 	if (!env->explored_states)
+ 		goto skip_full_check;
+ 
++	/* Must be decided before check_cfg(): push_insn() only accepts a
++	 * back-edge (i.e. a loop) when the loader is privileged.
++	 */
++	env->allow_ptr_leaks = capable(CAP_SYS_ADMIN);
++
+ 	ret = check_cfg(env);
+ 	if (ret < 0)
+ 		goto skip_full_check;
+ 
+-	env->allow_ptr_leaks = capable(CAP_SYS_ADMIN);
+-
+ 	ret = do_check(env);
+ 	if (env->cur_state) {
+ 		free_verifier_state(env->cur_state, true);

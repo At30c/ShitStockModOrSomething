@@ -4,6 +4,7 @@ EXTREMEKRNL_REPO="https://github.com/At30c/SSM_990v2BYEXTREME/"
 KERNEL_MODEL="$TARGET_CODENAME"
 KERNEL_CACHE_VERSION="2"
 KERNEL_PATCH_DIR="$MODPATH/patches"
+KERNELSU_PATCH_DIR="$MODPATH/ksu-patches"
 
 GET_FILE_SHA256()
 {
@@ -13,14 +14,16 @@ GET_FILE_SHA256()
 GET_KERNEL_PATCHSET_DIGEST()
 {
     local PATCH
-    local PATCHES=("$KERNEL_PATCH_DIR"/*.patch)
+    local PATCHES=("$KERNEL_PATCH_DIR"/*.patch "$KERNELSU_PATCH_DIR"/*.patch)
 
-    if [ ! -e "${PATCHES[0]}" ]; then
+    if [ ! -e "${PATCHES[0]}" ] && [ ! -e "${PATCHES[1]}" ]; then
         printf 'none\n'
         return 0
     fi
     for PATCH in "${PATCHES[@]}"; do
-        printf '%s  %s\n' "$(GET_FILE_SHA256 "$PATCH")" "$(basename "$PATCH")"
+        [ -e "$PATCH" ] || continue
+        printf '%s  %s/%s\n' "$(GET_FILE_SHA256 "$PATCH")" \
+            "$(basename "$(dirname "$PATCH")")" "$(basename "$PATCH")"
     done | sha256sum | cut -d " " -f 1
 }
 
@@ -104,8 +107,12 @@ CLEAN_KERNEL_BUILD_OUTPUTS()
         *) ABORT "Refusing to clean unexpected packaged-kernel path: $MODEL_OUT" ;;
     esac
 
-    LOG "- Removing stale Kbuild and packaged-kernel outputs."
-    rm -rf -- "$KBUILD_OUT" "$MODEL_OUT"
+    # Keep the shared Kbuild output tree. The build script regenerates the
+    # selected defconfig and Kbuild will invalidate objects whose sources,
+    # dependencies, command lines or configuration changed. Removing this
+    # tree here defeated incremental reuse for every S20+ build.
+    LOG "- Removing stale packaged-kernel outputs; preserving Kbuild objects."
+    rm -rf -- "$MODEL_OUT"
     if [[ "$TARGET_CODENAME" != "r8s" ]] && [[ "$TARGET_CODENAME" != "z3s" ]]; then
         rm -rf -- "$LTE_MODEL_OUT"
     fi
@@ -235,6 +242,29 @@ APPLY_KERNEL_PATCHES()
     done
 }
 
+APPLY_KERNELSU_PATCHES()
+{
+    local PATCH
+    local PATCHES=("$KERNELSU_PATCH_DIR"/*.patch)
+
+    if [ ! -e "${PATCHES[0]}" ]; then
+        LOG "- No KernelSU compatibility patches for this branch."
+        return 0
+    fi
+
+    for PATCH in "${PATCHES[@]}"; do
+        if git -C "$KERNEL_TMP_DIR/KernelSU-Next" apply --check "$PATCH" > /dev/null 2>&1; then
+            LOG "- Applying KernelSU compatibility patch: $(basename "$PATCH")"
+            EVAL "git -C \"$KERNEL_TMP_DIR/KernelSU-Next\" apply \"$PATCH\""
+        elif git -C "$KERNEL_TMP_DIR/KernelSU-Next" apply --reverse --check "$PATCH" > /dev/null 2>&1; then
+            LOG "- KernelSU compatibility patch already applied: $(basename "$PATCH")"
+        else
+            ABORT "Could not apply KernelSU compatibility patch $(basename "$PATCH") to the pinned KernelSU-Next source."
+            return 1
+        fi
+    done
+}
+
 WRITE_KERNEL_CACHE_MANIFEST()
 {
     local CACHE_FILE="$KERNEL_TMP_DIR/.unica-kernel-cache-${TARGET_CODENAME}"
@@ -311,6 +341,7 @@ REPLACE_KERNEL_BINARIES()
     fi
 
     INIT_KERNEL_SUBMODULES
+    APPLY_KERNELSU_PATCHES
     APPLY_KERNEL_PATCHES
 
     KERNEL_CACHE_KEY="$(GET_KERNEL_CACHE_KEY)" || ABORT "Could not calculate the kernel cache key."

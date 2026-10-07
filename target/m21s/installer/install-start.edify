@@ -1,0 +1,10 @@
+ui_print("Unmounting M21s install partitions...");
+package_extract_file("m21s-unmount-logical-partitions.sh", "/tmp/m21s-unmount-logical-partitions.sh");
+set_metadata("/tmp/m21s-unmount-logical-partitions.sh", "uid", 0, "gid", 0, "dmode", 0755, "fmode", 0755);
+assert(run_program("/tmp/m21s-unmount-logical-partitions.sh"));
+
+ui_print("Preparing M21s dynamic-partition metadata...");
+package_extract_file("unsparse_super_empty.img", "/tmp/m21s-super-metadata.img");
+package_extract_file("m21s-prepare-super-metadata.sh", "/tmp/m21s-prepare-super-metadata.sh");
+set_metadata("/tmp/m21s-prepare-super-metadata.sh", "uid", 0, "gid", 0, "dmode", 0755, "fmode", 0755);
+assert(run_program("/tmp/m21s-prepare-super-metadata.sh", "/tmp/m21s-super-metadata.img"));

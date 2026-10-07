@@ -188,15 +188,25 @@ BUILD_APKS()
 
 GET_WORK_DIR_HASH()
 {
-    if [ "${TARGET_PLATFORM//none/}" ] && [ -d "$SRC_DIR/platform/$TARGET_PLATFORM" ]; then
-        find -H "$SRC_DIR/scripts" "$SRC_DIR/unica" "$SRC_DIR/platform/$TARGET_PLATFORM" \
-            "$SRC_DIR/target/$TARGET_CODENAME" -type f -print0 | \
-            sort -z | xargs -0 sha1sum | sha1sum | cut -d " " -f 1
-    else
-        find -H "$SRC_DIR/scripts" "$SRC_DIR/unica" "$SRC_DIR/target/$TARGET_CODENAME" \
-            -type f -print0 | \
-            sort -z | xargs -0 sha1sum | sha1sum | cut -d " " -f 1
-    fi
+    local FIRMWARE_IDENTITY
+    FIRMWARE_IDENTITY="$(cat \
+        "$FW_DIR/$SOURCE_FIRMWARE_PATH/.extracted" \
+        "$FW_DIR/$TARGET_FIRMWARE_PATH/.extracted" 2> /dev/null | \
+        sha256sum | cut -d " " -f 1)"
+
+    {
+        if [ "${TARGET_PLATFORM//none/}" ] && [ -d "$SRC_DIR/platform/$TARGET_PLATFORM" ]; then
+            find -H "$SRC_DIR/scripts" "$SRC_DIR/unica" \
+                "$SRC_DIR/platform/$TARGET_PLATFORM" \
+                "$SRC_DIR/target/$TARGET_CODENAME" -type f -print0
+        else
+            find -H "$SRC_DIR/scripts" "$SRC_DIR/unica" \
+                "$SRC_DIR/target/$TARGET_CODENAME" -type f -print0
+        fi
+    } | sort -z | xargs -0 sha1sum | {
+        cat
+        printf 'firmware_identity  %s\n' "$FIRMWARE_IDENTITY"
+    } | sha1sum | cut -d " " -f 1
 }
 
 PREPARE_SCRIPT()
@@ -265,29 +275,16 @@ else
     rm -rf "$APK_DECODE_CACHE_DIR"
 fi
 
-# Every make_rom invocation starts from a pristine filesystem tree, regardless
-# of the selected options. APK/JAR caches are stored outside WORK_DIR and remain
-# available when -c/--use-apk-cache is used.
-if [ -d "$WORK_DIR" ]; then
-    LOG "- Cleaning previous work dir"
-    rm -rf "${WORK_DIR:?}"
-fi
-
-if $FORCE || ! $USE_APK_CACHE; then
-    # A regular invocation intentionally performs a clean ROM rebuild and
-    # refreshes the APK/JAR cache. Cache reuse is opt-in with -c.
-    BUILD_ROM=true
-else
-    if [ -f "$WORK_DIR/.completed" ]; then
-        if [[ "$(cat "$WORK_DIR/.completed")" == "$(GET_WORK_DIR_HASH)" ]]; then
-            LOGW "No changes have been detected in the build environment"
-            BUILD_ROM=false
-        else
-            LOGW "Changes detected in the build environment"
-            BUILD_ROM=true
-        fi
+# Reuse a completed work directory when the source tree and firmware identity
+# are unchanged. This keeps the expensive extraction/patch/APK phase out of a
+# packaging-only rerun; -c still controls only the separate APK/JAR cache.
+BUILD_ROM=true
+if ! $FORCE && [ -d "$WORK_DIR" ] && [ -f "$WORK_DIR/.completed" ]; then
+    if [[ "$(cat "$WORK_DIR/.completed")" == "$(GET_WORK_DIR_HASH)" ]]; then
+        LOGW "No changes have been detected in the build environment; reusing work dir"
+        BUILD_ROM=false
     else
-        BUILD_ROM=true
+        LOGW "Changes detected in the build environment; rebuilding work dir"
     fi
 fi
 
@@ -295,6 +292,10 @@ trap 'PRINT_BUILD_OUTCOME' EXIT
 trap 'echo' INT
 
 if $BUILD_ROM; then
+    if [ -d "$WORK_DIR" ]; then
+        LOG "- Cleaning stale work dir before rebuild"
+        rm -rf "${WORK_DIR:?}"
+    fi
     [ -d "$APKTOOL_DIR" ] && rm -rf "$APKTOOL_DIR"
 
     if [ ! -f "$FW_DIR/$SOURCE_FIRMWARE_PATH/.extracted" ] || [ ! -f "$FW_DIR/$TARGET_FIRMWARE_PATH/.extracted" ]; then
@@ -329,9 +330,24 @@ if $BUILD_ROM; then
         LOG_STEP_OUT
     fi
 
+    if [ -d "$SRC_DIR/platform/$TARGET_PLATFORM/mods" ]; then
+        LOG_STEP_IN true "Applying platform mods"
+        "$SRC_DIR/scripts/internal/apply_modules.sh" "$SRC_DIR/platform/$TARGET_PLATFORM/mods" || exit 1
+        LOG_STEP_OUT
+    fi
+
     if [ -d "$SRC_DIR/unica/mods" ]; then
         LOG_STEP_IN true "Applying ROM mods"
         "$SRC_DIR/scripts/internal/apply_modules.sh" "$SRC_DIR/unica/mods" || exit 1
+        LOG_STEP_OUT
+    fi
+
+    # Target modules are applied last so a device-specific policy or APK
+    # patch cannot be overwritten by a shared ROM module.  Keep these out of
+    # unica/mods: the target tree is the source of truth for device-only work.
+    if [ -d "$SRC_DIR/target/$TARGET_CODENAME/mods" ]; then
+        LOG_STEP_IN true "Applying target mods"
+        "$SRC_DIR/scripts/internal/apply_modules.sh" "$SRC_DIR/target/$TARGET_CODENAME/mods" || exit 1
         LOG_STEP_OUT
     fi
 

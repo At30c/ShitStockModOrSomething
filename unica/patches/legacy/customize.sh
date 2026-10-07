@@ -16,6 +16,28 @@ BACKPORT_SF_PROPS()
     local PROP
     local VALUE
 
+    # Some donor firmwares ship `ro.sf.lcd_density` without
+    # `ro.sf.init.lcd_density`.  The m21s target extracts its own vendor
+    # build.prop from SM-F415F (which is the Galaxy M21s / F41 itself, not a
+    # separate donor) and that file only defines `ro.sf.lcd_density`.
+    # SurfaceFlinger then logs "ro.sf.init.lcd_density must be defined as a
+    # build property" and derives a bogus panel density, which the framework
+    # reports as DisplayInfo.density (213 instead of 420), shrinking the UI.
+    # Mirror the donor's own density so the two stay consistent.  Targets that
+    # already define the prop (S926B and G986B ship both) are left untouched.
+    PROP="ro.sf.init.lcd_density"
+
+    if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
+        VALUE="$(GET_PROP "vendor" "ro.sf.lcd_density")"
+
+        if [ "$VALUE" ]; then
+            PATCHED=true
+
+            LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
+            EVAL "sed -i \"/ro.sf.lcd_density=\$VALUE/a $PROP=\$VALUE\" \"$FILE\""
+        fi
+    fi
+
     if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "34" ]; then
         PATCHED=true
 
@@ -125,43 +147,94 @@ BACKPORT_SF_PROPS
 #   Adapted from HackMeGG's upstream work:
 #   https://github.com/salvogiangri/UN1CA/commit/ec9e5c1abda401d32d72e962ae6d2fd0d5abf31a
 if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "34" ]; then
-    PATCHED=true
-    APPLY_PATCH "system" "system/framework/framework.jar" \
-        "$MODPATH/camera/framework.jar/0001-Backport-legacy-CameraMetadataNative-code.patch"
-    if ! $TARGET_CAMERA_SUPPORT_MASS_APP_FLAVOR; then
-        APPLY_PATCH "system" "system/priv-app/SamsungCamera/SamsungCamera.apk" \
-            "$MODPATH/camera/SamsungCamera.apk/0002-Backport-legacy-Scene-detection-code.patch"
+    DECODE_APK "system" "system/framework/framework.jar"
+    CAMERA_METADATA_SMALI="$APKTOOL_DIR/system/framework/framework.jar/smali_classes2/android/hardware/camera2/impl/CameraMetadataNative.smali"
+    # Android 17 already carries the null-safe GPS implementation from the
+    # upstream patch.  Do not reapply the old hunk when the modern source has
+    # already integrated it; retain the legacy patch for older layouts.
+    if grep -Fq 'fill-array-data p1, :array_0' "$CAMERA_METADATA_SMALI" && \
+            grep -Fq 'JPEG_GPS_TIMESTAMP' "$CAMERA_METADATA_SMALI"; then
+        LOG "- CameraMetadataNative already has null-safe GPS metadata handling"
+    else
+        PATCHED=true
+        APPLY_PATCH "system" "system/framework/framework.jar" \
+            "$MODPATH/camera/framework.jar/0001-Backport-legacy-CameraMetadataNative-code.patch"
     fi
+    if ! $TARGET_CAMERA_SUPPORT_MASS_APP_FLAVOR; then
+        DECODE_APK "system" "system/priv-app/SamsungCamera/SamsungCamera.apk"
+        CAMERA_APK_DIR="$APKTOOL_DIR/system/priv-app/SamsungCamera/SamsungCamera.apk"
+        CAMERA_CALLBACK_SMALI="$CAMERA_APK_DIR/smali_classes2/com/samsung/android/camera/core2/maker/MakerCallbackManager.smali"
+        CAMERA_FORWARDER_SMALI="$CAMERA_APK_DIR/smali_classes2/com/samsung/android/camera/core2/callback/forwarder/TextDetectionInfoCallbackForwarder.smali"
+        # The Android 17 callback adaptation is already present in the modern
+        # camera core used by M21s/y2s.  The reverse check in APPLY_PATCH is
+        # not sufficient here because the donor patch targets different line
+        # contexts, so recognize the complete semantic markers explicitly.
+        if grep -Fq 'sceneDetectionEvent:I' "$CAMERA_FORWARDER_SMALI" && \
+                grep -Fq 'SemCaptureResult;->I0' "$CAMERA_CALLBACK_SMALI" && \
+                grep -Fq 'lambda$initializeSendCallbackMap$156' "$CAMERA_CALLBACK_SMALI"; then
+            LOG "- SamsungCamera already has the legacy scene-detection callback path"
+        else
+            PATCHED=true
+            APPLY_PATCH "system" "system/priv-app/SamsungCamera/SamsungCamera.apk" \
+                "$MODPATH/camera/SamsungCamera.apk/0002-Backport-legacy-Scene-detection-code.patch"
+        fi
+        unset CAMERA_APK_DIR CAMERA_CALLBACK_SMALI CAMERA_FORWARDER_SMALI
+    fi
+    unset CAMERA_METADATA_SMALI
 fi
 
 # Support legacy Face HAL (pre-API 34)
 if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "34" ]; then
     if [ ! -f "$WORK_DIR/vendor/bin/hw/vendor.samsung.hardware.biometrics.face@3.0-service" ]; then
-        PATCHED=true
-        APPLY_PATCH "system" "system/framework/services.jar" \
-            "$MODPATH/face/services.jar/0001-Fallback-to-Face-HIDL-2.0.patch"
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali/com/android/server/biometrics/sensors/face/hidl/HidlToAidlCallbackConverter.smali" "replaceall" \
-            "V3_0" \
-            "V2_0" \
-            > /dev/null
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali/com/android/server/biometrics/sensors/face/hidl/TestHal.smali" "replaceall" \
-            "V3_0" \
-            "V2_0" \
-            > /dev/null
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali/com/android/server/biometrics/sensors/face/aidl/SemFaceServiceExImpl\$\$ExternalSyntheticLambda6.smali" "remove"
-        LOG "- Removing \"smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace.smali\" from /system/system/framework/services.jar"
-        EVAL "rm \"$APKTOOL_DIR/system/framework/services.jar/smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace.smali\""
-        LOG "- Removing \"smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace\$Proxy.smali\" from /system/system/framework/services.jar"
-        EVAL "rm \"$APKTOOL_DIR/system/framework/services.jar/smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace\\\$Proxy.smali\""
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace\$Stub\$1.smali" "remove"
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFaceClientCallback\$Proxy.smali" "remove"
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFaceClientCallback.smali" "remove"
+        # Android 17 services.jar is not source-compatible with the old
+        # unified patch above.  On M21s the firmware exposes only the Samsung
+        # Face HIDL 2.0 service, while the modern framework already contains
+        # both V2 and V3 adapters.  Select the V2 path through the existing
+        # FEATURE_JDM_HAL switch instead of applying stale hunks (which would
+        # abort the build and could leave a mixed V2/V3 services.jar).
+        if [ "$TARGET_CODENAME" = "m21s" ] || [ "$TARGET_PLATFORM" = "exynos9611" ]; then
+            PATCHED=true
+            LOG "- Selecting Face HIDL 2.0 adapter for M21s (modern services.jar)"
+            DECODE_APK "system" "system/framework/services.jar"
+            FACE_FEATURE_SMALI="$APKTOOL_DIR/system/framework/services.jar/smali/com/android/server/biometrics/SemBiometricFeature.smali"
+            if ! awk '
+                /^\.method.*<clinit>\(\)V/ { inside = 1 }
+                inside { print }
+                inside && /^\.end method/ { exit }
+            ' "$FACE_FEATURE_SMALI" | grep -q 'const/4 v0, 0x1'; then
+                SMALI_PATCH "system" "system/framework/services.jar" \
+                    "smali/com/android/server/biometrics/SemBiometricFeature.smali" "replace" \
+                    "<clinit>()V" \
+                    "sput-boolean v0, Lcom/android/server/biometrics/SemBiometricFeature;->FEATURE_JDM_HAL:Z" \
+                    "    const/4 v0, 0x1\\n    sput-boolean v0, Lcom/android/server/biometrics/SemBiometricFeature;->FEATURE_JDM_HAL:Z"
+            fi
+        else
+            PATCHED=true
+            APPLY_PATCH "system" "system/framework/services.jar" \
+                "$MODPATH/face/services.jar/0001-Fallback-to-Face-HIDL-2.0.patch"
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali/com/android/server/biometrics/sensors/face/hidl/HidlToAidlCallbackConverter.smali" "replaceall" \
+                "V3_0" \
+                "V2_0" \
+                > /dev/null
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali/com/android/server/biometrics/sensors/face/hidl/TestHal.smali" "replaceall" \
+                "V3_0" \
+                "V2_0" \
+                > /dev/null
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali/com/android/server/biometrics/sensors/face/aidl/SemFaceServiceExImpl\$\$ExternalSyntheticLambda6.smali" "remove"
+            LOG "- Removing \"smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace.smali\" from /system/system/framework/services.jar"
+            EVAL "rm \"$APKTOOL_DIR/system/framework/services.jar/smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace.smali\""
+            LOG "- Removing \"smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace\$Proxy.smali\" from /system/system/framework/services.jar"
+            EVAL "rm \"$APKTOOL_DIR/system/framework/services.jar/smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace\\\$Proxy.smali\""
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFace\$Stub\$1.smali" "remove"
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFaceClientCallback\$Proxy.smali" "remove"
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali_classes2/vendor/samsung/hardware/biometrics/face/V3_0/ISehBiometricsFaceClientCallback.smali" "remove"
+        fi
     fi
 fi
 
@@ -170,9 +243,18 @@ fi
 if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
     if [ -f "$WORK_DIR/vendor/bin/hw/vendor.samsung.hardware.light-service" ] && \
             ! xxd -p -c 4 "$WORK_DIR/vendor/bin/hw/vendor.samsung.hardware.light-service" | grep -q "1853$"; then
-        PATCHED=true
-        APPLY_PATCH "system" "system/framework/services.jar" \
-            "$MODPATH/lights/services.jar/0001-Backport-legacy-SehLights-HAL-code.patch"
+        if [ "$TARGET_CODENAME" = "m21s" ] || [ "$TARGET_PLATFORM" = "exynos9611" ]; then
+            # The Android 17 source already contains the VINTF SehLights path
+            # and legacy-api-level selection.  The older patch rewrites the
+            # pre-Android-17 LightImpl/BacklightAdapter method layout and its
+            # hunks cannot apply to this services.jar.  Leave the modern
+            # implementation intact for M21s instead of aborting the build.
+            LOG "- Keeping Android 17 SehLights implementation for M21s; legacy patch is not source-compatible"
+        else
+            PATCHED=true
+            APPLY_PATCH "system" "system/framework/services.jar" \
+                "$MODPATH/lights/services.jar/0001-Backport-legacy-SehLights-HAL-code.patch"
+        fi
     fi
 fi
 
@@ -205,7 +287,18 @@ if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
         ! grep -q "bogus directory:" "$TMP_DIR/out/kernel"; then
         PATCHED=true
         # ",time_offset=%d" -> "NUL"
-        HEX_PATCH "$WORK_DIR/system/system/bin/vold" "2c74696d655f6f66667365743d2564" "000000000000000000000000000000"
+        VOLD_BIN="$WORK_DIR/system/system/bin/vold"
+        if xxd -p -c 0 "$VOLD_BIN" | grep -q "2c74696d655f6f66667365743d2564"; then
+            HEX_PATCH "$VOLD_BIN" "2c74696d655f6f66667365743d2564" "000000000000000000000000000000"
+        elif ! strings "$VOLD_BIN" | grep -q "time_offset"; then
+            # Android 17's vold no longer emits the unsupported option at
+            # all; this is the equivalent of the legacy string removal.
+            LOG "- M21s vold already omits the unsupported sdfat time_offset option"
+        else
+            LOGE "M21s vold contains time_offset but its legacy patch signature is unknown"
+            ABORT "Cannot adapt M21s vold time_offset option safely"
+        fi
+        unset VOLD_BIN
     fi
 fi
 
@@ -307,11 +400,41 @@ if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
     EXTRACT_KERNEL_IMAGE
     if grep -q "Linux version 4.14" "$TMP_DIR/out/kernel"; then
         PATCHED=true
-        # [b.eq #0xXXXXXX] -> [nop]
-        # - android::net::MobileBBController::hotspotOn(const std::string)
-        HEX_PATCH "$WORK_DIR/system/system/bin/netd" "1f01096be0010054" "1f01096b1f2003d5"
-        # - android::net::MobileBBController::isMBBPathsPresent()
-        HEX_PATCH "$WORK_DIR/system/system/bin/netd" "1f01096b20010054" "1f01096b1f2003d5"
+        if [ "$TARGET_CODENAME" = "m21s" ] || [ "$TARGET_PLATFORM" = "exynos9611" ]; then
+            # Android 17's netd was rebuilt with conditional-selects instead
+            # of the old b.eq sequence.  These two selects are the modern
+            # form of MobileBBController::hotspotOn's ro.kernel.version
+            # routing; force the non-4.14 path while retaining equal-length
+            # instruction replacements.  The helper below still retains the
+            # original compare/branch sequence in this target.
+            NETD_HEX="$WORK_DIR/system/system/bin/netd"
+            NETD_HEX_DATA="$(xxd -p -c 0 "$NETD_HEX")"
+            if grep -q "6111899a" <<< "$NETD_HEX_DATA"; then
+                HEX_PATCH "$NETD_HEX" "6111899a" "e1030baa"
+            elif ! grep -q "e1030baa" <<< "$NETD_HEX_DATA"; then
+                ABORT "M21s netd hotspotOn signature is unknown"
+            fi
+            NETD_HEX_DATA="$(xxd -p -c 0 "$NETD_HEX")"
+            if grep -q "3511889a" <<< "$NETD_HEX_DATA"; then
+                HEX_PATCH "$NETD_HEX" "3511889a" "f50309aa"
+            elif ! grep -q "f50309aa" <<< "$NETD_HEX_DATA"; then
+                ABORT "M21s netd hotspotOn routing signature is unknown"
+            fi
+            # - android::net::MobileBBController::isMBBPathsPresent()
+            NETD_HEX_DATA="$(xxd -p -c 0 "$NETD_HEX")"
+            if grep -q "1f01096b20010054" <<< "$NETD_HEX_DATA"; then
+                HEX_PATCH "$NETD_HEX" "1f01096b20010054" "1f01096b1f2003d5"
+            elif ! grep -q "1f01096b1f2003d5" <<< "$NETD_HEX_DATA"; then
+                ABORT "M21s netd isMBBPathsPresent signature is unknown"
+            fi
+            unset NETD_HEX NETD_HEX_DATA
+        else
+            # [b.eq #0xXXXXXX] -> [nop]
+            # - android::net::MobileBBController::hotspotOn(const std::string)
+            HEX_PATCH "$WORK_DIR/system/system/bin/netd" "1f01096be0010054" "1f01096b1f2003d5"
+            # - android::net::MobileBBController::isMBBPathsPresent()
+            HEX_PATCH "$WORK_DIR/system/system/bin/netd" "1f01096b20010054" "1f01096b1f2003d5"
+        fi
     fi
 fi
 
@@ -430,21 +553,54 @@ if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
 fi
 
 # Support SECOND_PICTURE_CONFIG camera feature (pre-API 35).
-# The Android 16 SamsungCamera used by the Exynos 990 port has the newer
-# map-backed FeatureCapability implementation and moves the app-side engine
-# classes to classes4.  The upstream backport targets the older field-backed
-# implementation; applying it here creates invalid references (and currently
-# fails before the APK can be rebuilt).  Keep the stock camera path for this
-# platform until the feature is ported against the new capability model.
-if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ] && [ "$TARGET_PLATFORM" != "exynos990" ]; then
-    PATCHED=true
-    if $TARGET_CAMERA_SUPPORT_MASS_APP_FLAVOR; then
-        APPLY_PATCH "system" "system/priv-app/SamsungCamera/SamsungCamera.apk" \
-            "$MODPATH/camera_mass/SamsungCamera.apk/0001-Backport-CONTROL_AVAILABLE_FEATURE_SECOND_PICTURE_CO.patch"
+# The donor patch is valid only for the old field-backed camera engine.  Newer
+# Android 17 SamsungCamera builds (including M21s/y2s) use a map-backed core
+# and no longer ship the CapabilityImpl/PrepareMakerRequest API that the patch
+# extends.  Applying it blindly produces the missing-smali failure reported
+# during the M21s build.  Select the patch from the actual APK layout instead
+# of using the target name as a proxy; an unknown layout remains a hard error.
+if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
+    DECODE_APK "system" "system/priv-app/SamsungCamera/SamsungCamera.apk"
+    SECOND_PICTURE_APK_DIR="$APKTOOL_DIR/system/priv-app/SamsungCamera/SamsungCamera.apk"
+    SECOND_PICTURE_FILES=(
+        "smali_classes3/com/samsung/android/camera/core2/CamCapability.smali"
+        "smali_classes3/com/samsung/android/camera/core2/local/capability/FeatureCapability.smali"
+        "smali_classes3/com/samsung/android/camera/core2/maker/MakerBase.smali"
+        "smali_classes3/com/sec/android/app/camera/engine/core/CapabilityImpl.smali"
+        "smali_classes3/com/sec/android/app/camera/engine/core/request/PrepareMakerRequest.smali"
+        "smali_classes3/com/sec/android/app/camera/engine/core/request/PrepareVideoMakerRequest.smali"
+        "smali_classes3/com/sec/android/app/camera/engine/interfaces/Capability.smali"
+    )
+    SECOND_PICTURE_LAYOUT_OK=true
+    for SECOND_PICTURE_FILE in "${SECOND_PICTURE_FILES[@]}"; do
+        if [ ! -f "$SECOND_PICTURE_APK_DIR/$SECOND_PICTURE_FILE" ]; then
+            SECOND_PICTURE_LAYOUT_OK=false
+            break
+        fi
+    done
+    SECOND_PICTURE_FEATURE_SMALI="$(find "$SECOND_PICTURE_APK_DIR" -type f \
+        -path '*/com/samsung/android/camera/core2/local/capability/FeatureCapability.smali' \
+        -print -quit)"
+    if $SECOND_PICTURE_LAYOUT_OK; then
+        PATCHED=true
+        if $TARGET_CAMERA_SUPPORT_MASS_APP_FLAVOR; then
+            SECOND_PICTURE_PATCH="$MODPATH/camera_mass/SamsungCamera.apk/0001-Backport-CONTROL_AVAILABLE_FEATURE_SECOND_PICTURE_CO.patch"
+        else
+            SECOND_PICTURE_PATCH="$MODPATH/camera/SamsungCamera.apk/0001-Backport-CONTROL_AVAILABLE_FEATURE_SECOND_PICTURE_CO.patch"
+        fi
+        APPLY_PATCH "system" "system/priv-app/SamsungCamera/SamsungCamera.apk" "$SECOND_PICTURE_PATCH"
+    elif [ -n "$SECOND_PICTURE_FEATURE_SMALI" ] && \
+            grep -Fq 'ConcurrentHashMap' "$SECOND_PICTURE_FEATURE_SMALI" && \
+            ! (find "$SECOND_PICTURE_APK_DIR" -type f -path '*/com/sec/android/app/camera/engine/core/CapabilityImpl.smali' -print -quit | grep -q .); then
+        # This is the modern camera core: its feature map and request pipeline
+        # are different, and the old second-picture API does not exist to be
+        # patched.  Preserve the native implementation rather than injecting
+        # references to classes that the APK cannot resolve.
+        LOG "- SamsungCamera uses the modern map-backed core; SECOND_PICTURE_CONFIG donor API is not applicable"
     else
-        APPLY_PATCH "system" "system/priv-app/SamsungCamera/SamsungCamera.apk" \
-            "$MODPATH/camera/SamsungCamera.apk/0001-Backport-CONTROL_AVAILABLE_FEATURE_SECOND_PICTURE_CO.patch"
+        ABORT "SamsungCamera layout is neither the supported legacy SECOND_PICTURE_CONFIG API nor the known modern map-backed core"
     fi
+    unset SECOND_PICTURE_APK_DIR SECOND_PICTURE_FILE SECOND_PICTURE_FILES SECOND_PICTURE_LAYOUT_OK SECOND_PICTURE_FEATURE_SMALI SECOND_PICTURE_PATCH
 fi
 
 # Support OMX hardware video codecs (pre-API 35)

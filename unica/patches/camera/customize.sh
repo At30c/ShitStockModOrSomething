@@ -35,11 +35,68 @@ fi
 if [ -f "$SRC_DIR/target/$TARGET_CODENAME/camera/camera-feature.xml" ]; then
     LOG "- Adding /system/system/cameradata/camera-feature.xml"
     EVAL "cp -a \"$SRC_DIR/target/$TARGET_CODENAME/camera/camera-feature.xml\" \"$WORK_DIR/system/system/cameradata/camera-feature.xml\""
+elif [ -f "$FW_DIR/$TARGET_FIRMWARE_PATH/system/system/cameradata/camera-feature.xml" ]; then
+    # A legacy target can have a different SDK from the ESSI source without
+    # needing a fabricated feature XML. Keep the target firmware's complete
+    # camera contract until a target-specific adaptation is authored.
+    LOG "- Reusing target firmware camera-feature.xml"
+    ADD_TO_WORK_DIR "$TARGET_FIRMWARE" \
+        "system" "system/cameradata/camera-feature.xml" 0 0 644 "u:object_r:system_file:s0"
 elif [[ "$SOURCE_PLATFORM_SDK_VERSION" == "$TARGET_PLATFORM_SDK_VERSION" ]]; then
     ADD_TO_WORK_DIR "$TARGET_FIRMWARE" \
         "system" "system/cameradata/camera-feature.xml" 0 0 644 "u:object_r:system_file:s0"
 else
     _LOG "File not found: $SRC_DIR/target/$TARGET_CODENAME/camera/camera-feature.xml"
+fi
+
+# The authoritative M21s target XML is the stock baseline plus its validated
+# 4.0x zoom ceiling. Scrub only a leaked donor-mode attribute from the workdir
+# copy; this is a byte-identical no-op for the valid target file.
+if [[ "$TARGET_CODENAME" == "m21s" ]]; then
+    M21S_CAMERA_FEATURE="$WORK_DIR/system/system/cameradata/camera-feature.xml"
+    EVAL "sed -i 's/front=\"LIVE_FOCUS_LITE\" //' \"$M21S_CAMERA_FEATURE\""
+    if grep -Eq '6528x4896|5264x3948|4624x3468|4624x2604|4624x2136|4000x2250|3264x1504|LIVE_FOCUS_LITE' "$M21S_CAMERA_FEATURE"; then
+        ABORT "M21s camera XML contains untranslated donor values"
+        return 1
+    fi
+    unset M21S_CAMERA_FEATURE
+fi
+# the Autoframe implementation, but the Exynos 990 target is missing the
+# S24+ tracker/plugin stack and its detector model. Import only this isolated
+# closure from the source firmware; do not replace the camera HAL or all
+# source camera blobs.
+if [[ "$TARGET_CODENAME" == "y2s" ]]; then
+    AUTOFRAME_FILES=(
+        "vendor/lib64/libaivideocentral.arcsoft.so"
+        "vendor/lib64/libzoomroi_lite.samsung.so"
+        "vendor/lib64/libbodyid.arcsoft.so"
+        "vendor/lib64/libzoomroi.samsung.so"
+        "vendor/lib64/libauto_framing_arcsoft.uniplugin@1.0.so"
+        "vendor/lib64/libauto_framing_lite.uniplugin@1.0.so"
+        "vendor/lib64/libautoframing_object_tracker.camera.samsung.so"
+        "vendor/lib64/libautotracking_interface.so"
+        "vendor/lib64/libAIMFISP.camera.samsung.so"
+        "vendor/lib64/libAIMFISP_core.camera.samsung.so"
+        "vendor/lib64/libAImode_wrapper.camera.samsung.so"
+        "vendor/etc/saiv/image_understanding/db/aic_autoframing_detector_tracker/aic_autoframing_detector_tracker_cnn.info"
+        "vendor/etc/saiv/image_understanding/db/aic_autoframing_detector_tracker/aic_autoframing_detector_tracker_cnn.tflite"
+    )
+    AUTOFRAME_READY=true
+    for AUTOFRAME_FILE in "${AUTOFRAME_FILES[@]}"; do
+        if [ ! -f "$FW_DIR/$SOURCE_FIRMWARE_PATH/$AUTOFRAME_FILE" ]; then
+            AUTOFRAME_READY=false
+            LOGW "Autoframe source file is missing: ${AUTOFRAME_FILE}"
+        fi
+    done
+    if $AUTOFRAME_READY; then
+        for AUTOFRAME_FILE in "${AUTOFRAME_FILES[@]}"; do
+            ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "${AUTOFRAME_FILE%%/*}" "${AUTOFRAME_FILE#*/}"
+        done
+        LOG "- Imported S24+ Autoframe tracker/plugin stack and detector model"
+    else
+        LOGW "Skipping Autoframe import because the source closure is incomplete"
+    fi
+    unset AUTOFRAME_FILES AUTOFRAME_FILE AUTOFRAME_READY
 fi
 
 # Restore only HDR10+ profiles advertised by stock Android 13 camera XMLs.

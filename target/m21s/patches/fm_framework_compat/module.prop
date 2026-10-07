@@ -1,0 +1,7 @@
+id=m21s_fm_framework_compat
+priority=40
+name=M21s FM framework compatibility
+version=1.2
+versionCode=3
+author=At30c
+description=Restores the F415F FM framework JNI contract for Android 17.

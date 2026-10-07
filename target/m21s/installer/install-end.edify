@@ -1,0 +1,7 @@
+# Prism and Optics are fixed physical partitions outside super. The builder
+# emits raw ext4 images with an AVB footer so first-stage fstab verification
+# works; recovery can still write the raw payloads directly.
+ui_print("Installing M21s prism image...");
+assert(package_extract_file("prism.img", "/dev/block/by-name/prism"));
+ui_print("Installing M21s optics image...");
+assert(package_extract_file("optics.img", "/dev/block/by-name/optics"));

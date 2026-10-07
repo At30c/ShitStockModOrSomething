@@ -1,0 +1,86 @@
+#!/sbin/sh
+
+ZIPFILE="$3"
+OUTFD="$2"
+TMP=/tmp/m21s-multidisabler
+
+ui_print() {
+    echo "ui_print $*" > "/proc/self/fd/$OUTFD"
+    echo "ui_print" > "/proc/self/fd/$OUTFD"
+}
+
+abort() {
+    ui_print "ERROR: $*"
+    exit 1
+}
+
+ui_print "M21s Android 17 multidisabler"
+ui_print "Preserving TEEgris, Keymaster, VaultKeeper and PROCA"
+
+rm -rf "$TMP"
+mkdir -p "$TMP" || abort "cannot create temporary directory"
+unzip -o "$ZIPFILE" fstab.exynos9611 -d "$TMP" >/dev/null 2>&1 || \
+    abort "cannot extract the M21s fstab"
+
+[ -s "$TMP/fstab.exynos9611" ] || abort "bundled fstab is empty"
+grep -q '^/dev/block/by-name/userdata[[:space:]]' "$TMP/fstab.exynos9611" || \
+    abort "bundled fstab has no userdata entry"
+if ! grep '^/dev/block/by-name/userdata[[:space:]]' "$TMP/fstab.exynos9611" | \
+        grep -q 'fileencryption=aes-256-xts:aes-256-cts:v1'; then
+    abort "bundled fstab does not preserve the M21s Android 17-compatible FBE v1 contract"
+fi
+
+twrp mount vendor >/dev/null 2>&1 || mount /vendor >/dev/null 2>&1 || \
+    abort "cannot mount vendor"
+mount -o rw,remount /vendor >/dev/null 2>&1 || \
+    abort "cannot remount vendor read-write"
+
+# Samsung reserves nearly all remaining ext4 blocks. Release the recovery-only
+# reservation before the tiny replacement to avoid sed/cp truncating fstab.
+for reserve in /sys/fs/ext4/*/reserved_clusters; do
+    [ -e "$reserve" ] && echo 0 > "$reserve" 2>/dev/null
+done
+
+cp -f "$TMP/fstab.exynos9611" /vendor/etc/fstab.exynos9611 || \
+    abort "cannot install vendor fstab"
+chown 0:0 /vendor/etc/fstab.exynos9611
+chmod 0644 /vendor/etc/fstab.exynos9611
+restorecon /vendor/etc/fstab.exynos9611 >/dev/null 2>&1
+cmp -s "$TMP/fstab.exynos9611" /vendor/etc/fstab.exynos9611 || \
+    abort "vendor fstab verification failed"
+
+twrp mount system >/dev/null 2>&1 || mount /system >/dev/null 2>&1 || \
+    abort "cannot mount system"
+mount -o rw,remount /system_root >/dev/null 2>&1 || \
+    mount -o rw,remount /system >/dev/null 2>&1 || \
+    abort "cannot remount system read-write"
+
+INIT_RC=
+for candidate in /system_root/system/etc/init/hw/init.rc \
+        /system/system/etc/init/hw/init.rc /system/etc/init/hw/init.rc; do
+    [ -f "$candidate" ] && INIT_RC="$candidate" && break
+done
+[ -n "$INIT_RC" ] || abort "cannot locate Android init.rc"
+
+DATA_RULE='mkdir /data/data 0771 system system encryption=None'
+if grep -q -F -x "    $DATA_RULE" "$INIT_RC"; then
+    sed "\\|^    $DATA_RULE$|d" "$INIT_RC" > "$TMP/init.rc" || \
+        abort "cannot repair init.rc"
+    [ -s "$TMP/init.rc" ] || abort "repaired init.rc is empty"
+    cp -f "$TMP/init.rc" "$INIT_RC" || abort "cannot install repaired init.rc"
+    chown 0:0 "$INIT_RC"
+    chmod 0644 "$INIT_RC"
+    restorecon "$INIT_RC" >/dev/null 2>&1
+fi
+grep -q -F -x "    $DATA_RULE" "$INIT_RC" && \
+    abort "incompatible unencrypted init rule is still present"
+
+for root in /system /system/system; do
+    if [ -f "$root/recovery-from-boot.p" ]; then
+        mv "$root/recovery-from-boot.p" "$root/recovery-from-boot.p.disabled"
+    fi
+done
+
+sync
+ui_print "M21s FBE contract restored without disabling Samsung security services"
+exit 0

@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Sun, 5 Oct 2026 12:05:00 -0300
+Subject: [PATCH] arm64: exynos9611: M21: select the F41 camera sensor set
+
+The M21s target is an SM-F415F (Galaxy F41), yet the universal9611 kernel
+was built with the m21 defconfig, whose FIMC-IS profile is mms_v21: rear
+GM2, front HI2021Q, actuator DW9808.  The stock SM-F415F ZTO boot image
+that this ROM retains declares a completely different module list in its
+DTBO, and those nodes are what FIMC-IS actually probes at runtime:
+
+    gw1     position 0  id 0   (rear,  SENSOR_NAME_S5KGW1 = 62)
+    imx616  position 1  id 1   (front, SENSOR_NAME_IMX616 = 121)
+    gc5035  position 2  id 2
+    4ha     position 4  id 3
+
+Because CONFIG_CAMERA_CIS_GW1_OBJ and CONFIG_CAMERA_CIS_IMX616_OBJ were
+unset, neither the CIS drivers nor their module wrappers were compiled.
+FIMC-IS therefore could not match the module ids present in the DTBO:
+
+    rear-camtype : module(62) is not found  -> UNKNOWN_UNKNOWN_FIMC_IS
+    front-camtype: module(121) is not found -> UNKNOWN_UNKNOWN_FIMC_IS
+
+CameraService treats an unrecognised camtype as a fatal camera error and
+removes every camera, so the device reports no camera hardware at all.
+The -121 (EREMOTEIO) i2c_master_send failure on the sensor EEPROM read is
+the same mismatch seen from the bus side: the module that would drive the
+sensor power/reset/MCLK sequence was never compiled, so the slave never
+drives SCL/SDA.
+
+Align only the camera selection with the real F41 hardware and leave every
+other m21 choice untouched (SSP_M21, MALI r32p1, panel/charging and the
+Android 17 compatibility backports).  This mirrors the camera block of
+exynos9611-f41_defconfig exactly:
+
+  CIS       + GW1, IMX616      - GM2, HI2021Q   (GC5035 and 4HA already y)
+  actuator  + DW9817           - DW9808
+  ROM      CAMERA_FXT_V41      - CAMERA_MMS_V21
+
+CAMERA_FXT_V41 is what selects fimc-is-vendor-sensor-pwr_fxt_v41.h and
+fimc-is-vender-rom-config_fxt_v41.h, which carry the F41 rails
+(CAM_VLDO1..7, gpio_cam_a2p8_en) and the matching gw1/imx616/gc5035/4ha
+EEPROM maps.  Enabling the CIS objects without it would still power the
+wrong rails and read the wrong EEPROM blocks.
+
+Co-developed-by: Claude Opus 4.8 <noreply@anthropic.com>
+---
+ arch/arm64/configs/exynos9611-m21_defconfig | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/arch/arm64/configs/exynos9611-m21_defconfig b/arch/arm64/configs/exynos9611-m21_defconfig
+--- a/arch/arm64/configs/exynos9611-m21_defconfig
++++ b/arch/arm64/configs/exynos9611-m21_defconfig
+@@ -2808,7 +2808,7 @@
+ # CONFIG_CAMERA_CIS_2P8_OBJ is not set
+ # CONFIG_CAMERA_CIS_2T7SX_OBJ is not set
+ # CONFIG_CAMERA_CIS_2X5_OBJ is not set
+-CONFIG_CAMERA_CIS_GM2_OBJ=y
++# CONFIG_CAMERA_CIS_GM2_OBJ is not set
+ # CONFIG_CAMERA_CIS_3H1_OBJ is not set
+ # CONFIG_CAMERA_CIS_3H1_C3_OBJ is not set
+ # CONFIG_CAMERA_CIS_3J1_OBJ is not set
+@@ -2832,12 +2832,12 @@
+ # CONFIG_CAMERA_CIS_IMX576_OBJ is not set
+ # CONFIG_CAMERA_CIS_IMX582_OBJ is not set
+ # CONFIG_CAMERA_CIS_IMX586_OBJ is not set
+-# CONFIG_CAMERA_CIS_IMX616_OBJ is not set
++CONFIG_CAMERA_CIS_IMX616_OBJ=y
+ # CONFIG_CAMERA_CIS_SR259_OBJ is not set
+ CONFIG_CAMERA_CIS_GC5035_OBJ=y
+ # CONFIG_CAMERA_CIS_HI1336_OBJ is not set
+-CONFIG_CAMERA_CIS_HI2021Q_OBJ=y
+-# CONFIG_CAMERA_CIS_GW1_OBJ is not set
++# CONFIG_CAMERA_CIS_HI2021Q_OBJ is not set
++CONFIG_CAMERA_CIS_GW1_OBJ=y
+ # CONFIG_CAMERA_CIS_IMX682_OBJ is not set
+ # CONFIG_CAMERA_CIS_GD1_OBJ is not set
+ # CONFIG_CAMERA_CIS_RPB_OBJ is not set
+@@ -2850,14 +2850,14 @@
+ # CONFIG_CAMERA_ACT_DW9780_OBJ is not set
+ # CONFIG_CAMERA_ACT_DW9804_OBJ is not set
+ # CONFIG_CAMERA_ACT_DW9807_OBJ is not set
+-CONFIG_CAMERA_ACT_DW9808_OBJ=y
++# CONFIG_CAMERA_ACT_DW9808_OBJ is not set
+ # CONFIG_CAMERA_ACT_DW9823_OBJ is not set
+ # CONFIG_CAMERA_ACT_AK7372_OBJ is not set
+ # CONFIG_CAMERA_ACT_LC898217_OBJ is not set
+ # CONFIG_CAMERA_ACT_AK737X_OBJ is not set
+ # CONFIG_CAMERA_ACT_ZC533_OBJ is not set
+ # CONFIG_CAMERA_ACT_ZC569_OBJ is not set
+-# CONFIG_CAMERA_ACT_DW9817_OBJ is not set
++CONFIG_CAMERA_ACT_DW9817_OBJ=y
+ CONFIG_CAMERA_FLASH_SELECT=y
+ # CONFIG_CAMERA_FLASH_LM3560_OBJ is not set
+ # CONFIG_CAMERA_FLASH_RT5033_OBJ is not set
+@@ -2919,9 +2919,9 @@
+ # CONFIG_CAMERA_AAS_V50S is not set
+ # CONFIG_CAMERA_MMS_V30S is not set
+ # CONFIG_CAMERA_MMS_V31 is not set
+-CONFIG_CAMERA_MMS_V21=y
++# CONFIG_CAMERA_MMS_V21 is not set
+ # CONFIG_CAMERA_AAS_V51 is not set
+-# CONFIG_CAMERA_FXT_V41 is not set
++CONFIG_CAMERA_FXT_V41=y
+ # CONFIG_CAMERA_XXS_VPRO is not set
+ # CONFIG_CAMERA_ATS_V04 is not set
+ # CONFIG_CAMERA_MMS_V31S is not set
+--
+2.51.0

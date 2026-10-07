@@ -1,0 +1,7 @@
+id=m21s_display_camera
+priority=99
+name=M21s display and camera compatibility
+version=1.0
+versionCode=1
+author=At30c
+description=Publishes F415F camera processors, disables invalid fixed-zoom input, and migrates stale M21s camera preferences.

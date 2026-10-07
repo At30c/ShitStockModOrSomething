@@ -1,0 +1,34 @@
+#!/sbin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+ZIPFILE="$3"
+OUTFD="$2"
+TMP_DIR=/tmp/m21s-sensorhub-m31
+VENDOR_BLOCK=/dev/block/by-name/vendor
+DEST=/vendor/firmware/sensorhub/shub_ramen_m31.fw
+
+ui_print() {
+    echo "ui_print $*" > "/proc/self/fd/$OUTFD"
+    echo "ui_print" > "/proc/self/fd/$OUTFD"
+}
+abort() { ui_print "ERROR: $*"; exit 1; }
+
+[ -b "$VENDOR_BLOCK" ] || abort "vendor block device not found"
+mkdir -p "$TMP_DIR" || abort "cannot create temporary directory"
+unzip -p "$ZIPFILE" vendor/firmware/sensorhub/shub_ramen_m31.fw > "$TMP_DIR/shub_ramen_m31.fw" || abort "cannot extract firmware"
+unzip -p "$ZIPFILE" firmware.sha256 > "$TMP_DIR/firmware.sha256" || abort "cannot extract checksum"
+[ -s "$TMP_DIR/shub_ramen_m31.fw" ] || abort "firmware is empty"
+EXPECTED="$(awk 'NR == 1 { print $1 }' "$TMP_DIR/firmware.sha256")"
+ACTUAL="$(sha256sum "$TMP_DIR/shub_ramen_m31.fw" | awk '{ print $1 }')"
+[ "$EXPECTED" = "$ACTUAL" ] || abort "bundled firmware checksum mismatch"
+
+mount | grep -q ' /vendor ' || mount "$VENDOR_BLOCK" /vendor 2>/dev/null || abort "could not mount vendor read-write"
+[ -w /vendor ] || abort "vendor is not writable; use the current ext4 test image"
+mkdir -p /vendor/firmware/sensorhub || abort "cannot create vendor firmware directory"
+cp "$TMP_DIR/shub_ramen_m31.fw" "$DEST" || abort "could not write M31 firmware"
+chmod 0644 "$DEST"
+chown 0:0 "$DEST" 2>/dev/null || true
+sync
+[ "$(sha256sum "$DEST" | awk '{ print $1 }')" = "$EXPECTED" ] || abort "post-write firmware checksum mismatch"
+ui_print "M31 sensorhub firmware installed and verified"
+exit 0

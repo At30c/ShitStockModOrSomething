@@ -1,0 +1,27 @@
+From: At30c <PabloAtsoc9993@outlook.com>
+Subject: [PATCH] m21s: prepare TEEgris IWD device nodes
+
+The TEEgris client library creates its probe socket through /dev/tziwsock,
+not /dev/tzdev.  Normal boot reports EACCES from iwd_socket while the legacy
+device nodes can remain root:root 0600 when their vendor ueventd rules are not
+re-applied by the newer init stack.
+
+Restore the vendor labels and enforce the original F415F ownership/modes for
+all three TEEgris nodes before starting its daemons.  Keep tziwshmem at 0660,
+matching the stock vendor rule.
+
+--- a/etc/init/teegris_v3.rc
++++ b/etc/init/teegris_v3.rc
+@@ -6,6 +6,12 @@ on post-fs
+     restorecon /dev/tzdev
+     chown system system /dev/tzdev
+     chmod 0666 /dev/tzdev
++    restorecon /dev/tziwsock
++    chown system system /dev/tziwsock
++    chmod 0666 /dev/tziwsock
++    restorecon /dev/tziwshmem
++    chown system system /dev/tziwshmem
++    chmod 0660 /dev/tziwshmem
+     start tz_service
+     start tz_msg_recv
+ 

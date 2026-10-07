@@ -24,7 +24,7 @@
     <string name="unica_keybox_status_valid">Keybox válida</string>
     <string name="unica_keybox_title">Simular atestación de hardware</string>
     <string name="unica_keybox_toast_cleared">Datos de keybox eliminados.</string>
-    <string name="unica_keybox_toast_error">Ocurrió un error.</string>
+    <string name="unica_keybox_toast_error">Se ha producido un error.</string>
     <string name="unica_keybox_toast_error_xml">No se pudo procesar el archivo XML.</string>
     <string name="unica_keybox_toast_loaded">Archivo de keybox cargado.</string>
     <string name="unica_keybox_toast_not_gak">La keybox no está firmada por Google.</string>
@@ -38,11 +38,11 @@
     <string name="unica_menu_reboot_title">Opciones de reinicio</string>
     <string name="unica_native_blur_title">Activar efecto de desenfoque en tiempo real</string>
     <string name="unica_pif_custom_title">Importar props personalizadas de PIF desde archivo</string>
-    <string name="unica_pif_summary">Suplantar tu dispositivo para pasar la certificación de Google Play.</string>
+    <string name="unica_pif_summary">Suplantar tu dispositivo para pasar la atestación de Google Play.</string>
     <string name="unica_pif_title">Play Integrity Fix</string>
     <string name="unica_pif_toast_checking">Comprobando actualizaciones…</string>
     <string name="unica_pif_toast_custom">Props personalizadas cargadas.</string>
-    <string name="unica_pif_toast_error">Ocurrió un error.</string>
+    <string name="unica_pif_toast_error">Se ha producido un error.</string>
     <string name="unica_pif_toast_error_custom">Archivo inválido.</string>
     <string name="unica_pif_toast_up_to_date">"Estás usando la versión más reciente."</string>
     <string name="unica_pif_toast_updated">La actualización se instaló correctamente.</string>
@@ -53,11 +53,7 @@
     <string name="unica_ss_detection_title">Desactivar detección de capturas y grabaciones de pantalla</string>
     <string name="unica_spoof_settings_title">Ajustes de spoofing</string>
     <string name="unica_ui_settings_title">Ajustes de interfaz</string>
-    <string name="unica_updates_title">Actualizaciones de ArtisanROM</string>
+    <string name="unica_updates_title">Actualizaciones de UN1CA</string>
     <string name="unica_vulkan_summary">¡Esto es inestable y puede causar problemas!</string>
     <string name="unica_vulkan_title">Activar renderizador Vulkan</string>
-    <string name="artisanrom_version_title">Versión de ArtisanROM</string>
-    <string name="artisanrom_version_toast_counting">No, sigue tocando... (%d)</string>
-    <string name="artisanrom_version_toast_final">¿Qué buscas? ¡Los ajustes de desarrollador no están aquí!</string>
-    <string name="artisanrom_version_toast_done">¿Todavía aquí? ¡Te dije que los ajustes de desarrollador no están aquí!</string>
 </resources>

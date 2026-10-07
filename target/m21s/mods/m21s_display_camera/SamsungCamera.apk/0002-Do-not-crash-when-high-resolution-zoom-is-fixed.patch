@@ -1,0 +1,26 @@
+--- a/smali_classes2/com/sec/android/app/camera/layer/keyscreen/zoom/ZoomView.smali
++++ b/smali_classes2/com/sec/android/app/camera/layer/keyscreen/zoom/ZoomView.smali
+@@ -6836,16 +6836,10 @@
+     :cond_2e
+-    new-instance v0, Ljava/lang/RuntimeException;
+-
+-    const-string v2, "Zoom is not supported. Check the zoom range. minZoomLevel="
+-
+-    const-string v3, ", maxZoomLevel="
+-
+-    invoke-static {v1, v8, v2, v3}, Landroidx/compose/foundation/b;->n(IILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+-
+-    move-result-object v1
+-
+-    invoke-direct {v0, v1}, Ljava/lang/RuntimeException;-><init>(Ljava/lang/String;)V
+-
+-    throw v0
++    sget-object v0, Ll9/x2;->NOT_SUPPORT:Ll9/x2;
++    iput-object v0, v2, Lv9/i;->e:Ll9/x2;
++    iput-object v0, p0, Lcom/sec/android/app/camera/layer/keyscreen/zoom/ZoomView;->f:Ll9/x2;
++    # The F41 high-resolution profile reports a fixed 1.0x zoom range.
++    # There is no zoom UI to configure; reject later touch events instead of
++    # allowing the slider to send an invalid value to the F41 HAL.
++    return-void
+
+     :pswitch_data_0

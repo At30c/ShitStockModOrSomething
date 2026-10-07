@@ -1,0 +1,71 @@
+#!/sbin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+ZIPFILE="$3"
+OUTFD="$2"
+QUARANTINE="/vendor/.m21s-vibrator-aidl-s926-disabled"
+
+PAYLOADS="\\
+vendor/bin/hw/vendor.samsung.hardware.vibrator-service \\
+vendor/etc/init/vendor.samsung.hardware.vibrator-default.rc \\
+vendor/etc/vintf/manifest/vendor.samsung.hardware.vibrator-default.xml \\
+vendor/lib64/android.hardware.vibrator-V2-ndk.so \\
+vendor/lib64/vendor.samsung.hardware.vibrator-V5-ndk.so"
+
+ui_print() {
+    if [ -w "/proc/self/fd/$OUTFD" ]; then
+        echo "ui_print $*" > "/proc/self/fd/$OUTFD"
+        echo "ui_print" > "/proc/self/fd/$OUTFD"
+    else
+        echo "$*" >&2
+    fi
+}
+
+abort() {
+    ui_print "ERROR: $*"
+    exit 1
+}
+
+ui_print "M21s: desativando o AIDL experimental do vibrator"
+ui_print "Os arquivos serao movidos para $QUARANTINE"
+
+if ! mount | grep -q ' /vendor '; then
+    mount /vendor >/dev/null 2>&1 || twrp mount vendor >/dev/null 2>&1 || \\
+        abort "nao foi possivel montar vendor"
+fi
+mount -o rw,remount /vendor >/dev/null 2>&1 || \\
+    abort "nao foi possivel remontar vendor como rw"
+[ -w /vendor ] || abort "vendor nao esta gravavel"
+
+# Release recovery-only ext4 reservations used by Samsung's small vendor image.
+for reserve in /sys/fs/ext4/*/reserved_clusters; do
+    [ -e "$reserve" ] && echo 0 > "$reserve" 2>/dev/null || true
+done
+
+mkdir -p "$QUARANTINE" || abort "nao foi possivel criar a area de quarentena"
+
+found=0
+for rel in $PAYLOADS; do
+    src="/$rel"
+    if [ -e "$src" ]; then
+        dest="$QUARANTINE/$rel"
+        mkdir -p "$(dirname "$dest")" || abort "nao foi possivel preparar $rel"
+        mv "$src" "$dest" || abort "nao foi possivel mover $rel"
+        found=1
+        ui_print "Desativado: /$rel"
+    else
+        ui_print "Ausente: /$rel"
+    fi
+done
+
+[ "$found" = 1 ] || abort "nenhum arquivo AIDL experimental foi encontrado"
+
+sync
+for rel in $PAYLOADS; do
+    [ ! -e "/$rel" ] || abort "arquivo ainda presente: /$rel"
+done
+
+ui_print "Rollback concluido"
+ui_print "O HIDL original do M21s foi preservado"
+ui_print "Arquivos movidos para: $QUARANTINE"
+exit 0

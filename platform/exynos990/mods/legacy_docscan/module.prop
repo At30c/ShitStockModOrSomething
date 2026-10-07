@@ -1,0 +1,5 @@
+id=legacy_docscan
+priority=99
+name=Legacy Document Scan compatibility
+author=At30c
+description=Uses the target Smart Scan/OCR runtime instead of incompatible source enhancement nodes.

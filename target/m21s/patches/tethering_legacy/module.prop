@@ -1,0 +1,7 @@
+id=m21s_tethering_legacy
+priority=40
+name=Android 17 tethering compatibility for the M21s
+version=1.2
+versionCode=3
+author=At30c
+description=Adapts Android 17 NetBpfLoad, netd and default-network routing to the M21s Exynos 9611 Linux 4.14 platform.

@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Wed, 30 Sep 2026 21:40:00 -0300
+Subject: [PATCH] arm64: exynos9611: enable BPF traffic-control actions on M21
+
+Android 17 requires CONFIG_NET_ACT_BPF in its kernel compatibility matrix.
+The M21 defconfig already enables BPF syscalls, cgroup BPF, cls_bpf and the
+traffic-control action framework, but leaves the BPF action itself disabled.
+
+Enable it for the M21 target so netbpfload can load and attach the networking
+programs shipped by the current Tethering APEX.
+
+---
+ arch/arm64/configs/exynos9611-m21_defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/configs/exynos9611-m21_defconfig b/arch/arm64/configs/exynos9611-m21_defconfig
+--- a/arch/arm64/configs/exynos9611-m21_defconfig
++++ b/arch/arm64/configs/exynos9611-m21_defconfig
+@@ -1109,7 +1109,7 @@ CONFIG_NET_ACT_MIRRED=y
+ # CONFIG_NET_ACT_SKBEDIT is not set
+ # CONFIG_NET_ACT_CSUM is not set
+ # CONFIG_NET_ACT_VLAN is not set
+-# CONFIG_NET_ACT_BPF is not set
++CONFIG_NET_ACT_BPF=y
+ # CONFIG_NET_ACT_CONNMARK is not set
+ # CONFIG_NET_ACT_SKBMOD is not set
+ # CONFIG_NET_ACT_IFE is not set
+-- 
+2.51.0

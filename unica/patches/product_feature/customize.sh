@@ -7,6 +7,11 @@ GET_FINGERPRINT_SENSOR_TYPE()
         echo "optical"
     elif [[ "$1" == *"side"* ]]; then
         echo "side"
+    elif [[ "$1" == *"rear"* ]]; then
+        # Legacy Exynos 9611 devices such as the F41/M21s use a rear
+        # capacitive reader. It needs the generic fingerprint string rewrite,
+        # but not the optical/side-display UI transplant below.
+        echo "rear"
     else
         ABORT "Unknown fingerprint sensor type: \"$1\". Aborting"
     fi
@@ -136,8 +141,34 @@ fi
 # SEC_PRODUCT_FEATURE_AUDIO_CONFIG_HAPTIC
 if $SOURCE_AUDIO_SUPPORT_ACH_RINGTONE; then
     if ! $TARGET_AUDIO_SUPPORT_ACH_RINGTONE; then
-        APPLY_PATCH "system" "system/framework/framework.jar" \
-            "$MODPATH/audio/ach/framework.jar/0001-Disable-ACH-ringtone-support.patch"
+        DECODE_APK "system" "system/framework/framework.jar"
+        ACH_RUNE="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/audio/Rune.smali"
+        ACH_VIB_RUNE="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/vibrator/VibRune.smali"
+        ACH_PATCH="$MODPATH/audio/ach/framework.jar/0001-Disable-ACH-ringtone-support.patch"
+        if LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/framework/framework.jar" \
+                --unsafe-paths "$ACH_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/framework/framework.jar" "$ACH_PATCH"
+        else
+            # Android 17 inserts extra Rune fields and changes the donor
+            # hunk context. Keep the same semantics by changing only the
+            # two named booleans; never replace an unrelated v2 register.
+            if grep -Fq 'SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z' "$ACH_RUNE"; then
+                if grep -Fq 'SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z = true' "$ACH_RUNE"; then
+                    EVAL "sed -i 's/SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z = true/SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z = false/' \"$ACH_RUNE\""
+                elif ! grep -Fq 'sput-boolean v1, Lcom/samsung/android/audio/Rune;->SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z' "$ACH_RUNE"; then
+                    EVAL "sed -i '/sput-boolean v[0-9][0-9]*, Lcom\\/samsung\\/android\\/audio\\/Rune;->SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z/ s/sput-boolean v[0-9][0-9]*/sput-boolean v1/' \"$ACH_RUNE\""
+                fi
+            else
+                ABORT "Rune.smali has no recognizable ACH ringtone flag"
+            fi
+            if grep -Fq 'SUPPORT_ACH:Z = true' "$ACH_VIB_RUNE"; then
+                EVAL "sed -i 's/SUPPORT_ACH:Z = true/SUPPORT_ACH:Z = false/' \"$ACH_VIB_RUNE\""
+            elif ! grep -Fq 'SUPPORT_ACH:Z = false' "$ACH_VIB_RUNE"; then
+                ABORT "VibRune.smali has no recognizable ACH flag"
+            fi
+        fi
+        unset ACH_RUNE ACH_VIB_RUNE ACH_PATCH
     fi
 else
     if $TARGET_AUDIO_SUPPORT_ACH_RINGTONE; then
@@ -151,8 +182,45 @@ if $SOURCE_AUDIO_SUPPORT_DUAL_SPEAKER; then
     if ! $TARGET_AUDIO_SUPPORT_DUAL_SPEAKER; then
         SET_FLOATING_FEATURE_CONFIG "SEC_FLOATING_FEATURE_AUDIO_SUPPORT_DUAL_SPEAKER" --delete
 
-        APPLY_PATCH "system" "system/framework/framework.jar" \
-            "$MODPATH/audio/dual_speaker/framework.jar/0001-Disable-dual-speaker-support.patch"
+        # The donor Rune patch was generated against a framework where the
+        # ACH field immediately preceded DUAL_SPEAKER. Android 17 inserts
+        # additional audio feature fields between them, so the old context
+        # fails even though the semantic field and speaker-count code are
+        # still present. Prefer the donor patch when it matches; otherwise
+        # perform the same two guarded semantic edits on the actual Rune
+        # layout and abort only when that layout is genuinely unknown.
+        DECODE_APK "system" "system/framework/framework.jar"
+        DUAL_SPEAKER_RUNE="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/audio/Rune.smali"
+        DUAL_SPEAKER_PATCH="$MODPATH/audio/dual_speaker/framework.jar/0001-Disable-dual-speaker-support.patch"
+        if LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/framework/framework.jar" \
+                --unsafe-paths "$DUAL_SPEAKER_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/framework/framework.jar" "$DUAL_SPEAKER_PATCH"
+        else
+            if grep -Fq 'SEC_AUDIO_SUPPORT_DUAL_SPEAKER:Z = true' "$DUAL_SPEAKER_RUNE"; then
+                LOG "- Disabling SEC_AUDIO_SUPPORT_DUAL_SPEAKER in the target Rune layout"
+                EVAL "sed -i 's/SEC_AUDIO_SUPPORT_DUAL_SPEAKER:Z = true/SEC_AUDIO_SUPPORT_DUAL_SPEAKER:Z = false/' \"$DUAL_SPEAKER_RUNE\""
+            elif ! grep -Fq 'SEC_AUDIO_SUPPORT_DUAL_SPEAKER:Z = false' "$DUAL_SPEAKER_RUNE"; then
+                ABORT "Rune.smali has no recognizable DUAL_SPEAKER constant"
+            fi
+
+            if awk '
+                /^\.method static constructor blacklist <clinit>\(\)V/ { inside = 1 }
+                inside { print }
+                inside && /^\.end method/ { exit }
+            ' "$DUAL_SPEAKER_RUNE" | grep -Fq 'const-string v0, "2"'; then
+                SMALI_PATCH "system" "system/framework/framework.jar" \
+                    "smali_classes6/com/samsung/android/audio/Rune.smali" "replace" \
+                    "<clinit>()V" "2" "1"
+            elif ! awk '
+                /^\.method static constructor blacklist <clinit>\(\)V/ { inside = 1 }
+                inside { print }
+                inside && /^\.end method/ { exit }
+            ' "$DUAL_SPEAKER_RUNE" | grep -Fq 'const-string v0, "1"'; then
+                ABORT "Rune.smali has no recognizable speaker-count initializer"
+            fi
+        fi
+        unset DUAL_SPEAKER_RUNE DUAL_SPEAKER_PATCH
         APPLY_PATCH "system" "system/framework/services.jar" \
             "$MODPATH/audio/dual_speaker/services.jar/0001-Disable-dual-speaker-support.patch"
     fi
@@ -166,21 +234,77 @@ fi
 # SEC_PRODUCT_FEATURE_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND
 if $SOURCE_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND; then
     if ! $TARGET_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND; then
-        APPLY_PATCH "system" "system/framework/framework.jar" \
-            "$MODPATH/audio/virtual_vib/framework.jar/0001-Disable-virtual-vibration-support.patch"
-        APPLY_PATCH "system" "system/framework/services.jar" \
-            "$MODPATH/audio/virtual_vib/services.jar/0001-Disable-virtual-vibration-support.patch"
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali/com/android/server/audio/BtHelper\$\$ExternalSyntheticLambda0.smali" "remove"
-        EVAL "sed -i \"/.source/q\" \"$APKTOOL_DIR/system/framework/services.jar/smali_classes2/com/android/server/vibrator/VibratorManagerInternal.smali\""
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali_classes2/com/android/server/vibrator/VibratorManagerService\$SamsungBroadcastReceiver\$\$ExternalSyntheticLambda1.smali" "remove"
-        SMALI_PATCH "system" "system/framework/services.jar" \
-            "smali_classes2/com/android/server/vibrator/VirtualVibSoundHelper.smali" "remove"
-        APPLY_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
-            "$MODPATH/audio/virtual_vib/SecSettings.apk/0001-Disable-virtual-vibration-support.patch"
-        APPLY_PATCH "system" "system/priv-app/SettingsProvider/SettingsProvider.apk" \
-            "$MODPATH/audio/virtual_vib/SettingsProvider.apk/0001-Disable-virtual-vibration-support.patch"
+        DECODE_APK "system" "system/framework/framework.jar"
+        VIRTUAL_RUNE="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/audio/Rune.smali"
+        VIRTUAL_VIB_RUNE="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/vibrator/VibRune.smali"
+        VIRTUAL_FRAMEWORK_PATCH="$MODPATH/audio/virtual_vib/framework.jar/0001-Disable-virtual-vibration-support.patch"
+        if LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/framework/framework.jar" \
+                --unsafe-paths "$VIRTUAL_FRAMEWORK_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/framework/framework.jar" "$VIRTUAL_FRAMEWORK_PATCH"
+        else
+            if grep -Fq 'SEC_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = true' "$VIRTUAL_RUNE"; then
+                EVAL "sed -i 's/SEC_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = true/SEC_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = false/' \"$VIRTUAL_RUNE\""
+            elif ! grep -Fq 'SEC_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = false' "$VIRTUAL_RUNE"; then
+                ABORT "Rune.smali has no recognizable virtual-vibration flag"
+            fi
+            if grep -Fq 'SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = true' "$VIRTUAL_VIB_RUNE"; then
+                EVAL "sed -i 's/SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = true/SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = false/' \"$VIRTUAL_VIB_RUNE\""
+            elif ! grep -Fq 'SUPPORT_VIRTUAL_VIBRATION_SOUND:Z = false' "$VIRTUAL_VIB_RUNE"; then
+                ABORT "VibRune.smali has no recognizable virtual-vibration flag"
+            fi
+        fi
+        unset VIRTUAL_RUNE VIRTUAL_VIB_RUNE VIRTUAL_FRAMEWORK_PATCH
+
+        # The large donor services patch targets the pre-Android-17 audio
+        # broker. If the target has the newer broker, its callers already
+        # gate virtual sound through the flags above; applying the old hunk
+        # would be unsafe and can leave invalid labels/registers behind.
+        VIRTUAL_SERVICES_PATCH="$MODPATH/audio/virtual_vib/services.jar/0001-Disable-virtual-vibration-support.patch"
+        DECODE_APK "system" "system/framework/services.jar"
+        if LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/framework/services.jar" \
+                --unsafe-paths "$VIRTUAL_SERVICES_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/framework/services.jar" "$VIRTUAL_SERVICES_PATCH"
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali/com/android/server/audio/BtHelper\$\$ExternalSyntheticLambda0.smali" "remove"
+            EVAL "sed -i \"/.source/q\" \"$APKTOOL_DIR/system/framework/services.jar/smali_classes2/com/android/server/vibrator/VibratorManagerInternal.smali\""
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali_classes2/com/android/server/vibrator/VibratorManagerService\$SamsungBroadcastReceiver\$\$ExternalSyntheticLambda1.smali" "remove"
+            SMALI_PATCH "system" "system/framework/services.jar" \
+                "smali_classes2/com/android/server/vibrator/VirtualVibSoundHelper.smali" "remove"
+        else
+            LOG "- Keeping the native Android 17 virtual-vibration service path; legacy services patch is not applicable"
+        fi
+        unset VIRTUAL_SERVICES_PATCH
+
+        VIRTUAL_SETTINGS_PATCH="$MODPATH/audio/virtual_vib/SecSettings.apk/0001-Disable-virtual-vibration-support.patch"
+        if [ -f "$WORK_DIR/system/system/priv-app/SecSettings/SecSettings.apk" ]; then
+            DECODE_APK "system" "system/priv-app/SecSettings/SecSettings.apk"
+        fi
+        if [ -d "$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk" ] && \
+                LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk" \
+                --unsafe-paths "$VIRTUAL_SETTINGS_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" "$VIRTUAL_SETTINGS_PATCH"
+        else
+            LOG "- SecSettings has no legacy virtual-vibration layout; keeping the target implementation"
+        fi
+        unset VIRTUAL_SETTINGS_PATCH
+
+        VIRTUAL_PROVIDER_PATCH="$MODPATH/audio/virtual_vib/SettingsProvider.apk/0001-Disable-virtual-vibration-support.patch"
+        if [ -f "$WORK_DIR/system/system/priv-app/SettingsProvider/SettingsProvider.apk" ]; then
+            DECODE_APK "system" "system/priv-app/SettingsProvider/SettingsProvider.apk"
+        fi
+        if [ -d "$APKTOOL_DIR/system/priv-app/SettingsProvider/SettingsProvider.apk" ] && \
+                LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/priv-app/SettingsProvider/SettingsProvider.apk" \
+                --unsafe-paths "$VIRTUAL_PROVIDER_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/priv-app/SettingsProvider/SettingsProvider.apk" "$VIRTUAL_PROVIDER_PATCH"
+        else
+            LOG "- SettingsProvider has no legacy virtual-vibration layout; keeping the target implementation"
+        fi
+        unset VIRTUAL_PROVIDER_PATCH
     fi
 else
     if $TARGET_AUDIO_SUPPORT_VIRTUAL_VIBRATION_SOUND; then
@@ -410,6 +534,13 @@ fi
 
 # SEC_PRODUCT_FEATURE_FINGERPRINT_CONFIG_SENSOR
 if [[ "$SOURCE_FINGERPRINT_CONFIG_SENSOR" != "$TARGET_FINGERPRINT_CONFIG_SENSOR" ]]; then
+    # Keep the donor value immutable for the final BiometricSetting rewrite.
+    # The optical/side/rear branches below adjust SOURCE_* as local control
+    # flow state. Reusing that mutated value used to skip the final rewrite
+    # for rear capacitive devices, leaving BiometricSetting configured as the
+    # S24+'s ultrasonic UDFPS despite framework.jar and SecSettings being
+    # correctly converted to the target sensor.
+    ORIGINAL_SOURCE_FINGERPRINT_CONFIG_SENSOR="$SOURCE_FINGERPRINT_CONFIG_SENSOR"
     DECODE_APK "system" "system/priv-app/SecSettings/SecSettings.apk"
     FP_SETTINGS_UTILS="$(find "$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk" \
         -path '*/com/samsung/android/settings/biometrics/fingerprint/FingerprintSettingsUtils.smali' \
@@ -567,6 +698,25 @@ if [[ "$SOURCE_FINGERPRINT_CONFIG_SENSOR" != "$TARGET_FINGERPRINT_CONFIG_SENSOR"
                         "sput-boolean v2, Lcom/android/server/biometrics/SemBiometricFeature;->FP_FEATURE_WOF_OPTION_DEFAULT_OFF:Z" \
                         > /dev/null
                 fi
+            elif [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$TARGET_FINGERPRINT_CONFIG_SENSOR")" == "rear" ]]; then
+                # The target vendor HAL owns the rear sensor path. Do not
+                # import display-FOD or side-key patches for this layout.
+                SOURCE_FINGERPRINT_CONFIG_SENSOR="google_touch_rear"
+                # HidlFingerprintSensorConfig maps the Samsung position from
+                # FingerprintManager into the AIDL sensor type consumed by
+                # SystemUI. The S24+ donor hard-codes position 2 (UDFPS),
+                # which makes AuthController render the ultrasonic overlay.
+                # Position 3 maps to sensorType 1, the rear capacitive path.
+                FP_MANAGER_SMALI="$(find "$APKTOOL_DIR/system/framework/framework.jar" \
+                    -path '*/android/hardware/fingerprint/FingerprintManager.smali' \
+                    -printf '%P\n' -quit)"
+                if [[ -z "$FP_MANAGER_SMALI" ]]; then
+                    ABORT "Failed to locate FingerprintManager.smali for rear fingerprint mapping"
+                fi
+                SMALI_PATCH "system" "system/framework/framework.jar" \
+                    "$FP_MANAGER_SMALI" "return" "semGetSensorPosition()I" "3"
+                unset FP_MANAGER_SMALI
+                LOG "Using the target vendor rear fingerprint HAL"
             elif [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$TARGET_FINGERPRINT_CONFIG_SENSOR")" != "ultrasonic" ]]; then
                 # TODO handle this condition
                 LOG_MISSING_PATCHES "SOURCE_FINGERPRINT_CONFIG_SENSOR" "TARGET_FINGERPRINT_CONFIG_SENSOR"
@@ -581,13 +731,14 @@ if [[ "$SOURCE_FINGERPRINT_CONFIG_SENSOR" != "$TARGET_FINGERPRINT_CONFIG_SENSOR"
         fi
     fi
 
-    if [[ "$SOURCE_FINGERPRINT_CONFIG_SENSOR" != "$TARGET_FINGERPRINT_CONFIG_SENSOR" ]]; then
+    if [[ "$ORIGINAL_SOURCE_FINGERPRINT_CONFIG_SENSOR" != "$TARGET_FINGERPRINT_CONFIG_SENSOR" ]]; then
         SMALI_PATCH "system" "system/priv-app/BiometricSetting/BiometricSetting.apk" \
             "smali/com/samsung/android/biometrics/app/setting/DisplayStateManager.smali" "replace" \
             "<init>(Lcom/samsung/android/biometrics/app/setting/BiometricsUIService;)V" \
-            "$SOURCE_FINGERPRINT_CONFIG_SENSOR" \
+            "$ORIGINAL_SOURCE_FINGERPRINT_CONFIG_SENSOR" \
             "$TARGET_FINGERPRINT_CONFIG_SENSOR"
     fi
+    unset ORIGINAL_SOURCE_FINGERPRINT_CONFIG_SENSOR
 fi
 
 # SEC_PRODUCT_FEATURE_LCD_CONFIG_CONTROL_AUTO_BRIGHTNESS
@@ -1064,10 +1215,130 @@ if $SOURCE_WLAN_SUPPORT_80211AX; then
             ABORT "TARGET_WLAN_SUPPORT_80211AX is required by TARGET_WLAN_SUPPORT_80211AX_6GHZ"
         fi
         if ! $SOURCE_WLAN_SUPPORT_80211AX_6GHZ; then
-            APPLY_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
-                "$MODPATH/wifi/80211ax/SecSettings.apk/0001-Disable-80211AX-support.patch"
-            APPLY_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
-                "$MODPATH/wifi/80211ax/SystemUI.apk/0001-Disable-80211AX-support.patch"
+            WIFI_AX_SETTINGS_PATCH="$MODPATH/wifi/80211ax/SecSettings.apk/0001-Disable-80211AX-support.patch"
+            DECODE_APK "system" "system/priv-app/SecSettings/SecSettings.apk"
+            # git apply --check may accept a patch with unsafe paths even when
+            # the decoded APK no longer contains the old Android 16 classes.
+            # Validate every file named by the legacy patch before applying it;
+            # otherwise use the semantic Android 17 fallback below.
+            WIFI_AX_SETTINGS_LEGACY_LAYOUT=true
+            while IFS= read -r WIFI_AX_PATCH_REL; do
+                [ -z "$WIFI_AX_PATCH_REL" ] && continue
+                if [ ! -f "$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk/$WIFI_AX_PATCH_REL" ]; then
+                    WIFI_AX_SETTINGS_LEGACY_LAYOUT=false
+                    break
+                fi
+            done < <(sed -n 's|^+++ b/||p' "$WIFI_AX_SETTINGS_PATCH")
+            if $WIFI_AX_SETTINGS_LEGACY_LAYOUT && LC_ALL=C git apply --check \
+                    --directory="$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk" \
+                    --unsafe-paths "$WIFI_AX_SETTINGS_PATCH" > /dev/null 2>&1; then
+                APPLY_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
+                    "$WIFI_AX_SETTINGS_PATCH"
+            else
+                # Android 17 moved these classes between dex files and
+                # removed the old AutoHotspot/Labs classes. Keep the same
+                # behavior by disabling the two semantic WifiEntry
+                # predicates instead of deleting absent smali files.
+                WIFI_ENTRY_SMALI="$(find "$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk" \
+                    -type f -path '*/com/android/wifitrackerlib/WifiEntry.smali' -print -quit)"
+                if [ -z "$WIFI_ENTRY_SMALI" ]; then
+                    ABORT "SecSettings has no recognizable WifiEntry implementation for the 802.11ax compatibility patch"
+                fi
+                WIFI_ENTRY_REL="${WIFI_ENTRY_SMALI#"$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk/"}"
+                if grep -q '^\.method .*semIsWifi6Network()Z' "$WIFI_ENTRY_SMALI"; then
+                    SMALI_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
+                        "$WIFI_ENTRY_REL" "return" "semIsWifi6Network()Z" "false"
+                else
+                    ABORT "SecSettings WifiEntry has no semIsWifi6Network()Z predicate"
+                fi
+                if grep -q '^\.method .*semIsWifi6ENetwork()Z' "$WIFI_ENTRY_SMALI"; then
+                    SMALI_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
+                        "$WIFI_ENTRY_REL" "return" "semIsWifi6ENetwork()Z" "false"
+                else
+                    ABORT "SecSettings WifiEntry has no semIsWifi6ENetwork()Z predicate"
+                fi
+                LOG "- Disabled Wi-Fi 6/6E indicators through the modern WifiEntry predicates"
+                unset WIFI_ENTRY_SMALI WIFI_ENTRY_REL
+            fi
+            unset WIFI_AX_SETTINGS_PATCH WIFI_AX_SETTINGS_LEGACY_LAYOUT WIFI_AX_PATCH_REL
+            WIFI_AX_SYSTEMUI_PATCH="$MODPATH/wifi/80211ax/SystemUI.apk/0001-Disable-80211AX-support.patch"
+            DECODE_APK "system_ext" "priv-app/SystemUI/SystemUI.apk"
+            WIFI_AX_SYSTEMUI_LEGACY_LAYOUT=true
+            while IFS= read -r WIFI_AX_PATCH_REL; do
+                [ -z "$WIFI_AX_PATCH_REL" ] && continue
+                if [ ! -f "$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk/$WIFI_AX_PATCH_REL" ]; then
+                    WIFI_AX_SYSTEMUI_LEGACY_LAYOUT=false
+                    break
+                fi
+            done < <(sed -n 's|^+++ b/||p' "$WIFI_AX_SYSTEMUI_PATCH")
+            if $WIFI_AX_SYSTEMUI_LEGACY_LAYOUT && LC_ALL=C git apply --check \
+                    --directory="$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk" \
+                    --unsafe-paths "$WIFI_AX_SYSTEMUI_PATCH" > /dev/null 2>&1; then
+                APPLY_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
+                    "$WIFI_AX_SYSTEMUI_PATCH"
+            else
+                # The Android 17 SystemUI moves WifiDetailAdapter and changes
+                # the repository layout. Keep the equivalent behavior by
+                # routing Wi-Fi 6/6E classifications to the ordinary Wi-Fi
+                # branches and by making the Smart Tethering icon selector
+                # ignore the two AX network constants.
+                SYSTEMUI_WIFI_ENTRY="$(find "$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk" \
+                    -type f -path '*/com/android/wifitrackerlib/WifiEntry.smali' -print -quit)"
+                WIFI_REPOSITORY="$(find "$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk" \
+                    -type f -path '*/com/android/systemui/statusbar/pipeline/wifi/data/repository/prod/WifiRepositoryImpl.smali' -print -quit)"
+                SEC_WIFI_REPOSITORY="$(find "$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk" \
+                    -type f -path '*/com/android/systemui/samsung/quicksetting/data/repository/SecWifiRepositoryImpl.smali' -print -quit)"
+                ACCESS_POINT_CONTROLLER="$(find "$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk" \
+                    -type f -path '*/com/android/systemui/statusbar/connectivity/AccessPointControllerImpl.smali' -print -quit)"
+                for SYSTEMUI_REQUIRED in "$SYSTEMUI_WIFI_ENTRY" "$WIFI_REPOSITORY" "$SEC_WIFI_REPOSITORY" "$ACCESS_POINT_CONTROLLER"; do
+                    if [ -z "$SYSTEMUI_REQUIRED" ]; then
+                        ABORT "SystemUI has an unknown Wi-Fi layout; cannot adapt 802.11ax compatibility safely"
+                    fi
+                done
+                SYSTEMUI_WIFI_ENTRY_REL="${SYSTEMUI_WIFI_ENTRY#"$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk/"}"
+                WIFI_REPOSITORY_REL="${WIFI_REPOSITORY#"$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk/"}"
+                SEC_WIFI_REPOSITORY_REL="${SEC_WIFI_REPOSITORY#"$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk/"}"
+                ACCESS_POINT_CONTROLLER_REL="${ACCESS_POINT_CONTROLLER#"$APKTOOL_DIR/system_ext/priv-app/SystemUI/SystemUI.apk/"}"
+
+                if grep -q '^\.method .*checkWifi6EStandard(II)Z' "$SYSTEMUI_WIFI_ENTRY"; then
+                    SMALI_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
+                        "$SYSTEMUI_WIFI_ENTRY_REL" "return" "checkWifi6EStandard(II)Z" "false"
+                else
+                    ABORT "SystemUI WifiEntry has no checkWifi6EStandard(II)Z predicate"
+                fi
+                if grep -q 'const/4 v7, 0x6' "$WIFI_REPOSITORY" && \
+                        grep -q 'goto :goto_6' "$WIFI_REPOSITORY"; then
+                    SMALI_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
+                        "$WIFI_REPOSITORY_REL" "replace" \
+                        "toWifiNetworkModel(Lcom/android/wifitrackerlib/WifiEntry;)Lcom/android/systemui/statusbar/pipeline/wifi/shared/model/WifiNetworkModel;" \
+                        "goto :goto_6" "goto :cond_e"
+                else
+                    ABORT "SystemUI WifiRepositoryImpl has no recognizable Wi-Fi 6 branch"
+                fi
+                if grep -q 'if-ne v6, v3, :cond_c' "$SEC_WIFI_REPOSITORY" && \
+                        grep -q 'goto :goto_7' "$SEC_WIFI_REPOSITORY"; then
+                    SMALI_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
+                        "$SEC_WIFI_REPOSITORY_REL" "replace" \
+                        "access\$toWifiEntryModel(Lcom/android/systemui/samsung/quicksetting/data/repository/SecWifiRepositoryImpl;Lcom/android/wifitrackerlib/WifiEntry;)Lcom/android/systemui/samsung/quicksetting/domain/model/WifiEntryModel;" \
+                        "goto :goto_7" "goto :cond_c"
+                else
+                    ABORT "SystemUI SecWifiRepositoryImpl has no recognizable Wi-Fi 6 branch"
+                fi
+                SMALI_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
+                    "$ACCESS_POINT_CONTROLLER_REL" "replace" \
+                    "getSmartTetheringIcon(Lcom/samsung/android/wifi/SemWifiApBleScanResult;)I" \
+                    "sget v3, Lcom/samsung/android/wifi/SemWifiApBleScanResult;->MHS_WIFI_6_NETWORK:I" \
+                    "const/16 v3, -0x1"
+                SMALI_PATCH "system_ext" "priv-app/SystemUI/SystemUI.apk" \
+                    "$ACCESS_POINT_CONTROLLER_REL" "replace" \
+                    "getSmartTetheringIcon(Lcom/samsung/android/wifi/SemWifiApBleScanResult;)I" \
+                    "sget v3, Lcom/samsung/android/wifi/SemWifiApBleScanResult;->MHS_WIFI_6E_NETWORK:I" \
+                    "const/16 v3, -0x1"
+                LOG "- Disabled Wi-Fi 6/6E classification in the modern SystemUI repositories"
+                unset SYSTEMUI_WIFI_ENTRY SYSTEMUI_WIFI_ENTRY_REL WIFI_REPOSITORY WIFI_REPOSITORY_REL \
+                    SEC_WIFI_REPOSITORY SEC_WIFI_REPOSITORY_REL ACCESS_POINT_CONTROLLER ACCESS_POINT_CONTROLLER_REL SYSTEMUI_REQUIRED
+            fi
+            unset WIFI_AX_SYSTEMUI_PATCH WIFI_AX_SYSTEMUI_LEGACY_LAYOUT WIFI_AX_PATCH_REL
         else
             # TODO handle these conditions
             LOG_MISSING_PATCHES "SOURCE_WLAN_SUPPORT_80211AX" "TARGET_WLAN_SUPPORT_80211AX" || true
@@ -1207,8 +1478,73 @@ fi
 # SEC_PRODUCT_FEATURE_WLAN_SUPPORT_MOBILEAP_11AX
 if $SOURCE_WLAN_SUPPORT_MOBILEAP_11AX; then
     if ! $TARGET_WLAN_SUPPORT_MOBILEAP_11AX; then
-        APPLY_PATCH "system" "system/framework/semwifi-service.jar" \
-            "$MODPATH/wifi/80211ax/semwifi-service.jar/0001-Disable-MOBILEAP_11AX-support.patch"
+        WIFI_AX_SERVICE_PATCH="$MODPATH/wifi/80211ax/semwifi-service.jar/0001-Disable-MOBILEAP_11AX-support.patch"
+        DECODE_APK "system" "system/framework/semwifi-service.jar"
+        if LC_ALL=C git apply --check \
+                --directory="$APKTOOL_DIR/system/framework/semwifi-service.jar" \
+                --unsafe-paths "$WIFI_AX_SERVICE_PATCH" > /dev/null 2>&1; then
+            APPLY_PATCH "system" "system/framework/semwifi-service.jar" \
+                "$WIFI_AX_SERVICE_PATCH"
+        else
+            # Android 17 already contains the 11ax chip-feature helper, but
+            # its smali layout differs from the older donor patch. Disable
+            # only the MOBILEAP_11AX feature (feature id 1), preserve the
+            # other Soft AP features, and advertise the resulting state.
+            WIFI_AX_AP_DIR="$APKTOOL_DIR/system/framework/semwifi-service.jar/smali/com/samsung/android/server/wifi/ap"
+            WIFI_AX_CONFIG="$WIFI_AX_AP_DIR/SemSoftApConfiguration.smali"
+            WIFI_AX_INFO="$WIFI_AX_AP_DIR/SemWifiApChipInfo.smali"
+            WIFI_AX_SUPPORT="$WIFI_AX_AP_DIR/SemWifiApChipInfo\$SemWifiApChipSupportInfo.smali"
+            if [ ! -f "$WIFI_AX_CONFIG" ] || [ ! -f "$WIFI_AX_INFO" ] || [ ! -f "$WIFI_AX_SUPPORT" ]; then
+                ABORT "semwifi-service has no recognizable Soft AP 11ax implementation"
+            fi
+            if ! grep -q '^\.method public static showSecProductFeature()Ljava/lang/String;' "$WIFI_AX_CONFIG" || \
+                    ! grep -q 'SPF_11ax=true' "$WIFI_AX_CONFIG"; then
+                ABORT "semwifi-service has no expected SPF_11ax advertisement"
+            fi
+            if ! grep -q '^\.method public supportThisSoftApFeature(I)Z' "$WIFI_AX_INFO"; then
+                ABORT "semwifi-service has no supportThisSoftApFeature(I)Z implementation"
+            fi
+            if ! grep -q 'isSupportedSoftAp11ax()Z' "$WIFI_AX_SUPPORT"; then
+                ABORT "semwifi-service has no isSupportedSoftAp11ax()Z helper"
+            fi
+            if grep -q 'if-eq p1, v0, :cond_2' "$WIFI_AX_INFO"; then
+                # ":cond_1" is the block that returns the "unsupported"
+                # register (v2), and in this layout v2 is only initialized after
+                # the feature dispatch below. Redirecting the feature 1 branch
+                # there without initializing v2 upfront leaves it undefined on
+                # that path: the ART verifier then rejects the whole class and
+                # system_server dies while starting SemWifiService, which
+                # ends in a RescueParty reboot loop. Define v2 before any
+                # branch so every return path has it typed as boolean.
+                if ! awk '
+                        /^\.method.*supportThisSoftApFeature\(I\)Z/ { inside = 1; next }
+                        inside && /^\.end method/ { inside = 0 }
+                        inside && /^[[:space:]]*[a-z]/ {
+                            line = $0
+                            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+                            print line
+                            exit
+                        }
+                    ' "$WIFI_AX_INFO" | grep -qx 'const/4 v2, 0x0'; then
+                    SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+                        "smali/com/samsung/android/server/wifi/ap/SemWifiApChipInfo.smali" "replace" \
+                        "supportThisSoftApFeature(I)Z" \
+                        "const/4 v0, 0x1" \
+                        "    const/4 v2, 0x0"$'\n\n    '"const/4 v0, 0x1"
+                fi
+                SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+                    "smali/com/samsung/android/server/wifi/ap/SemWifiApChipInfo.smali" "replace" \
+                    "supportThisSoftApFeature(I)Z" "if-eq p1, v0, :cond_2" "if-eq p1, v0, :cond_1"
+            elif ! grep -q 'if-eq p1, v0, :cond_1' "$WIFI_AX_INFO"; then
+                ABORT "semwifi-service supportThisSoftApFeature(I)Z has an unknown 11ax branch layout"
+            fi
+            SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+                "smali/com/samsung/android/server/wifi/ap/SemSoftApConfiguration.smali" "replaceall" \
+                "SPF_11ax=true" "SPF_11ax=false"
+            LOG "- Disabled MOBILEAP_11AX in the modern semwifi-service implementation"
+            unset WIFI_AX_AP_DIR WIFI_AX_CONFIG WIFI_AX_INFO WIFI_AX_SUPPORT
+        fi
+        unset WIFI_AX_SERVICE_PATCH
     fi
 else
     if $TARGET_WLAN_SUPPORT_MOBILEAP_11AX; then

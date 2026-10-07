@@ -1,0 +1,45 @@
+diff --git a/etc/init/teegris_v3.rc b/etc/init/teegris_v3.rc
+index 5a0e8b9..51c48e5 100644
+--- a/etc/init/teegris_v3.rc
++++ b/etc/init/teegris_v3.rc
+@@ -1,15 +1,17 @@
+ on post-fs
+ # TEEGRIS service
+     mkdir /mnt/vendor/efs/tee 0700 system system
+     mkdir /dev/socket/iwt 0770 system system
+     mkdir /dev/socket/iwt/ca 0770 system system
+     start tz_service
+     start tz_msg_recv
+-    wait_for_prop vendor.tzdaemon Ready
+-    setprop vendor.TEEGRIS.loaded true
+-    write /proc/iccc_ready 1
+-    start tzts_service
+-    wait_for_prop vendor.tzts_daemon Ready
++
++on property:vendor.tzdaemon=Ready
++    setprop vendor.TEEGRIS.loaded true
++    write /proc/iccc_ready 1
++    start tzts_service
++
++on property:vendor.tzts_daemon=Ready
+ 
+ on post-fs-data
+ # TEEGRIS service
+@@ -20,7 +22,8 @@
+     class core
+     user system
+     group system readproc
+     disabled
++    oneshot
+ 
+ # Handle core_dump/profiling requests from SWd.
+ # used only for DEBUG builds.
+@@ -29,6 +32,7 @@
+     class core
+     user system
+     group system
+     disabled
++    oneshot
+ 
+ service tzts_service /vendor/bin/tzts_daemon
+     class core

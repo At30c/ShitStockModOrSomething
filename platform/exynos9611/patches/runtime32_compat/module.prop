@@ -1,0 +1,7 @@
+id=runtime32_compat
+priority=90
+name=Android 17 ARM32 runtime compatibility for Exynos 9611
+version=1.0
+versionCode=1
+author=At30c
+description=Provides the multilib Runtime/I18n/ART APEX payload and audited r11s ARM32 system dependencies required by F415F legacy OMX and audio services.

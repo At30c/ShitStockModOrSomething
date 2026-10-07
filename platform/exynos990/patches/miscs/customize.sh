@@ -69,6 +69,22 @@ if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 37 ]]; then
     SET_PROP "vendor" "ro.slmk.swap_free_low_percentage" "10"
     SET_PROP "vendor" "ro.slmk.2nd.swap_free_low_percentage" "10"
 
+    # Android 17's framework defaults to retaining 512 cached applications
+    # when ro.slmk.cached_max is absent. That is disproportionate on the
+    # 8 GiB S20 variants: it delays trimming until foreground workloads are
+    # already competing with a large cached set. Keep a still-generous 256
+    # cached-process ceiling for these targets; BGSlotManager derives the
+    # matching empty/trim limits at boot.
+    if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
+        SET_PROP "vendor" "ro.slmk.cached_max" "256"
+
+        # This is the stock S20 ART policy. The S24+ source does not declare
+        # it, so it was lost while system properties were merged. Profile
+        # guided JIT compilation improves code quality after normal app use
+        # without changing ART heap sizes or compilation filters.
+        SET_PROP "system" "dalvik.vm.usejitprofiles" "true"
+    fi
+
     LOG_STEP_OUT
 
     LOG_STEP_IN "- Disabling unsupported Codec2 availability accounting"

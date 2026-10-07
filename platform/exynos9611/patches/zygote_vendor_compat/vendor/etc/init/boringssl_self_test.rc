@@ -1,0 +1,18 @@
+# Preserve the native F415F vendor trigger. The ABI-32 condition remains
+# inactive because the M21s contract intentionally advertises an empty
+# ro.product.cpu.abilist32; the 64-bit target self-test still runs at boot.
+on early-init && property:ro.product.cpu.abilist32=*
+    exec_start boringssl_self_test32_vendor
+
+on early-init && property:ro.product.cpu.abilist64=*
+    exec_start boringssl_self_test64_vendor
+
+service boringssl_self_test32_vendor /vendor/bin/boringssl_self_test32
+    setenv BORINGSSL_SELF_TEST_CREATE_FLAG true # Any nonempty value counts as true
+    reboot_on_failure reboot,boringssl-self-check-failed
+    stdio_to_kmsg
+
+service boringssl_self_test64_vendor /vendor/bin/boringssl_self_test64
+    setenv BORINGSSL_SELF_TEST_CREATE_FLAG true # Any nonempty value counts as true
+    reboot_on_failure reboot,boringssl-self-check-failed
+    stdio_to_kmsg

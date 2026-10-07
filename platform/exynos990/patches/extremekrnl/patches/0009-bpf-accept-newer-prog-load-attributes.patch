@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Wed, 7 Oct 2026 19:25:00 -0300
+Subject: [PATCH] bpf: accept newer program-load attributes for privileged
+ loaders
+
+Android 17's libbpf passes BPF_PROG_LOAD metadata fields added after Linux
+4.19, including BTF function and line information.  The Exynos 990 kernel's
+union bpf_attr ends at expected_attach_type, so bpf_check_uarg_tail_zero()
+rejects these debug-only fields with E2BIG before the verifier sees the
+program.
+
+For privileged BPF_PROG_LOAD callers, accept a bounded newer attribute
+structure and copy the prefix understood by this kernel.  The ignored tail
+cannot change 4.19 verifier or runtime semantics, while map operations and
+unprivileged program loads retain the strict tail check.  Log the compatibility
+path once, and also log an actual instruction-count rejection so both E2BIG
+sources remain distinguishable in pstore.
+---
+ kernel/bpf/syscall.c | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/bpf/syscall.c b/kernel/bpf/syscall.c
+index 61a3e82f0501..d0d08b620868 100644
+--- a/kernel/bpf/syscall.c
++++ b/kernel/bpf/syscall.c
+@@ -1410,8 +1410,11 @@ static int bpf_prog_load(union bpf_attr *attr)
+ 	/* eBPF programs must be GPL compatible to use GPL-ed functions */
+ 	is_gpl = license_is_gpl_compatible(license);
+ 
+-	if (attr->insn_cnt == 0 || attr->insn_cnt > BPF_MAXINSNS)
++	if (attr->insn_cnt == 0 || attr->insn_cnt > BPF_MAXINSNS) {
++		pr_err("BPF_PROG_LOAD invalid instruction count: %u (max %u)\n",
++		       attr->insn_cnt, BPF_MAXINSNS);
+ 		return -E2BIG;
++	}
+ 
+ 	if (type == BPF_PROG_TYPE_KPROBE &&
+ 	    attr->kern_version != LINUX_VERSION_CODE)
+@@ -2418,8 +2421,12 @@ SYSCALL_DEFINE3(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, siz
+ 		return -EPERM;
+ 
+ 	err = bpf_check_uarg_tail_zero(uattr, sizeof(attr), size);
+-	if (err)
++	if (err && !(cmd == BPF_PROG_LOAD && err == -E2BIG &&
++		    size <= 256 && capable(CAP_SYS_ADMIN)))
+ 		return err;
++	if (err)
++		pr_warn_once("BPF: accepting newer BPF_PROG_LOAD attribute tail (%u > %zu bytes)\n",
++			     size, sizeof(attr));
+ 	size = min_t(u32, size, sizeof(attr));
+ 
+ 	/* copy attributes from user space, may be less than sizeof(bpf_attr) */
+-- 
+2.43.0

@@ -1,3 +1,12 @@
+# M21s has no outdoor/extreme-brightness panel.  The donor Settings APK
+# contains the controller, but exposing it would advertise a mode that the
+# F415 display/brightness HAL cannot implement.  The target-specific display
+# compatibility module also removes the XML preference as a cache-safe guard.
+if [[ "$TARGET_CODENAME" == "m21s" ]]; then
+    LOG "- Skipping donor Outdoor mode on M21s"
+    return 0
+fi
+
 DECODE_APK "system" "system/priv-app/SecSettings/SecSettings.apk"
 OUTDOOR_CONTROLLER="$(find "$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk" \
     -type f -path '*/com/samsung/android/settings/display/controller/SecOutDoorModePreferenceController.smali' -printf '%P\n' -quit)"

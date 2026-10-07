@@ -1,0 +1,7 @@
+id=zygote_vendor_compat
+priority=90
+name=Zygote and ABI compatibility for Exynos 9611
+version=1.3
+versionCode=4
+author=At30c
+description=Selects zygote64 with empty product ABI-32 properties and private legacy runtime compatibility.

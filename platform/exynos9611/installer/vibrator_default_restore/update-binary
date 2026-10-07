@@ -1,0 +1,56 @@
+#!/sbin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+ZIPFILE="$3"
+OUTFD="$2"
+TMP_DIR=/tmp/m21s-vibrator-default-restore
+REL=vendor/lib64/hw/vibrator.default.so
+
+ui_print() {
+    if [ -w "/proc/self/fd/$OUTFD" ]; then
+        echo "ui_print $*" > "/proc/self/fd/$OUTFD"
+        echo "ui_print" > "/proc/self/fd/$OUTFD"
+    else
+        echo "$*" >&2
+    fi
+}
+
+abort() {
+    ui_print "ERROR: $*"
+    exit 1
+}
+
+ui_print "Restaurando vibrator.default.so original do M21s"
+mkdir -p "$TMP_DIR" || abort "nao foi possivel criar temporario"
+unzip -p "$ZIPFILE" "payload/$REL" > "$TMP_DIR/vibrator.default.so" || \
+    abort "nao foi possivel extrair o arquivo"
+unzip -p "$ZIPFILE" checksums.sha256 > "$TMP_DIR/checksums.sha256" || \
+    abort "nao foi possivel extrair checksum"
+[ -s "$TMP_DIR/vibrator.default.so" ] || abort "arquivo original vazio"
+EXPECTED="$(awk 'NR == 1 { print $1 }' "$TMP_DIR/checksums.sha256")"
+ACTUAL="$(sha256sum "$TMP_DIR/vibrator.default.so" | awk '{ print $1 }')"
+[ "$EXPECTED" = "$ACTUAL" ] || abort "checksum do payload invalido"
+
+if ! mount | grep -q ' /vendor '; then
+    mount /vendor >/dev/null 2>&1 || twrp mount vendor >/dev/null 2>&1 || \
+        abort "nao foi possivel montar vendor"
+fi
+mount -o rw,remount /vendor >/dev/null 2>&1 || \
+    abort "nao foi possivel remontar vendor como rw"
+[ -w /vendor ] || abort "vendor nao esta gravavel"
+
+for reserve in /sys/fs/ext4/*/reserved_clusters; do
+    [ -e "$reserve" ] && echo 0 > "$reserve" 2>/dev/null || true
+done
+
+cp -f "$TMP_DIR/vibrator.default.so" "/$REL" || \
+    abort "nao foi possivel restaurar /$REL"
+chown 0:0 "/$REL" 2>/dev/null || true
+chmod 0644 "/$REL"
+restorecon "/$REL" >/dev/null 2>&1 || true
+sync
+cmp -s "$TMP_DIR/vibrator.default.so" "/$REL" || \
+    abort "verificacao pos-gravacao falhou"
+
+ui_print "vibrator.default.so original restaurado"
+exit 0

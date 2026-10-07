@@ -1,0 +1,7 @@
+id=codec2_compat
+priority=40
+name=Codec2 seccomp compatibility for Exynos 9611
+version=2.1
+versionCode=3
+author=At30c
+description=Clears unsupported APV flags and loader paths from the Android 17 system media stack.

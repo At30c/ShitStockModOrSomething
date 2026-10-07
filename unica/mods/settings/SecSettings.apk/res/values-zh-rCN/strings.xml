@@ -5,8 +5,8 @@
     <string name="unica_asks_title">禁用ASKS</string>
     <string name="unica_boot_sound_title">开机音效</string>
     <string name="unica_device_name_title">设备名称</string>
-    <string name="unica_dialog_reboot_msg">应用这些更改，需要重新启动。</string>
-    <string name="unica_dialog_reboot_negative">现在不</string>
+    <string name="unica_dialog_reboot_msg">要应用这些更改，需要重新启动。</string>
+    <string name="unica_dialog_reboot_negative">以后再说</string>
     <string name="unica_dialog_reboot_positive">重启</string>
     <string name="unica_dialog_reboot_title">需要重启</string>
     <string name="unica_extra_settings_title">更多设置</string>
@@ -53,11 +53,7 @@
     <string name="unica_ss_detection_title">禁用屏幕截图检测</string>
     <string name="unica_spoof_settings_title">伪装设置</string>
     <string name="unica_ui_settings_title">界面设置</string>
-    <string name="unica_updates_title">ArtisanROM 更新</string>
-    <string name="unica_vulkan_summary">此版本不稳定，可能会导致问题！</string>
+    <string name="unica_updates_title">UN1CA更新</string>
+    <string name="unica_vulkan_summary">此功能不稳定，可能会导致问题！</string>
     <string name="unica_vulkan_title">启用 Vulkan 渲染器</string>
-    <string name="artisanrom_version_title">ArtisanROM 版本</string>
-    <string name="artisanrom_version_toast_counting">不，继续点击... (%d)</string>
-    <string name="artisanrom_version_toast_final">你在找什么？开发者设置不在这里！</string>
-    <string name="artisanrom_version_toast_done">还在这里？告诉过你了，开发者设置不在这里！</string>
 </resources>

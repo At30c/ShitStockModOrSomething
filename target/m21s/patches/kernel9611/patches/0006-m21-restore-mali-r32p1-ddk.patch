@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Fri, 2 Oct 2026 11:20:00 -0300
+Subject: [PATCH] arm64: exynos9611: M21: restore the stock Mali r32p1 DDK
+
+The Android 17 target retains the SM-F415F/M21s vendor graphics stack.
+Its libGLES_mali.so identifies itself as MaliG72 r32p1-01bet2, while the
+universal9611 kernel currently selects r38p1 for every device.  Those DDKs
+do not share a stable userspace/kernel ioctl ABI: EGL cannot create a base
+context, SurfaceFlinger aborts, and init eventually enters Rescue Party.
+
+The universal-kernel change which selected r38p1 for all devices replaced
+the original M21 r32p1 selection.  Restore r32p1 only for the M21 target;
+do not change the other device defconfigs or any Android 17 compatibility
+backports.
+
+---
+ arch/arm64/configs/exynos9611-m21_defconfig | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/configs/exynos9611-m21_defconfig b/arch/arm64/configs/exynos9611-m21_defconfig
+--- a/arch/arm64/configs/exynos9611-m21_defconfig
++++ b/arch/arm64/configs/exynos9611-m21_defconfig
+@@ -3055,8 +3055,8 @@ CONFIG_MALI_DDK_VERSION=y
+ # CONFIG_MALI_BIFROST_R19P0_Q is not set
+ # CONFIG_MALI_BIFROST_R25P1_R is not set
+ # CONFIG_MALI_BIFROST_R26P0_R is not set
+-# CONFIG_MALI_BIFROST_R32P1 is not set
+-CONFIG_MALI_BIFROST_R38P1=y
++CONFIG_MALI_BIFROST_R32P1=y
++# CONFIG_MALI_BIFROST_R38P1 is not set
+ CONFIG_MALI_MIDGARD=y
+ CONFIG_MALI_GATOR_SUPPORT=y
+ # CONFIG_MALI_MIDGARD_DVFS is not set
+-- 
+2.51.0

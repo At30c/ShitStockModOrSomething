@@ -1,0 +1,26 @@
+From: At30c <PabloAtsoc9993@outlook.com>
+Subject: [PATCH] m21s: wait for TZTS before restarting Keymaster
+
+TEEgris becoming ready only confirms the base secure-world transport.  The
+legacy F415F Keymaster service also needs the TZTS auxiliary daemon and ACSD
+path before it can open the SKeymaster trusted application.  Restarting it on
+vendor.tzdaemon=Ready races that setup and leaves Keystore2 blocked forever.
+
+Keep starting TZTS when TEEgris is ready, but defer both service restarts until
+vendor.tzts_daemon=Ready confirms that the auxiliary path is available.
+
+--- a/etc/init/teegris_v3.rc
++++ b/etc/init/teegris_v3.rc
+@@ -21,10 +21,10 @@ on property:vendor.tzdaemon=Ready
+     setprop vendor.TEEGRIS.loaded true
+     write /proc/iccc_ready 1
+     start tzts_service
+-    restart vendor.keymaster-4-0
+-    restart keystore2
+ 
+ on property:vendor.tzts_daemon=Ready
++    restart vendor.keymaster-4-0
++    restart keystore2
+ 
+ on post-fs-data
+ # TEEGRIS service

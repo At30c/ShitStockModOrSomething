@@ -1,0 +1,13 @@
+--- a/smali/com/android/server/StorageManagerService$StorageManagerInternalImpl.smali
++++ b/smali/com/android/server/StorageManagerService$StorageManagerInternalImpl.smali
+@@ -754,6 +754,10 @@
+     move-result-object p2
+ 
+     :goto_0
++    # The legacy Samsung Vold implementation does not consume a GateKeeper
++    # auth token. The derived CE key in p3 is still passed below; "!" is the
++    # existing empty-token sentinel used by StorageManagerService.
++    const-string p2, "!"
+     iget-boolean v1, p0, Lcom/android/server/StorageManagerService$StorageManagerInternalImpl;->isHSUMMode:Z
+ 
+     invoke-interface {v0, p1, p2, p3, v1}, Landroid/os/IVold;->unlockCeStorage(ILjava/lang/String;[BZ)V

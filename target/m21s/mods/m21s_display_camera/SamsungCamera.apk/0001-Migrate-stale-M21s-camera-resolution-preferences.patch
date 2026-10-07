@@ -1,0 +1,58 @@
+--- a/smali_classes2/vc/f0.smali
++++ b/smali_classes2/vc/f0.smali
+@@ -436,7 +436,7 @@
+ .end method
+ 
+ .method public final get()I
+-    .locals 2
++    .locals 3
+ 
+     invoke-virtual {p0}, Lvc/f0;->e()V
+ 
+@@ -468,6 +468,45 @@
+ 
+     move-result p0
+ 
++    # UN1CA: Earlier M21s builds persisted the S24+ 3264x1592 profile (id 53).
++    # It is not valid for the F41 camera stack. Migrate it once while reading
++    # the preference, retaining all valid user-selected resolutions.
++    const-string v2, "back_camera_resolution"
++
++    invoke-virtual {v2, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v2
++
++    if-eqz v2, :m21s_front_camera_resolution
++
++    const/16 v2, 0x35
++
++    if-ne p0, v2, :m21s_resolution_done
++
++    const/16 p0, 0x6e
++
++    invoke-static {v1, v0, p0}, Lte/c0;->y1(Landroid/content/Context;Ljava/lang/String;I)V
++
++    goto :m21s_resolution_done
++
++    :m21s_front_camera_resolution
++    const-string v2, "front_camera_resolution"
++
++    invoke-virtual {v2, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v2
++
++    if-eqz v2, :m21s_resolution_done
++
++    const/16 v2, 0x35
++
++    if-ne p0, v2, :m21s_resolution_done
++
++    const/16 p0, 0x6c
++
++    invoke-static {v1, v0, p0}, Lte/c0;->y1(Landroid/content/Context;Ljava/lang/String;I)V
++
++    :m21s_resolution_done
+     return p0
+ 
+     :cond_0
+

@@ -1,0 +1,6 @@
+id=m21s_fbe_legacy_vold
+name=M21s legacy Vold FBE bridge
+version=1.0
+versionCode=1
+author=At30c
+description=Uses the legacy empty-auth-token sentinel while preserving the derived Android 17 CE key.

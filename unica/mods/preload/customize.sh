@@ -1,11 +1,15 @@
 # KernelSU Next
-KERNELSU_MANAGER_APK="https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.3.0/KernelSU_Next_v3.3.0_33214-release.apk"
+# Locally built manager (KernelSU-Next dev, UAPI 5, versionCode 33323), signed
+# with prebuilts/kernelsu-next/ksu-manager.jks. The shipped kernel is built with
+# the matching KSU_NEXT_MANAGER_HASH/SIZE (see platform/exynos9611/.../customize.sh),
+# so no official release APK can be used here.
+KERNELSU_MANAGER_APK="$SRC_DIR/prebuilts/kernelsu-next/KernelSU_Next_33323_uapi5.apk"
 # https://github.com/tiann/KernelSU/issues/886
 APK_PATH="system/preload/KernelSU-Next/com.rifsxd.ksunext-mesa==/base.apk"
 
 LOG "- Adding KernelSU-Next.apk to preload apps"
 mkdir -p "$WORK_DIR/system/$(dirname "$APK_PATH")"
-DOWNLOAD_FILE "$KERNELSU_MANAGER_APK" "$WORK_DIR/system/$APK_PATH"
+EVAL "cp -f \"$KERNELSU_MANAGER_APK\" \"$WORK_DIR/system/$APK_PATH\""
 
 while IFS= read -r i; do
     i="${i//$WORK_DIR\/system\//}"

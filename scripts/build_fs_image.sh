@@ -292,7 +292,8 @@ PREPARE_SCRIPT()
             fi
         elif [[ "$1" == "--partition-name" ]] || [[ "$1" == "-p" ]]; then
             shift; PARTITION="$1"
-            if ! IS_VALID_PARTITION_NAME "$PARTITION"; then
+            if ! IS_VALID_PARTITION_NAME "$PARTITION" && \
+                    [[ "$PARTITION" != "prism" ]] && [[ "$PARTITION" != "optics" ]]; then
                 LOGE "\"$PARTITION\" is not a valid partition name"
                 exit 1
             fi
@@ -333,7 +334,8 @@ PREPARE_SCRIPT()
 
     if [ ! "$PARTITION" ]; then
         PARTITION="$(basename "$INPUT_DIR")"
-        if ! IS_VALID_PARTITION_NAME "$PARTITION"; then
+        if ! IS_VALID_PARTITION_NAME "$PARTITION" && \
+                [[ "$PARTITION" != "prism" ]] && [[ "$PARTITION" != "optics" ]]; then
             LOGE "\"$PARTITION\" is not a valid partition name. please set --partition-name manually"
             exit 1
         fi

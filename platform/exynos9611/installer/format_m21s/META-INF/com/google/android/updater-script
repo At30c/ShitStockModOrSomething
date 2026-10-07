@@ -1,0 +1,17 @@
+ui_print(" ");
+ui_print("M21s / F41 filesystem formatter");
+ui_print(" ");
+ui_print("Formats prism, optics, omr, cache as ext4");
+ui_print("Formats userdata as Android F2FS");
+ui_print("Does not format super or nad_fw");
+ui_print("WARNING: userdata will be erased");
+ui_print(" ");
+
+package_extract_file("format.sh", "/tmp/m21s-format.sh");
+set_perm(0, 0, 0755, "/tmp/m21s-format.sh");
+run_program("/tmp/m21s-format.sh");
+assert(file_getprop("/tmp/m21s-format.status", "status") == "ok");
+
+ui_print(" ");
+ui_print("Filesystem formatting completed.");
+ui_print("Flash the ROM images only after verifying the formatter log.");

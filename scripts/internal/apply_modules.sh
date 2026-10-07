@@ -133,8 +133,18 @@ elif [ ! -d "$1" ]; then
     exit 1
 fi
 
+# Modules normally use the directory name only as a label.  A module may set
+# `priority=` in module.prop when it must run after the generic compatibility
+# set; this keeps ordering explicit without artificial zzz prefixes.
 while IFS= read -r f; do
     APPLY_MODULE "$f"
-done < <(find "$1" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort)
+done < <(
+    while IFS= read -r -d '' f; do
+        PRIORITY="$(sed -n 's/^priority=//p' "$f/module.prop" 2> /dev/null | head -n 1)"
+        [[ "$PRIORITY" =~ ^[0-9]+$ ]] || PRIORITY=50
+        printf '%08d\t%s\n' "$PRIORITY" "$f"
+    done < <(find "$1" -mindepth 1 -maxdepth 1 -type d -print0) |
+        LC_ALL=C sort -t $'\t' -k1,1n -k2,2 | cut -f2-
+)
 
 exit 0

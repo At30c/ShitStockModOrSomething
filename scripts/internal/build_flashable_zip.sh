@@ -26,17 +26,17 @@ $ROM_IS_OFFICIAL && ROM_STATUS="OFFICIAL"
 ZIP_FILE_SUFFIX="-sign.zip"
 $DEBUG && ! $ROM_IS_OFFICIAL && ZIP_FILE_SUFFIX=".zip"
 
-ZIP_FILE_NAME="ArtisanROM_${ROM_STATUS}_${ROM_VERSION}_$(date +%Y%m%d)_${TARGET_CODENAME}${ZIP_FILE_SUFFIX}"
+ZIP_FILE_NAME="UN1CA_${ROM_STATUS}_${ROM_VERSION}_$(date +%Y%m%d)_${TARGET_CODENAME}${ZIP_FILE_SUFFIX}"
 while [ -f "$OUT_DIR/$ZIP_FILE_NAME" ]; do
     INCREMENTAL=$((INCREMENTAL + 1))
-    ZIP_FILE_NAME="ArtisanROM_${ROM_VERSION}_$(date +%Y%m%d)-${INCREMENTAL}_${TARGET_CODENAME}${ZIP_FILE_SUFFIX}"
+    ZIP_FILE_NAME="UN1CA_${ROM_VERSION}_$(date +%Y%m%d)-${INCREMENTAL}_${TARGET_CODENAME}${ZIP_FILE_SUFFIX}"
 done
 
 PRIVATE_KEY_PATH="$SRC_DIR/security/"
 PUBLIC_KEY_PATH="$SRC_DIR/security/"
 if $ROM_IS_OFFICIAL; then
-    PRIVATE_KEY_PATH+="artisanrom_ota"
-    PUBLIC_KEY_PATH+="artisanrom_ota"
+    PRIVATE_KEY_PATH+="unica_ota"
+    PUBLIC_KEY_PATH+="unica_ota"
 else
     PRIVATE_KEY_PATH+="aosp_testkey"
     PUBLIC_KEY_PATH+="aosp_testkey"
@@ -317,6 +317,9 @@ GENERATE_UPDATER_SCRIPT()
 
         # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#4007
         echo -e "\n# --- Start patching dynamic partitions ---\n\n"
+        if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify" ]; then
+            cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify"
+        fi
         echo -e "# Update dynamic partition metadata\n"
         echo -n 'assert(update_dynamic_partitions(package_extract_file("dynamic_partitions_op_list")'
         if $HAS_SUPER_EMPTY; then
@@ -433,9 +436,12 @@ GENERATE_UPDATER_SCRIPT()
         fi
         if ! $HAS_LK3RD && $HAS_BOOT; then
             echo    'ui_print("Installing boot image...");'
-            echo -n 'package_extract_file("boot.img", "'
+            # Do not silently continue when recovery cannot write boot.  A
+            # system EROFS image paired with the stock ext4-fstab boot image
+            # fails in first-stage init before Android can produce a logcat.
+            echo -n 'assert(package_extract_file("boot.img", "'
             echo -n "$TARGET_OS_BOOT_DEVICE_PATH"
-            echo    '/boot");'
+            echo    '/boot"));'
         fi
         if $HAS_UP_PARAM; then
             echo    'ui_print("Installing up_param image...");'
@@ -486,11 +492,11 @@ PRINT_HEADER()
     echo    'ui_print(" ");'
     echo    'ui_print("****************************************************");'
     echo -n 'ui_print("'
-    echo -n "Welcome to ArtisanROM $ROM_CODENAME $ROM_VERSION for $TARGET_NAME!"
+    echo -n "Welcome to UN1CA $ROM_CODENAME $ROM_VERSION for $TARGET_NAME!"
     echo    '");'
-    echo    'ui_print("ArtisanROM developed by Android Artisan @XDAforums");'
+    echo    'ui_print("UN1CA developed by the UN1CA maintainers");'
     echo    'ui_print("UN1CA build system coded by salvo_giangri @XDAforums");'
-    echo    'ui_print("Special thanks to all ArtisanROM Maintainers, Contribuitors and Testers");'
+    echo    'ui_print("Special thanks to all UN1CA maintainers, contributors and testers");'
     echo    'ui_print("****************************************************");'
     echo -n 'ui_print("'
     echo -n "One UI version: $ONEUI_VERSION"
@@ -583,6 +589,12 @@ while IFS= read -r f; do
     fi
 done < <(find "$TMP_DIR" -maxdepth 1 -type f -name "*.img")
 
+if [[ "${TARGET_BUILD_PHYSICAL_PARTITIONS:-false}" == "true" ]]; then
+    LOG_STEP_IN "- Building fixed physical partitions"
+    BUILD_TARGET_PHYSICAL_PARTITION_IMAGES "$TMP_DIR" || exit 1
+    LOG_STEP_OUT
+fi
+
 if [ -d "$WORK_DIR/kernel" ]; then
     while IFS= read -r f; do
         IMG="$(basename "$f")"
@@ -598,7 +610,6 @@ if [ -d "$WORK_DIR/kernel" ]; then
         LOG_STEP_OUT
     done < <(find "$WORK_DIR/kernel" -maxdepth 1 -type f -name "*.img")
 fi
-
 
 if [ -f "$WORK_DIR/up_param.bin" ]; then
     LOG "- Copying up_param.bin"

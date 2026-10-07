@@ -1,0 +1,8 @@
+# The F415F/M21s stock system enables profile-guided JIT compilation. Restore
+# that framework-side switch after importing the Android 17 donor system.
+dalvik.vm.usejitprofiles=true
+
+# The Android 17 donor already disables the USAP pool. Keep that explicit in
+# the target policy: pre-forked app processes consume RAM continuously and do
+# not help a 4 GiB device whose process starts are normally infrequent.
+dalvik.vm.usap_pool_enabled=false

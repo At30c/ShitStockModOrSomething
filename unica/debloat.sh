@@ -60,11 +60,6 @@ system/priv-app/EuiccService
 system/priv-app/IntelligentDynamicFpsService
 "
 
-# Application recommendations
-SYSTEM_DEBLOAT+="
-system/app/MAPSAgent
-"
-
 # BCService
 SYSTEM_DEBLOAT+="
 system/etc/permissions/privapp-permissions-com.sec.bcservice.xml
@@ -81,16 +76,6 @@ ADD_TO_WORK_DIR "pa2qxxx" "system" \
     "system/etc/permissions/signature-permissions-com.samsung.android.game.gamehome.xml" \
     0 0 644 "u:object_r:system_file:s0"
 
-# Gemini shortcut
-PRODUCT_DEBLOAT+="
-app/BardShell
-"
-
-# Gmail
-PRODUCT_DEBLOAT+="
-app/Gmail2
-"
-
 # Google Assistant shortcut
 PRODUCT_DEBLOAT+="
 app/AssistantShell
@@ -99,16 +84,6 @@ app/AssistantShell
 # Google Duo
 PRODUCT_DEBLOAT+="
 app/DuoStub
-"
-
-# Google Maps
-PRODUCT_DEBLOAT+="
-app/Maps
-"
-
-# Google PAI (Play Autoinstall)
-SYSTEM_DEBLOAT+="
-system/app/PlayAutoInstallConfig
 "
 
 # HwModuleTest
@@ -138,7 +113,6 @@ system/app/KidsHome_Installer
 SYSTEM_DEBLOAT+="
 system/priv-app/Bixby
 system/app/BixbyWakeup
-system/priv-app/BixbyInterpreter
 system/etc/preferred-apps/com.samsung.android.bixby.agent.xml
 system/etc/permissions/privapp-permissions-com.samsung.android.bixby.agent.xml
 system/etc/permissions/privapp-permissions-com.samsung.android.bixby.wakeup.xml

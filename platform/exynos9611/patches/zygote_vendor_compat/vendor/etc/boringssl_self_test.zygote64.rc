@@ -1,0 +1,3 @@
+# Select the 64-bit self-test when the M21s compatibility zygote is active.
+on early-init && property:ro.product.cpu.abilist64=*
+    exec_start boringssl_self_test64_vendor

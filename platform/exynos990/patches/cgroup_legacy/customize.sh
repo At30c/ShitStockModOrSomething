@@ -16,7 +16,12 @@ ADD_TO_WORK_DIR "e2sxxx" "system" "system/etc/task_profiles.json" || return 1
 # interface, so add the source Android 17 attribute to the copied descriptor
 # without changing the shared prebuilts asset.
 CGROUP_TASK_PROFILES="$WORK_DIR/system/system/etc/task_profiles.json"
-if ! grep -q '"Name": "CgroupKill"' "$CGROUP_TASK_PROFILES"; then
+# cgroup.kill was added after the 4.14 kernel used by the F415F/M21s. Keep the
+# descriptor usable there, but do not advertise a file that the kernel cannot
+# provide; libprocessgroup otherwise emits a failure during every app spawn.
+if [[ "$TARGET_PLATFORM" == "exynos9611" ]]; then
+    LOG "  - Skipping CgroupKill: the M21s 4.14 kernel has no cgroup.kill"
+elif ! grep -q '"Name": "CgroupKill"' "$CGROUP_TASK_PROFILES"; then
     CGROUP_TASK_PROFILES_TMP="$CGROUP_TASK_PROFILES.tmp"
     awk '
         /^    \{$/ { pending = $0; next }
@@ -35,7 +40,7 @@ if ! grep -q '"Name": "CgroupKill"' "$CGROUP_TASK_PROFILES"; then
     ' "$CGROUP_TASK_PROFILES" > "$CGROUP_TASK_PROFILES_TMP" && \
         mv "$CGROUP_TASK_PROFILES_TMP" "$CGROUP_TASK_PROFILES" || return 1
 fi
-if ! grep -q '"Name": "CgroupKill"' "$CGROUP_TASK_PROFILES"; then
+if [[ "$TARGET_PLATFORM" != "exynos9611" ]] && ! grep -q '"Name": "CgroupKill"' "$CGROUP_TASK_PROFILES"; then
     ABORT "Could not add CgroupKill to task_profiles.json"
     return 1
 fi

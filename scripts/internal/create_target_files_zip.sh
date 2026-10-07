@@ -154,6 +154,12 @@ if [ -d "$WORK_DIR/kernel" ]; then
     done
 fi
 
+if [[ "${TARGET_BUILD_PHYSICAL_PARTITIONS:-false}" == "true" ]]; then
+    LOG_STEP_IN "- Building fixed physical partitions"
+    BUILD_TARGET_PHYSICAL_PARTITION_IMAGES "$TMP_DIR" || exit 1
+    LOG_STEP_OUT
+fi
+
 LOG "- Generating build_info.txt"
 GENERATE_BUILD_INFO
 

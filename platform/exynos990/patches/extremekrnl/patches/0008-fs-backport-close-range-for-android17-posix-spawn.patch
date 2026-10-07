@@ -1,0 +1,150 @@
+From cd95218374cf3451b0a543ca91f1ba967f1637ea Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Wed, 7 Oct 2026 15:32:32 -0300
+Subject: [PATCH] fs: backport close_range for Android 17 posix_spawn
+
+---
+ arch/arm64/include/asm/unistd.h   |  2 +-
+ arch/arm64/include/asm/unistd32.h |  2 ++
+ fs/file.c                         | 44 +++++++++++++++++++++++++++++++
+ include/linux/syscalls.h          |  2 ++
+ include/uapi/asm-generic/unistd.h |  4 ++-
+ include/uapi/linux/close_range.h  |  8 ++++++
+ 6 files changed, 60 insertions(+), 2 deletions(-)
+ create mode 100644 include/uapi/linux/close_range.h
+
+diff --git a/arch/arm64/include/asm/unistd.h b/arch/arm64/include/asm/unistd.h
+index b4910b4e8704..7b56515c0a7f 100644
+--- a/arch/arm64/include/asm/unistd.h
++++ b/arch/arm64/include/asm/unistd.h
+@@ -49,7 +49,7 @@
+ #define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE + 5)
+ #define __ARM_NR_COMPAT_END		(__ARM_NR_COMPAT_BASE + 0x800)
+ 
+-#define __NR_compat_syscalls		435
++#define __NR_compat_syscalls		437
+ #endif
+ 
+ #define __ARCH_WANT_SYS_CLONE
+diff --git a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+index d27ae610cf55..585407d3b829 100644
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -823,6 +823,8 @@ __SYSCALL(__NR_rseq, sys_rseq)
+ __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
+ #define __NR_pidfd_open 434
+ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
++#define __NR_close_range 436
++__SYSCALL(__NR_close_range, sys_close_range)
+ 
+ /*
+  * Please add new compat syscalls above this comment and update
+diff --git a/fs/file.c b/fs/file.c
+index 64faefe4e082..d744c1612e2c 100644
+--- a/fs/file.c
++++ b/fs/file.c
+@@ -16,6 +16,7 @@
+ #include <linux/file.h>
+ #include <linux/fdtable.h>
+ #include <linux/bitops.h>
++#include <linux/close_range.h>
+ #include <linux/spinlock.h>
+ #include <linux/rcupdate.h>
+ 
+@@ -638,6 +639,49 @@ int __close_fd(struct files_struct *files, unsigned fd)
+ }
+ EXPORT_SYMBOL(__close_fd); /* for ksys_close() */
+ 
++SYSCALL_DEFINE3(close_range, unsigned int, fd, unsigned int, max_fd,
++		unsigned int, flags)
++{
++	struct files_struct *displaced = NULL;
++	struct files_struct *files;
++	struct fdtable *fdt;
++	unsigned int last_fd;
++	int ret;
++
++	if (flags & ~(CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC))
++		return -EINVAL;
++	if (fd > max_fd)
++		return -EINVAL;
++
++	if (flags & CLOSE_RANGE_UNSHARE) {
++		ret = unshare_files(&displaced);
++		if (ret)
++			return ret;
++	}
++
++	files = current->files;
++	spin_lock(&files->file_lock);
++	fdt = files_fdtable(files);
++	last_fd = fdt->max_fds - 1;
++	max_fd = min(max_fd, last_fd);
++
++	if (flags & CLOSE_RANGE_CLOEXEC) {
++		if (fd <= max_fd)
++			bitmap_set(fdt->close_on_exec, fd, max_fd - fd + 1);
++		spin_unlock(&files->file_lock);
++	} else {
++		spin_unlock(&files->file_lock);
++		for (; fd <= max_fd; fd++) {
++			__close_fd(files, fd);
++			cond_resched();
++		}
++	}
++
++	if (displaced)
++		put_files_struct(displaced);
++	return 0;
++}
++
+ void do_close_on_exec(struct files_struct *files)
+ {
+ 	unsigned i;
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index 895ff567ab20..94c0d40f4440 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -423,6 +423,8 @@ asmlinkage long sys_fchown(unsigned int fd, uid_t user, gid_t group);
+ asmlinkage long sys_openat(int dfd, const char __user *filename, int flags,
+ 			   umode_t mode);
+ asmlinkage long sys_close(unsigned int fd);
++asmlinkage long sys_close_range(unsigned int fd, unsigned int max_fd,
++				unsigned int flags);
+ asmlinkage long sys_vhangup(void);
+ 
+ /* fs/pipe.c */
+diff --git a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+index be311b944b19..cef0ef51ffbb 100644
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -740,9 +740,11 @@ __SYSCALL(__NR_rseq, sys_rseq)
+ __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
+ #define __NR_pidfd_open 434
+ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
++#define __NR_close_range 436
++__SYSCALL(__NR_close_range, sys_close_range)
+ 
+ #undef __NR_syscalls
+-#define __NR_syscalls 435
++#define __NR_syscalls 437
+ 
+ /*
+  * 32 bit systems traditionally used different
+diff --git a/include/uapi/linux/close_range.h b/include/uapi/linux/close_range.h
+new file mode 100644
+index 000000000000..8c1cf00bf2be
+--- /dev/null
++++ b/include/uapi/linux/close_range.h
+@@ -0,0 +1,8 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++#ifndef _UAPI_LINUX_CLOSE_RANGE_H
++#define _UAPI_LINUX_CLOSE_RANGE_H
++
++#define CLOSE_RANGE_UNSHARE	(1U << 1)
++#define CLOSE_RANGE_CLOEXEC	(1U << 2)
++
++#endif /* _UAPI_LINUX_CLOSE_RANGE_H */
+-- 
+2.53.0
+

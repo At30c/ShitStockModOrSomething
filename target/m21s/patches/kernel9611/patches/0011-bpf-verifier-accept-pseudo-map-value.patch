@@ -1,0 +1,245 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Tue, 06 Oct 2026 11:45:00 -0300
+Subject: [PATCH] bpf: verifier: accept BPF_PSEUDO_MAP_VALUE on Linux 4.14
+
+Android 17's tethering BPF objects dereference shared map values through
+BPF_LD_IMM64 loads whose src_reg is BPF_PSEUDO_MAP_VALUE.  This 4.14
+verifier only understands BPF_PSEUDO_MAP_FD and aborts those programs with
+an "unrecognized bpf_ld_imm64 insn" error at check_cfg() time.
+
+Backport the same change already carried by the exynos990 (4.19) tree:
+
+ - include/uapi/linux/bpf.h: add BPF_PSEUDO_MAP_VALUE (2)
+ - include/linux/bpf.h & kernel/bpf/arraymap.c: array maps gain the
+   map_direct_value_addr() op used to resolve a direct value access
+ - include/linux/bpf_verifier.h: remember map_index/map_off per insn
+ - kernel/bpf/verifier.c: fixup resolve the MAP_VALUE pseudo to the value
+   address and store map_index/map_off in insn_aux_data; check_ld_imm()
+   reflects the result as PTR_TO_MAP_VALUE instead of CONST_PTR_TO_MAP
+
+CONST_PTR_TO_MAP (map fd loads) is unchanged, generic 64-bit imm loads
+(src_reg == 0) are unchanged, and convert_pseudo_ld_imm64() already zeroes
+src_reg at the end of a successful verification.
+
+---
+ include/linux/bpf.h | 2 ++
+ include/linux/bpf_verifier.h | 2 ++
+ include/uapi/linux/bpf.h | 7 +++++++
+ kernel/bpf/arraymap.c | 15 +++++++++++++++
+ kernel/bpf/verifier.c | 83 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++------------------
+
+--- a/include/linux/bpf.h
++++ b/include/linux/bpf.h
+@@ -46,6 +46,8 @@
+ 	 */
+ 	void (*map_fd_put_ptr)(struct bpf_map *map, void *ptr, bool need_defer);
+ 	u32 (*map_gen_lookup)(struct bpf_map *map, struct bpf_insn *insn_buf);
++	int (*map_direct_value_addr)(const struct bpf_map *map, u64 *imm,
++				     u32 off);
+ 	u32 (*map_fd_sys_lookup_elem)(void *ptr);
+ };
+ 
+--- a/include/linux/bpf_verifier.h
++++ b/include/linux/bpf_verifier.h
+@@ -163,6 +163,8 @@
+ 	int sanitize_stack_off; /* stack slot to be cleared */
+ 	bool seen; /* this insn was processed by the verifier */
+ 	u8 alu_state; /* used in combination with alu_limit */
++	u32 map_index; /* index into env->used_maps for BPF_PSEUDO_*_VALUE */
++	s32 map_off; /* map value offset for BPF_PSEUDO_MAP_VALUE */
+ };
+ 
+ #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
+--- a/include/uapi/linux/bpf.h
++++ b/include/uapi/linux/bpf.h
+@@ -209,6 +209,13 @@
+ 
+ #define BPF_PSEUDO_MAP_FD	1
+ 
++/* when bpf_ldimm64->src_reg == BPF_PSEUDO_MAP_VALUE, bpf_ldimm64->imm == fd
++ * of a map and the second insn's imm == offset into its value. The ldimm64
++ * resolves to the address of the map value (map[off]) and the verifier
++ * tracks it as PTR_TO_MAP_VALUE.
++ */
++#define BPF_PSEUDO_MAP_VALUE	2
++
+ /* flags for BPF_MAP_UPDATE_ELEM command */
+ #define BPF_ANY		0 /* create new element or update existing */
+ #define BPF_NOEXIST	1 /* create new element if it didn't exist */
+--- a/kernel/bpf/arraymap.c
++++ b/kernel/bpf/arraymap.c
+@@ -155,6 +155,20 @@
+ 	return array->value + array->elem_size * (index & array->index_mask);
+ }
+ 
++static int array_map_direct_value_addr(const struct bpf_map *map, u64 *imm,
++				       u32 off)
++{
++	struct bpf_array *array = container_of(map, struct bpf_array, map);
++
++	if (map->max_entries != 1)
++		return -ENOTSUPP;
++	if (off >= map->value_size)
++		return -EINVAL;
++
++	*imm = (unsigned long)array->value;
++	return 0;
++}
++
+ /* emit BPF instructions equivalent to C code of array_map_lookup_elem() */
+ static u32 array_map_gen_lookup(struct bpf_map *map, struct bpf_insn *insn_buf)
+ {
+@@ -341,6 +355,7 @@
+ 	.map_update_elem = array_map_update_elem,
+ 	.map_delete_elem = array_map_delete_elem,
+ 	.map_gen_lookup = array_map_gen_lookup,
++	.map_direct_value_addr = array_map_direct_value_addr,
+ };
+ 
+ const struct bpf_map_ops percpu_array_map_ops = {
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -3526,18 +3526,12 @@
+ 	return 0;
+ }
+ 
+-/* return the map pointer stored inside BPF_LD_IMM64 instruction */
+-static struct bpf_map *ld_imm64_to_map_ptr(struct bpf_insn *insn)
+-{
+-	u64 imm64 = ((u64) (u32) insn[0].imm) | ((u64) (u32) insn[1].imm) << 32;
+-
+-	return (struct bpf_map *) (unsigned long) imm64;
+-}
+-
+ /* verify BPF_LD_IMM64 instruction */
+ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
+ {
++	struct bpf_insn_aux_data *aux = cur_aux(env);
+ 	struct bpf_reg_state *regs = cur_regs(env);
++	struct bpf_map *map;
+ 	int err;
+ 
+ 	if (BPF_SIZE(insn->code) != BPF_DW) {
+@@ -3561,11 +3555,20 @@
+ 		return 0;
+ 	}
+ 
+-	/* replace_map_fd_with_map_ptr() should have caught bad ld_imm64 */
+-	BUG_ON(insn->src_reg != BPF_PSEUDO_MAP_FD);
++	map = env->used_maps[aux->map_index];
++	mark_reg_known_zero(regs, insn->dst_reg);
++	regs[insn->dst_reg].map_ptr = map;
++
++	if (insn->src_reg == BPF_PSEUDO_MAP_VALUE) {
++		regs[insn->dst_reg].type = PTR_TO_MAP_VALUE;
++		regs[insn->dst_reg].off = aux->map_off;
++	} else if (insn->src_reg == BPF_PSEUDO_MAP_FD) {
++		regs[insn->dst_reg].type = CONST_PTR_TO_MAP;
++	} else {
++		verbose("bpf verifier is misconfigured\n");
++		return -EINVAL;
++	}
+ 
+-	regs[insn->dst_reg].type = CONST_PTR_TO_MAP;
+-	regs[insn->dst_reg].map_ptr = ld_imm64_to_map_ptr(insn);
+ 	return 0;
+ }
+ 
+@@ -4731,8 +4734,10 @@
+ 		}
+ 
+ 		if (insn[0].code == (BPF_LD | BPF_IMM | BPF_DW)) {
++			struct bpf_insn_aux_data *aux;
+ 			struct bpf_map *map;
+ 			struct fd f;
++			u64 addr;
+ 
+ 			if (i == insn_cnt - 1 || insn[1].code != 0 ||
+ 			    insn[1].dst_reg != 0 || insn[1].src_reg != 0 ||
+@@ -4745,16 +4750,22 @@
+ 				/* valid generic load 64-bit imm */
+ 				goto next_insn;
+ 
+-			if (insn->src_reg != BPF_PSEUDO_MAP_FD) {
++			/* In the final convert_pseudo_ld_imm64() step, this is
++			 * converted into regular 64-bit imm load insn.
++			 */
++			if ((insn[0].src_reg != BPF_PSEUDO_MAP_FD &&
++			     insn[0].src_reg != BPF_PSEUDO_MAP_VALUE) ||
++			    (insn[0].src_reg == BPF_PSEUDO_MAP_FD &&
++			     insn[1].imm != 0)) {
+ 				verbose("unrecognized bpf_ld_imm64 insn\n");
+ 				return -EINVAL;
+ 			}
+ 
+-			f = fdget(insn->imm);
++			f = fdget(insn[0].imm);
+ 			map = __bpf_map_get(f);
+ 			if (IS_ERR(map)) {
+ 				verbose("fd %d is not pointing to valid bpf_map\n",
+-					insn->imm);
++					insn[0].imm);
+ 				return PTR_ERR(map);
+ 			}
+ 
+@@ -4764,13 +4775,48 @@
+ 				return err;
+ 			}
+ 
+-			/* store map pointer inside BPF_LD_IMM64 instruction */
+-			insn[0].imm = (u32) (unsigned long) map;
+-			insn[1].imm = ((u64) (unsigned long) map) >> 32;
++			aux = &env->insn_aux_data[i];
++			if (insn[0].src_reg == BPF_PSEUDO_MAP_FD) {
++				addr = (unsigned long)map;
++			} else {
++				u32 off = insn[1].imm;
++
++				if (off >= BPF_MAX_VAR_OFF) {
++					verbose("direct value offset of %u is not allowed\n",
++						off);
++					fdput(f);
++					return -EINVAL;
++				}
++
++				if (!map->ops->map_direct_value_addr) {
++					verbose("no direct value access support for this map type\n");
++					fdput(f);
++					return -EINVAL;
++				}
++
++				err = map->ops->map_direct_value_addr(map,
++								     &addr, off);
++				if (err) {
++					verbose("invalid access to map value pointer, value_size=%u off=%u\n",
++						map->value_size, off);
++					fdput(f);
++					return err;
++				}
++
++				aux->map_off = off;
++				addr += off;
++			}
++
++			/* store map (or map value) pointer inside the
++			 * BPF_LD_IMM64 instruction
++			 */
++			insn[0].imm = (u32)addr;
++			insn[1].imm = addr >> 32;
+ 
+ 			/* check whether we recorded this map already */
+ 			for (j = 0; j < env->used_map_cnt; j++)
+ 				if (env->used_maps[j] == map) {
++					aux->map_index = j;
+ 					fdput(f);
+ 					goto next_insn;
+ 				}
+@@ -4790,6 +4836,7 @@
+ 				fdput(f);
+ 				return PTR_ERR(map);
+ 			}
++			aux->map_index = env->used_map_cnt;
+ 			env->used_maps[env->used_map_cnt++] = map;
+ 
+ 			fdput(f);

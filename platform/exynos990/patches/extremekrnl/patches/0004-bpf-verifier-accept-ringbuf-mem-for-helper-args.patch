@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Tue, 06 Oct 2026 11:05:00 -0300
+Subject: [PATCH] bpf: verifier: accept PTR_TO_MEM for helper memory pointers
+
+The ring buffer implementation is already present in this tree, including
+bpf_ringbuf_reserve() returning RET_PTR_TO_ALLOC_MEM_OR_NULL and the
+PTR_TO_MEM/PTR_TO_MEM_OR_NULL register tracking in check_mem_access(),
+where every access is bounds checked against reg->mem_size.
+
+However check_func_arg() still restricts ARG_PTR_TO_MEM,
+ARG_PTR_TO_MEM_OR_NULL and ARG_PTR_TO_UNINIT_MEM to packet pointers,
+PTR_TO_MAP_VALUE and PTR_TO_STACK. A pointer handed out by
+bpf_ringbuf_reserve() is therefore rejected before the helper ever runs,
+which makes the common "reserve, then fill the record with
+bpf_probe_read()/bpf_probe_read_str()" pattern impossible to verify:
+
+  R1 type=mem expected=fp
+
+This is what Android 17 bpfloader hits while loading bpfMemEvents.bpf:
+
+  prog 'tracepoint_oom_mark_victim_ams': failed to load: -13
+  39: (85) call bpf_probe_read_str#45
+      R1 type=mem expected=fp
+
+Mirror upstream and allow PTR_TO_MEM for the memory pointer argument
+types. No new register type is introduced: the register can only be
+produced by bpf_ringbuf_reserve(), it is bounded by the same mem_size
+accounting that already governs direct loads and stores, and
+meta->raw_mode keeps ARG_PTR_TO_UNINIT_MEM semantics intact.
+
+---
+ kernel/bpf/verifier.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/bpf/verifier.c b/kernel/bpf/verifier.c
+index 6bb39abd809e..e0df881ae841 100644
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -2046,6 +2046,7 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 regno,
+ 			/* final test in check_stack_boundary() */;
+ 		else if (!type_is_pkt_pointer(type) &&
+ 			 type != PTR_TO_MAP_VALUE &&
++			 type != PTR_TO_MEM &&
+ 			 type != expected_type)
+ 			goto err_type;
+ 		meta->raw_mode = arg_type == ARG_PTR_TO_UNINIT_MEM;

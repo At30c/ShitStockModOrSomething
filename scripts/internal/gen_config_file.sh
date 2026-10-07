@@ -147,6 +147,16 @@ fi
 #   TARGET_CACHE_PARTITION_SIZE
 #     Integer containing the size in bytes of the target device cache partition size.
 #
+#   TARGET_BUILD_PHYSICAL_PARTITIONS
+#     If set to true, build the target's fixed physical partition trees outside
+#     super. The target must define TARGET_PRISM_PARTITION_SIZE and
+#     TARGET_OPTICS_PARTITION_SIZE as byte counts.
+#     Defaults to false.
+#
+#   TARGET_PRISM_PARTITION_SIZE / TARGET_OPTICS_PARTITION_SIZE
+#     Byte sizes used when building the fixed physical Prism and Optics images.
+#     Required when TARGET_BUILD_PHYSICAL_PARTITIONS is true.
+#
 #   TARGET_USE_DYNAMIC_PARTITIONS
 #     Boolean which describes whether the device has dynamic partitions support.
 #     Defaults to false.
@@ -513,6 +523,11 @@ fi
     GET_BUILD_VAR "TARGET_INIT_BOOT_PARTITION_SIZE" "none"
     GET_BUILD_VAR "TARGET_VENDOR_BOOT_PARTITION_SIZE" "none"
     GET_BUILD_VAR "TARGET_CACHE_PARTITION_SIZE" "none"
+    GET_BUILD_VAR "TARGET_BUILD_PHYSICAL_PARTITIONS" "false"
+    if ${TARGET_BUILD_PHYSICAL_PARTITIONS:-false}; then
+        GET_BUILD_VAR "TARGET_PRISM_PARTITION_SIZE"
+        GET_BUILD_VAR "TARGET_OPTICS_PARTITION_SIZE"
+    fi
     GET_BUILD_VAR "TARGET_USE_DYNAMIC_PARTITIONS" "false"
     if ${TARGET_USE_DYNAMIC_PARTITIONS:-false}; then
         GET_BUILD_VAR "TARGET_SUPER_PARTITION_SIZE"

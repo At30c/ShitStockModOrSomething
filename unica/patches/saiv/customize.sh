@@ -218,8 +218,14 @@ if [ ! -d "$WORK_DIR/vendor/saiv/image_understanding/db/sce_detector" ] || \
         fi
         ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "vendor" "saiv/image_understanding/db/sce_detector/sce_detector_cnn.tflite" 0 0 644 "u:object_r:vendor_snap_file:s0"
     elif [ ! -d "$WORK_DIR/vendor/saiv/image_understanding/db/sce_detector" ]; then
-        LOG "- Source has no legacy SCE detector bundle; restoring target model"
-        ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "vendor" "saiv/image_understanding/db/sce_detector" 0 2000 755 "u:object_r:vendor_snap_file:s0"
+        TARGET_SCE_DIR="$FW_DIR/$TARGET_FIRMWARE_PATH/vendor/saiv/image_understanding/db/sce_detector"
+        if [ -d "$TARGET_SCE_DIR" ]; then
+            LOG "- Source has no legacy SCE detector bundle; restoring target model"
+            ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "vendor" "saiv/image_understanding/db/sce_detector" 0 2000 755 "u:object_r:vendor_snap_file:s0"
+        else
+            LOG "- Source and target have no legacy SCE detector bundle; keeping it absent"
+        fi
+        unset TARGET_SCE_DIR
     else
         LOG "- Source has no legacy SCE detector bundle; retaining target model"
     fi

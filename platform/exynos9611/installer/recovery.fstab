@@ -1,0 +1,20 @@
+# Recovery/OTA partition map from the extracted F415F ZTO fstab. The M21s
+# target now builds all logical OS images as ext4; physical Prism/Optics
+# mounts remain stock and are required by OMC.
+system                          /system         ext4    rw           logical,first_stage_mount
+vendor                          /vendor         ext4    rw           logical,first_stage_mount
+product                         /product        ext4    rw           logical,first_stage_mount
+odm                             /odm            ext4    rw           logical,first_stage_mount
+
+/dev/block/by-name/boot         /boot           emmc    defaults     recoveryonly
+/dev/block/by-name/recovery     /recovery       emmc    defaults     recoveryonly
+/dev/block/by-name/dtbo         /dtbo           emmc    defaults     recoveryonly
+/dev/block/by-name/vbmeta       /vbmeta         emmc    defaults     recoveryonly
+/dev/block/by-name/cache        /cache          ext4    defaults     recoveryonly
+/dev/block/by-name/userdata     /data           f2fs    defaults     recoveryonly,length=-20480
+/dev/block/by-name/metadata     /metadata       ext4    defaults     recoveryonly
+/dev/block/by-name/efs          /efs            ext4    defaults     recoveryonly
+/dev/block/by-name/cpefs        /cpefs          ext4    defaults     recoveryonly
+/dev/block/by-name/prism        /prism          ext4    ro           recoveryonly
+/dev/block/by-name/optics       /optics         ext4    ro           recoveryonly
+/dev/block/by-name/misc         /misc           emmc    defaults     recoveryonly

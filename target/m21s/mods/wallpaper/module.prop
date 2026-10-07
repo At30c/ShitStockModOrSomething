@@ -1,0 +1,7 @@
+id=m21s_wallpaper_compat
+priority=98
+name=M21s wallpaper compatibility
+version=1.0
+versionCode=1
+author=At30c
+description=Disables the unsupported One UI object-capture path in DressRoom on the M21s.

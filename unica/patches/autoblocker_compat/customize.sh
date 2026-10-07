@@ -63,6 +63,42 @@ if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 36 ]]; then
     [ -n "$RAMPART_BOOT_METHOD" ] || \
         ABORT "Unable to resolve Rampart boot-complete method"
 
+    # The M21s/F415F Rampart build does not ship the R1/a settings helper.
+    # Injecting the reset body in that variant creates references to LF1/a and
+    # LR1/a which are not present in the APK (the former is case-sensitive and
+    # the latter is absent altogether), causing RampartReceiver to die with
+    # NoClassDefFoundError at boot. The unlocked-device and receiver gates
+    # above are still applied; only the optional persisted-settings reset is
+    # skipped when its helper is unavailable.
+    if ! find "$RAMPART_DECODE_DIR" -type f -path '*/r1/a.smali' -print -quit | grep -q .; then
+        LOGW "Rampart settings helper r1/a is absent; skipping persisted-policy reset"
+        # A decoded-cache entry may already contain the old injected body.
+        # Remove that body before returning, otherwise an incremental build
+        # would keep the invalid references even though this run skipped the
+        # injection.
+        while IFS= read -r RAMPART_STALE_HANDLER; do
+            awk '
+                /# UN1CA: clear stale Rampart policy after a dirty flash/ {
+                    skip = 1
+                    next
+                }
+                skip && /^[[:space:]]*move-object\/from16 v1, p0$/ {
+                    skip = 0
+                    print
+                    next
+                }
+                !skip { print }
+            ' "$RAMPART_STALE_HANDLER" > "$RAMPART_STALE_HANDLER.tmp" && \
+                mv "$RAMPART_STALE_HANDLER.tmp" "$RAMPART_STALE_HANDLER"
+        done < <(grep -R -l -F '# UN1CA: clear stale Rampart policy after a dirty flash' \
+            "$RAMPART_DECODE_DIR"/smali* 2>/dev/null || true)
+        unset RAMPART_APK RAMPART_DECODE_DIR RAMPART_DEVICE_CONFIG \
+            RAMPART_UNLOCK_METHOD RAMPART_BOOT_HANDLER RAMPART_BOOT_METHOD \
+            RAMPART_STALE_HANDLER
+        LOG_STEP_OUT
+        return 0
+    fi
+
     LOG "- Resetting persisted Auto Blocker policies at locked boot"
 
     awk -v METHOD="$RAMPART_BOOT_METHOD" '

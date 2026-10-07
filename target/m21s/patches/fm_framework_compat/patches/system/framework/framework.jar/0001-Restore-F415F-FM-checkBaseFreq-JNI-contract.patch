@@ -1,0 +1,32 @@
+From 381ce31eb31b86b0f4892967292af54001543f15 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Fri, 2 Oct 2026 22:15:00 -0300
+Subject: [PATCH] Restore F415F FM checkBaseFreq JNI contract
+
+The stock F415F libfmradio_jni.so registers checkBaseFreq()Z, while the
+Android 17 donor framework no longer declares it. ART aborts system_server
+when Settings loads FMSettingSearchProvider because RegisterNatives cannot
+resolve the method.
+
+Restore the single declaration required by the target JNI library.
+---
+ .../com/android/server/FMPlayerNative.smali                 | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/smali_classes6/com/android/server/FMPlayerNative.smali b/smali_classes6/com/android/server/FMPlayerNative.smali
+index a7aa837..ef9ddbe 100644
+--- a/smali_classes6/com/android/server/FMPlayerNative.smali
++++ b/smali_classes6/com/android/server/FMPlayerNative.smali
+@@ -238,6 +238,9 @@
+ .method public native blacklist cancelSeek()V
+ .end method
+ 
++.method public native blacklist checkBaseFreq()Z
++.end method
++
+ .method public native blacklist disableAF()V
+ .end method
+ 
+-- 
+2.51.0
+

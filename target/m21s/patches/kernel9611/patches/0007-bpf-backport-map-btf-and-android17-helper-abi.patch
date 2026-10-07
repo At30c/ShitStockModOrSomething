@@ -1,0 +1,263 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Sat, 3 Oct 2026 00:20:00 -0300
+Subject: [PATCH] [PATCH] bpf: backport BTF map definitions and Android 17 helper ABI
+
+The Android 17 connectivity stack loads its offload and tethering programs
+with a current libbpf, so every map_create() carries BTF type ids and every
+program may call helpers introduced long after 4.14.  This kernel only knows
+the 4.14 map attribute layout and rejects both at BPF_MAP_CREATE time, which
+aborts NetBpfLoad before a single program is verified.
+
+Extend struct bpf_map with its BTF reference, accept and validate btf_fd,
+btf_key_type_id and btf_value_type_id in map_create(), and release the BTF
+reference on every map free path.  Extend the __sk_buff context with the
+Android 17 fields (data_meta, flow_keys, tstamp, wire_len, gso_segs, sk,
+gso_size) behind the __bpf_md_ptr helper, and extend the helper table through
+BPF_FUNC_ktime_get_coarse_ns (id 160) so the loaded objects resolve their
+call sites instead of dying with an unknown-helper error.
+
+Only the ABI surface is backported; no verifier behaviour changes here.
+---
+ include/linux/bpf.h      |  7 +++++-
+ include/uapi/linux/bpf.h | 55 +++++++++++++++++++++++++++++++++++++++++++++++-
+ kernel/bpf/core.c        |  1 +
+ kernel/bpf/helpers.c     | 13 ++++++++++++
+ kernel/bpf/syscall.c     | 46 +++++++++++++++++++++++++++++++++++++++-
+ 5 files changed, 119 insertions(+), 3 deletions(-)
+
+diff --git a/include/linux/bpf.h b/include/linux/bpf.h
+index 88b24b9..91cdbe4 100644
+--- a/include/linux/bpf.h
++++ b/include/linux/bpf.h
+@@ -20,6 +20,7 @@
+ struct perf_event;
+ struct bpf_prog;
+ struct bpf_map;
++struct btf;
+ 
+ /* map is generic key/value storage optionally accesible by eBPF programs */
+ struct bpf_map_ops {
+@@ -65,8 +66,11 @@ struct bpf_map {
+ 	u32 pages;
+ 	u32 id;
+ 	int numa_node;
++	u32 btf_key_type_id;
++	u32 btf_value_type_id;
++	struct btf *btf;
+ 	bool unpriv_array;
+-	/* 7 bytes hole */
++	/* 55 bytes hole */
+ 
+ 	/* 2nd cacheline with misc members to avoid false sharing
+ 	 * particularly with refcounting.
+@@ -566,6 +570,7 @@ extern const struct bpf_func_proto bpf_get_numa_node_id_proto;
+ extern const struct bpf_func_proto bpf_tail_call_proto;
+ extern const struct bpf_func_proto bpf_ktime_get_ns_proto;
+ extern const struct bpf_func_proto bpf_ktime_get_boot_ns_proto;
++extern const struct bpf_func_proto bpf_ktime_get_coarse_ns_proto;
+ extern const struct bpf_func_proto bpf_get_current_pid_tgid_proto;
+ extern const struct bpf_func_proto bpf_get_current_uid_gid_proto;
+ extern const struct bpf_func_proto bpf_get_current_comm_proto;
+diff --git a/include/uapi/linux/bpf.h b/include/uapi/linux/bpf.h
+index bf3fa85..245cf9b 100644
+--- a/include/uapi/linux/bpf.h
++++ b/include/uapi/linux/bpf.h
+@@ -252,6 +252,10 @@ union bpf_attr {
+ 					 * BPF_F_NUMA_NODE is set).
+ 					 */
+ 		char	map_name[BPF_OBJ_NAME_LEN];
++		__u32	map_ifindex;	/* ifindex of netdev to create on */
++		__u32	btf_fd;		/* fd pointing to a BTF type data */
++		__u32	btf_key_type_id;	/* BTF type_id of the key */
++		__u32	btf_value_type_id;	/* BTF type_id of the value */
+ 	};
+ 
+ 	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
+@@ -830,7 +834,42 @@ union bpf_attr {
+ 	FN(get_netns_cookie),		\
+ 	FN(get_current_ancestor_cgroup_id),	\
+ 	FN(sk_assign),			\
+-	FN(ktime_get_boot_ns),
++	FN(ktime_get_boot_ns),		\
++	FN(seq_printf),			\
++	FN(seq_write),			\
++	FN(sk_cgroup_id),		\
++	FN(sk_ancestor_cgroup_id),	\
++	FN(ringbuf_output),		\
++	FN(ringbuf_reserve),		\
++	FN(ringbuf_submit),		\
++	FN(ringbuf_discard),		\
++	FN(ringbuf_query),		\
++	FN(csum_level),			\
++	FN(skc_to_tcp6_sock),		\
++	FN(skc_to_tcp_sock),		\
++	FN(skc_to_tcp_timewait_sock),	\
++	FN(skc_to_tcp_request_sock),	\
++	FN(skc_to_udp6_sock),		\
++	FN(get_task_stack),		\
++	FN(load_hdr_opt),		\
++	FN(store_hdr_opt),		\
++	FN(reserve_hdr_opt),		\
++	FN(inode_storage_get),		\
++	FN(inode_storage_delete),	\
++	FN(d_path),			\
++	FN(copy_from_user),		\
++	FN(snprintf_btf),		\
++	FN(seq_printf_btf),		\
++	FN(skb_cgroup_classid),	\
++	FN(redirect_neigh),		\
++	FN(per_cpu_ptr),		\
++	FN(this_cpu_ptr),		\
++	FN(redirect_peer),		\
++	FN(task_storage_get),		\
++	FN(task_storage_delete),	\
++	FN(get_current_task_btf),	\
++	FN(bprm_opts_set),		\
++	FN(ktime_get_coarse_ns),
+ 
+ /* integer value in 'imm' field of BPF_CALL instruction selects which helper
+  * function eBPF program intends to call
+@@ -891,6 +930,12 @@ enum bpf_hdr_start_off {
+ 	BPF_HDR_START_NET,
+ };
+ 
++#define __bpf_md_ptr(type, name)	\
++union {					\
++	type name;			\
++	__u64 :64;			\
++} __attribute__((aligned(8)))
++
+ /* user accessible mirror of in-kernel sk_buff.
+  * new fields can only be added to the end of this structure
+  */
+@@ -922,6 +967,14 @@ struct __sk_buff {
+ 	__u32 local_ip6[4];	/* Stored in network byte order */
+ 	__u32 remote_port;	/* Stored in network byte order */
+ 	__u32 local_port;	/* stored in host byte order */
++
++	__u32 data_meta;
++	__bpf_md_ptr(struct bpf_flow_keys *, flow_keys);
++	__u64 tstamp;
++	__u32 wire_len;
++	__u32 gso_segs;
++	__bpf_md_ptr(struct bpf_sock *, sk);
++	__u32 gso_size;
+ };
+ 
+ struct bpf_tunnel_key {
+diff --git a/kernel/bpf/core.c b/kernel/bpf/core.c
+index 70ec7c8..4115d85 100644
+--- a/kernel/bpf/core.c
++++ b/kernel/bpf/core.c
+@@ -1729,6 +1729,7 @@ const struct bpf_func_proto bpf_get_smp_processor_id_proto __weak;
+ const struct bpf_func_proto bpf_get_numa_node_id_proto __weak;
+ const struct bpf_func_proto bpf_ktime_get_ns_proto __weak;
+ const struct bpf_func_proto bpf_ktime_get_boot_ns_proto __weak;
++const struct bpf_func_proto bpf_ktime_get_coarse_ns_proto __weak;
+ 
+ const struct bpf_func_proto bpf_get_current_pid_tgid_proto __weak;
+ const struct bpf_func_proto bpf_get_current_uid_gid_proto __weak;
+diff --git a/kernel/bpf/helpers.c b/kernel/bpf/helpers.c
+index aac170e..77dba5f 100644
+--- a/kernel/bpf/helpers.c
++++ b/kernel/bpf/helpers.c
+@@ -128,6 +128,19 @@ const struct bpf_func_proto bpf_ktime_get_boot_ns_proto = {
+ 	.ret_type	= RET_INTEGER,
+ };
+ 
++BPF_CALL_0(bpf_ktime_get_coarse_ns)
++{
++	struct timespec64 ts = get_monotonic_coarse64();
++
++	return timespec64_to_ns(&ts);
++}
++
++const struct bpf_func_proto bpf_ktime_get_coarse_ns_proto = {
++	.func		= bpf_ktime_get_coarse_ns,
++	.gpl_only	= false,
++	.ret_type	= RET_INTEGER,
++};
++
+ BPF_CALL_0(bpf_get_current_pid_tgid)
+ {
+ 	struct task_struct *task = current;
+diff --git a/kernel/bpf/syscall.c b/kernel/bpf/syscall.c
+index cc8af43..00c5ce8 100644
+--- a/kernel/bpf/syscall.c
++++ b/kernel/bpf/syscall.c
+@@ -235,6 +235,7 @@ static void __bpf_map_put(struct bpf_map *map, bool do_idr_lock)
+ 	if (atomic_dec_and_test(&map->refcnt)) {
+ 		/* bpf_map_free_id() must be called first */
+ 		bpf_map_free_id(map, do_idr_lock);
++		btf_put(map->btf);
+ 		INIT_WORK(&map->work, bpf_map_free_deferred);
+ 		schedule_work(&map->work);
+ 	}
+@@ -379,8 +380,24 @@ static int bpf_obj_name_cpy(char *dst, const char *src)
+ 
+ 	return 0;
+ }
++static int map_check_btf(const struct bpf_map *map, const struct btf *btf,
++			 u32 btf_key_id, u32 btf_value_id)
++{
++	const struct btf_type *key_type, *value_type;
++	u32 key_size, value_size;
++
++	key_type = btf_type_id_size(btf, &btf_key_id, &key_size);
++	if (!key_type || key_size != map->key_size)
++		return -EINVAL;
++
++	value_type = btf_type_id_size(btf, &btf_value_id, &value_size);
++	if (!value_type || value_size != map->value_size)
++		return -EINVAL;
+ 
+-#define BPF_MAP_CREATE_LAST_FIELD map_name
++	return 0;
++}
++
++#define BPF_MAP_CREATE_LAST_FIELD btf_value_type_id
+ /* called via syscall */
+ static int map_create(union bpf_attr *attr)
+ {
+@@ -414,6 +431,32 @@ static int map_create(union bpf_attr *attr)
+ 	atomic_set(&map->refcnt, 1);
+ 	atomic_set(&map->usercnt, 1);
+ 
++	if (attr->btf_key_type_id || attr->btf_value_type_id) {
++		struct btf *btf;
++
++		if (!attr->btf_key_type_id || !attr->btf_value_type_id) {
++			err = -EINVAL;
++			goto free_map_nouncharge;
++		}
++
++		btf = btf_get_by_fd(attr->btf_fd);
++		if (IS_ERR(btf)) {
++			err = PTR_ERR(btf);
++			goto free_map_nouncharge;
++		}
++
++		err = map_check_btf(map, btf, attr->btf_key_type_id,
++				    attr->btf_value_type_id);
++		if (err) {
++			btf_put(btf);
++			goto free_map_nouncharge;
++		}
++
++		map->btf = btf;
++		map->btf_key_type_id = attr->btf_key_type_id;
++		map->btf_value_type_id = attr->btf_value_type_id;
++	}
++
+ 	err = security_bpf_map_alloc(map);
+ 	if (err)
+ 		goto free_map_nouncharge;
+@@ -446,6 +489,7 @@ free_map:
+ free_map_sec:
+ 	security_bpf_map_free(map);
+ free_map_nouncharge:
++	btf_put(map->btf);
+ 	map->ops->map_free(map);
+ 	return err;
+ }

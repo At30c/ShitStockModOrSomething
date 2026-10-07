@@ -1,0 +1,103 @@
+#!/sbin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+ZIPFILE="$3"
+OUTFD="$2"
+TMP_DIR=/tmp/m21s-vibrator-s20-test
+BACKUP_ROOT="/sdcard/m21s-vibrator-s20-backup-$(date +%Y%m%d-%H%M%S)"
+
+PAYLOADS="\
+vendor/bin/hw/vendor.samsung.hardware.vibrator@2.2-service \
+vendor/etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc \
+vendor/lib64/hw/vibrator.default.so \
+vendor/lib64/android.hardware.vibrator@1.0.so \
+vendor/lib64/android.hardware.vibrator@1.1.so \
+vendor/lib64/android.hardware.vibrator@1.2.so \
+vendor/lib64/android.hardware.vibrator@1.3.so \
+vendor/lib64/vendor.samsung.hardware.vibrator@2.0.so \
+vendor/lib64/vendor.samsung.hardware.vibrator@2.1.so \
+vendor/lib64/vendor.samsung.hardware.vibrator@2.2.so"
+
+ui_print() {
+    if [ -w "/proc/self/fd/$OUTFD" ]; then
+        echo "ui_print $*" > "/proc/self/fd/$OUTFD"
+        echo "ui_print" > "/proc/self/fd/$OUTFD"
+    else
+        echo "$*" >&2
+    fi
+}
+
+abort() {
+    ui_print "ERROR: $*"
+    exit 1
+}
+
+ui_print "M21s: teste do vibrator HAL do S20+"
+ui_print "Somente arquivos vendor serao substituidos"
+
+mkdir -p "$TMP_DIR" || abort "nao foi possivel criar o temporario"
+unzip -p "$ZIPFILE" checksums.sha256 > "$TMP_DIR/checksums.sha256" || \
+    abort "nao foi possivel extrair checksums"
+[ -s "$TMP_DIR/checksums.sha256" ] || abort "checksums vazio"
+
+for rel in $PAYLOADS; do
+    mkdir -p "$TMP_DIR/$(dirname "$rel")" || abort "nao foi possivel preparar $rel"
+    unzip -p "$ZIPFILE" "payload/$rel" > "$TMP_DIR/$rel" || abort "nao foi possivel extrair $rel"
+    [ -s "$TMP_DIR/$rel" ] || abort "payload vazio: $rel"
+done
+
+if [ -f "$ZIPFILE" ]; then
+    while read -r expected path; do
+        [ -n "$expected" ] || continue
+        rel="${path#payload/}"
+        actual="$(sha256sum "$TMP_DIR/$rel" 2>/dev/null | awk '{print $1}')"
+        [ "$expected" = "$actual" ] || abort "checksum invalido: $rel"
+    done < "$TMP_DIR/checksums.sha256"
+fi
+
+if ! mount | grep -q ' /vendor '; then
+    mount /vendor >/dev/null 2>&1 || twrp mount vendor >/dev/null 2>&1 || \
+        abort "nao foi possivel montar vendor"
+fi
+mount -o rw,remount /vendor >/dev/null 2>&1 || \
+    abort "nao foi possivel remontar vendor como rw"
+[ -w /vendor ] || abort "vendor nao esta gravavel"
+
+# Samsung reserves almost all remaining ext4 blocks on this small vendor
+# image. Root can use them after releasing the recovery-only reservation.
+for reserve in /sys/fs/ext4/*/reserved_clusters; do
+    [ -e "$reserve" ] && echo 0 > "$reserve" 2>/dev/null || true
+done
+
+mkdir -p "$BACKUP_ROOT" 2>/dev/null || BACKUP_ROOT="$TMP_DIR/backup"
+mkdir -p "$BACKUP_ROOT" || abort "nao foi possivel criar backup"
+
+for rel in $PAYLOADS; do
+    dest="/$rel"
+    if [ -f "$dest" ]; then
+        mkdir -p "$BACKUP_ROOT/$(dirname "$rel")" || abort "nao foi possivel preparar backup de $rel"
+        cp -p "$dest" "$BACKUP_ROOT/$rel" || abort "nao foi possivel salvar $rel"
+    fi
+done
+
+for rel in $PAYLOADS; do
+    dest="/$rel"
+    mkdir -p "$(dirname "$dest")" || abort "nao foi possivel criar $(dirname "$dest")"
+    cp -f "$TMP_DIR/$rel" "$dest" || abort "nao foi possivel instalar $rel"
+    case "$rel" in
+        vendor/bin/hw/*) chmod 0755 "$dest" ;;
+        *) chmod 0644 "$dest" ;;
+    esac
+    chown 0:0 "$dest" 2>/dev/null || true
+    restorecon "$dest" >/dev/null 2>&1 || true
+done
+
+sync
+for rel in $PAYLOADS; do
+    cmp -s "$TMP_DIR/$rel" "/$rel" || abort "verificacao falhou: $rel"
+done
+
+ui_print "HAL do S20+ instalado"
+ui_print "Backup: $BACKUP_ROOT"
+ui_print "Reinicie e verifique dumpsys vibrator_manager"
+exit 0

@@ -1,0 +1,33 @@
+From: At30c <PabloAtsoc9993@outlook.com>
+Subject: [PATCH] m21s: prepare tzdev before starting TEEgris
+
+The F415F vendor declares /dev/tzdev as system:system 0666 and labels it as
+tz_user_device, but normal-boot captures showed tzdaemon receiving EACCES.
+Apply the intended label and permissions immediately before starting the
+daemon instead of relying solely on the legacy ueventd rule.
+
+Keystore2 is part of early_hal and may attempt to initialize before the legacy
+TEE daemon publishes vendor.tzdaemon=Ready.  Start it again when TEEgris is
+ready so vold can obtain android.system.keystore2.IKeystoreService/default and
+finish the file-encryption handoff.
+
+--- a/etc/init/teegris_v3.rc
++++ b/etc/init/teegris_v3.rc
+@@ -3,12 +3,16 @@ on post-fs
+     mkdir /mnt/vendor/efs/tee 0700 system system
+     mkdir /dev/socket/iwt 0770 system system
+     mkdir /dev/socket/iwt/ca 0770 system system
++    restorecon /dev/tzdev
++    chown system system /dev/tzdev
++    chmod 0666 /dev/tzdev
+     start tz_service
+     start tz_msg_recv
+ 
+ on property:vendor.tzdaemon=Ready
+     setprop vendor.TEEGRIS.loaded true
+     write /proc/iccc_ready 1
+     start tzts_service
++    start keystore2
+ 
+ on property:vendor.tzts_daemon=Ready
+ 

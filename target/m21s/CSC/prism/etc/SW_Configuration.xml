@@ -1,0 +1,27 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<SW-Configuration>
+    <MobileData>
+        <PublicName>SM-F415F</PublicName>
+    </MobileData>
+    <OmcYn>Y</OmcYn>
+    <MultiCode>OWO</MultiCode>
+    <CustomerDataSet>
+        <CSCName>F415FOWO</CSCName>
+        <CSCVersion>3CWK2</CSCVersion>
+        <NbCustomer>2</NbCustomer>
+        <CustomerData src="/Customer/ZTO/customer.xml" />
+        <CustomerData src="/Customer/TPA/customer.xml" />
+    </CustomerDataSet>
+    <OmcInfo>
+        <OmcCode>
+            <CustomerCode>TPA</CustomerCode>
+            <Version>SAOMC_SM-F415F_OWO_TPA_12_0027</Version>
+            <CustomerEdition>ED0022</CustomerEdition>
+        </OmcCode>
+        <OmcCode>
+            <CustomerCode>ZTO</CustomerCode>
+            <Version>SAOMC_SM-F415F_OWO_ZTO_12_0009</Version>
+            <CustomerEdition>ED0006</CustomerEdition>
+        </OmcCode>
+    </OmcInfo>
+</SW-Configuration>

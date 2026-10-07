@@ -1,0 +1,21 @@
+# Keep ART's application heap at the target's 4 GiB profile. These values
+# belong in vendor because the F415F stock Dalvik policy is vendor-owned.
+dalvik.vm.heapstartsize=8m
+dalvik.vm.heapgrowthlimit=192m
+dalvik.vm.heapsize=512m
+dalvik.vm.heaptargetutilization=0.75
+dalvik.vm.heapminfree=512k
+dalvik.vm.heapmaxfree=8m
+
+# Android 17's lmkd otherwise derives a high swap watermark from the
+# 2.5-GiB RAM Plus zram device. Keep reclaim at 10% free swap on this 4 GiB
+# target, and cap the framework's cached-process slot policy accordingly.
+ro.slmk.swap_free_low_percentage=10
+ro.slmk.2nd.swap_free_low_percentage=10
+
+# Samsung's Android 17 BGSlotManager adds its empty-process allowance to this
+# value.  The former value of 256 therefore produced a 286-process cache on
+# the 4 GiB M21s.  128 produces an effective ceiling of about 158 after the
+# framework adds its 30 empty slots: enough for ordinary task switching while
+# allowing LMKD to reclaim stale processes before foreground apps stall.
+ro.slmk.cached_max=128

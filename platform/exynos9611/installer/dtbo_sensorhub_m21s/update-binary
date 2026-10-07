@@ -1,0 +1,39 @@
+#!/sbin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+ZIPFILE="$3"
+OUTFD="$2"
+TMP_DIR=/tmp/m21s-dtbo-sensorhub
+DTBO_BLOCK=/dev/block/by-name/dtbo
+
+ui_print() {
+    echo "ui_print $*" > "/proc/self/fd/$OUTFD"
+    echo "ui_print" > "/proc/self/fd/$OUTFD"
+}
+
+abort() {
+    ui_print "ERROR: $*"
+    exit 1
+}
+
+ui_print "M21s sensorhub DTBO test"
+[ -b "$DTBO_BLOCK" ] || abort "DTBO block device not found: $DTBO_BLOCK"
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR" || abort "cannot create temporary directory"
+unzip -p "$ZIPFILE" dtbo.img > "$TMP_DIR/dtbo.img" || abort "cannot extract dtbo.img"
+unzip -p "$ZIPFILE" dtbo.img.sha256 > "$TMP_DIR/dtbo.img.sha256" || abort "cannot extract checksum"
+[ -s "$TMP_DIR/dtbo.img" ] || abort "extracted DTBO is empty"
+
+EXPECTED_SHA256="$(awk 'NR == 1 { print $1 }' "$TMP_DIR/dtbo.img.sha256")"
+[ -n "$EXPECTED_SHA256" ] || abort "invalid bundled checksum"
+ACTUAL_SHA256="$(sha256sum "$TMP_DIR/dtbo.img" | awk '{ print $1 }')"
+[ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] || abort "bundled DTBO checksum mismatch"
+
+ui_print "Writing DTBO to the physical partition..."
+dd if="$TMP_DIR/dtbo.img" of="$DTBO_BLOCK" bs=4M conv=fsync 2>/dev/null || abort "failed to write DTBO"
+WRITTEN_SHA256="$(dd if="$DTBO_BLOCK" bs=1 count="$(wc -c < "$TMP_DIR/dtbo.img")" 2>/dev/null | sha256sum | awk '{ print $1 }')"
+[ "$WRITTEN_SHA256" = "$EXPECTED_SHA256" ] || abort "post-write DTBO checksum mismatch"
+
+sync
+ui_print "DTBO verified: M21 sensorhub firmware reference installed"
+exit 0

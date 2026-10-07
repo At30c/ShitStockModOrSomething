@@ -1,0 +1,34 @@
+From: At30c <PabloAtsoc9993@outlook.com>
+Subject: [PATCH] m21s: restore ordered TEEgris startup after node fix
+
+The asynchronous property actions allowed post-fs to continue while TZTS and
+its ACSD connection were not established.  Normal-boot pstore consequently
+showed a ready base tzdaemon but no persistent tzts_daemon, while Keymaster
+and Keystore2 remained blocked.  The original Samsung sequence is safe again
+after explicitly preparing all three TEEgris device nodes.
+
+Run the complete TEEgris chain synchronously in post-fs, wait for both daemon
+readiness properties, and only then restart the legacy Keymaster bridge and
+Keystore2.  This preserves Samsung's required ordering without the former
+device-node permission deadlock.
+
+--- a/etc/init/teegris_v3.rc
++++ b/etc/init/teegris_v3.rc
+@@ -14,15 +14,13 @@ on post-fs
+     chmod 0660 /dev/tziwshmem
+     start tz_service
+     start tz_msg_recv
+-
+-on property:vendor.tzdaemon=Ready
++    wait_for_prop vendor.tzdaemon Ready
+     setprop vendor.TEEGRIS.loaded true
+     write /proc/iccc_ready 1
+     start tzts_service
+-
+-on property:vendor.tzts_daemon=Ready
++    wait_for_prop vendor.tzts_daemon Ready
+     restart vendor.keymaster-4-0
+     restart keystore2
+ 
+ on post-fs-data
+ # TEEGRIS service

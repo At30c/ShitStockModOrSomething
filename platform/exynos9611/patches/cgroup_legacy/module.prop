@@ -1,0 +1,6 @@
+id=cgroup_legacy
+name=Source-compatible cgroup configuration for Exynos 9611
+version=1.0
+versionCode=1
+author=At30c
+description=Installs the source-compatible cgroup/task-profile descriptors without advertising cgroup.kill unsupported by the F415F 4.14 kernel.

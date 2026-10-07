@@ -1,0 +1,53 @@
+From 8d2f4a6b7b0d1e4f3a2f5f6f2d6d1c9e8b7a6c5d Mon Sep 17 00:00:00 2001
+From: StockMod <stockmod@localhost>
+Date: Wed, 7 Oct 2026 13:00:00 -0300
+Subject: [PATCH] Disable unsupported DressRoom object capture on target
+
+The One UI 9 DressRoom APK sees the imported ArcSoft object-capture library
+and reports support on the M21s. Its capture worker never returns a result for
+the M21s image pipeline, leaving the save state in SAVING_WAITING_OBJECT.
+Force the normal static-image path; wallpaper setting still uses the regular
+crop/save flow.
+
+---
+ smali_classes2/d7/k.smali | 24 +-----------------------
+ 1 file changed, 1 insertion(+), 23 deletions(-)
+
+diff --git a/smali_classes2/d7/k.smali b/smali_classes2/d7/k.smali
+index 000000000..111111111 100644
+--- a/smali_classes2/d7/k.smali
++++ b/smali_classes2/d7/k.smali
+@@ -127,32 +127,8 @@
+ .end method
+ 
+ .method public final b()Z
+-    .locals 1
++    .locals 0
+ 
+-    sget-object v0, Ld7/k;->e:Lcom/samsung/android/app/sdk/deepsky/objectcapture/base/ObjectCapture;
+-
+-    if-nez v0, :cond_0
+-
+-    iget-object p0, p0, Ld7/k;->a:Landroid/content/Context;
+-
+-    invoke-static {p0}, Lk2/f;->y(Landroid/content/Context;)V
+-
+-    :cond_0
+-    sget-object p0, Ld7/k;->e:Lcom/samsung/android/app/sdk/deepsky/objectcapture/base/ObjectCapture;
+-
+-    if-eqz p0, :cond_1
+-
+-    invoke-interface {p0}, Lcom/samsung/android/app/sdk/deepsky/objectcapture/base/ObjectCapture;->isObjectCaptureSupported()Z
+-
+-    move-result p0
+-
+-    const/4 v0, 0x1
+-
+-    if-ne p0, v0, :cond_1
+-
+-    return v0
+-
+-    :cond_1
+     const/4 p0, 0x0
+ 
+     return p0

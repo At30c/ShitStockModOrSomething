@@ -330,6 +330,9 @@ GENERATE_UPDATER_SCRIPT()
                     echo    '");'
                 fi
             done
+            if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify" ]; then
+                cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify"
+            fi
             echo -e "\n# Update dynamic partition metadata\n"
             echo -n 'assert(update_dynamic_partitions(package_extract_file("dynamic_partitions_op_list")'
             if [ -f "$TMP_DIR/unsparse_super_empty.img" ]; then
@@ -510,7 +513,16 @@ while IFS= read -r f; do
     IMG="$(basename "$f")"
     if [ -f "$TMP_DIR/source/$IMG" ] && \
             cmp -s "$TMP_DIR/source/$IMG" "$f"; then
-        LOG "- Skipping unchanged $IMG"
+        if [[ "$IMG" == "prism.img" || "$IMG" == "optics.img" ]]; then
+            # The target installer flashes these physical partitions directly.
+            # Keep a payload even when the target image is byte-identical to the
+            # source image; otherwise install-end.edify would reference a file
+            # that was removed as an unchanged top-level image.
+            LOG "- Keeping unchanged physical image $IMG"
+            cp -a "$f" "$TMP_DIR/$IMG" || exit 1
+        else
+            LOG "- Skipping unchanged $IMG"
+        fi
         rm -f "$f"
     else
         LOG "- Copying changed $IMG from target files"

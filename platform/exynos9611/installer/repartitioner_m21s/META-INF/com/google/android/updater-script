@@ -1,0 +1,27 @@
+set_progress(0.00);
+ui_print(" ");
+ui_print("Experimental M21s / F41 repartitioner");
+ui_print("Target: SM-F415F (Exynos 9611), 64-GB layout");
+ui_print(" ");
+ui_print("Based on the Exynos 7870 universal repartitioner by @Astrako");
+ui_print("and adapted from the A21s/Exynos 850 package.");
+ui_print(" ");
+ui_print("WARNING: this rewrites GPT and erases userdata.");
+ui_print("Use only on SM-F415F/f41 with a full stock PIT available.");
+ui_print(" ");
+
+set_progress(0.30);
+package_extract_file("repartition.sh", "/tmp/m21s-repartition.sh");
+package_extract_file("sgdisk", "/tmp/sgdisk");
+set_perm(0, 0, 0755, "/tmp/m21s-repartition.sh");
+set_perm(0, 0, 0755, "/tmp/sgdisk");
+run_program("/tmp/m21s-repartition.sh");
+assert(file_getprop("/tmp/m21s-repartitioner.status", "status") == "ok");
+
+set_progress(0.90);
+ui_print(" ");
+ui_print("GPT update finished.");
+ui_print("Reboot recovery before flashing the ROM.");
+ui_print("Format data and cache after recovery restarts.");
+ui_print(" ");
+set_progress(1.00);

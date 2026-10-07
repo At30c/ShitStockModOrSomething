@@ -16,6 +16,38 @@ ADD_TARGET_VNDK_APEX() {
     local STOCK_APEX
     STOCK_APEX="$FW_DIR/$(tr "/" "_" <<< "$TARGET_FW_SOURCE")/system/system/system_ext/$VNDK_APEX_REL"
 
+    # The Samsung Dumps X1S Android 13 snapshot provides a real versioned
+    # system_ext VNDK v31 APEX. Its manifest, library lists and payload file
+    # set match the F415F v31 snapshot, so use it as the explicit M21s test
+    # donor. Keep the target stock fallback below for recovery if the prebuilt
+    # is intentionally removed.
+    if [[ "$TARGET_CODENAME" == "m21s" && "$TARGET_VNDK_VERSION" == "31" ]]; then
+        if [ -f "$SRC_DIR/prebuilts/samsung/x1sxxx/system_ext/$VNDK_APEX_REL" ]; then
+            ADD_TO_WORK_DIR "x1sxxx" "system_ext" "$VNDK_APEX_REL" \
+                0 0 644 "u:object_r:system_file:s0"
+            return $?
+        fi
+
+        # Samsung's F415F/M21s firmware stores its own matching VNDK as
+        # com.android.vndk.current.apex under /system/system/apex rather than
+        # exposing a versioned file under system_ext. Its embedded manifest is
+        # com.android.vndk.v31, so stage that original target APEX if the
+        # explicit X1S prebuilt is unavailable.
+        local TARGET_CURRENT_APEX
+        local STAGED_SOURCE
+        TARGET_CURRENT_APEX="$FW_DIR/$(tr "/" "_" <<< "$TARGET_FW_SOURCE")/system/system/apex/com.android.vndk.current.apex"
+        if [ -f "$TARGET_CURRENT_APEX" ]; then
+            STAGED_SOURCE="$TMP_DIR/vndk-v31-target-source"
+            rm -rf "$STAGED_SOURCE"
+            mkdir -p "$STAGED_SOURCE/system/system/system_ext/apex"
+            cp -a "$TARGET_CURRENT_APEX" \
+                "$STAGED_SOURCE/system/system/system_ext/$VNDK_APEX_REL"
+            ADD_TO_WORK_DIR "$STAGED_SOURCE" "system_ext" "$VNDK_APEX_REL" \
+                0 0 644 "u:object_r:system_file:s0"
+            return $?
+        fi
+    fi
+
     # Prefer the target stock firmware so the snapshot, signing lineage and
     # vendor ABI all come from the same Samsung release family.
     if [ -f "$STOCK_APEX" ]; then

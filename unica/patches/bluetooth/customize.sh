@@ -258,28 +258,36 @@ else
     fi
 fi
 
-# Disable VaultKeeper support
-# Before: [tbnz w8, #0, #0xXXXXXX]
-# After: [b #0xXXXXXX]
-VK_FROM="2897773948050037"
-VK_TO="289777392a000014"
-
-# Android 16 BP4A moved the flag inside the Bluetooth native context, which
-# changed the preceding LDRB encoding.  The TBNZ and its destination retain
-# the same purpose, so patch the matching firmware-specific instruction pair.
-if xxd -p -c 0 "$TMP_DIR/unknown/apex_payload/lib64/libbluetooth_jni.so" | \
-        grep -q "8876743948050037"; then
+# Disable VaultKeeper support when the donor native implementation contains
+# the known branch.  This is deliberately conditional: older targets and
+# newer Android 16 Bluetooth builds can keep the VaultKeeperManager symbols
+# but use a different control flow.  Applying the donor bytes to an unrelated
+# TBNZ occurrence would silently alter Bluetooth behavior, so leave such
+# binaries untouched and let the target's native VaultKeeper stack decide.
+BT_NATIVE="$TMP_DIR/unknown/apex_payload/lib64/libbluetooth_jni.so"
+if xxd -p -c 0 "$BT_NATIVE" | grep -q "8856523948050037"; then
+    # Current S24+/Android 16 donor used for the M21s port.  The VaultKeeper
+    # flag moved to [x20,#0x495], while the tbnz destination is unchanged.
+    VK_FROM="8856523948050037"
+    VK_TO="885652392a000014"
+elif xxd -p -c 0 "$BT_NATIVE" | grep -q "2897773948050037"; then
+    VK_FROM="2897773948050037"
+    VK_TO="289777392a000014"
+elif xxd -p -c 0 "$BT_NATIVE" | grep -q "8876743948050037"; then
+    # Android 16 BP4A variant with a different LDRB displacement.
     VK_FROM="8876743948050037"
     VK_TO="887674392a000014"
-elif xxd -p -c 0 "$TMP_DIR/unknown/apex_payload/lib64/libbluetooth_jni.so" | \
-        grep -q "28f7773948050037"; then
+elif xxd -p -c 0 "$BT_NATIVE" | grep -q "28f7773948050037"; then
     # August firmware variant used by current upstream donors.
     VK_FROM="28f7773948050037"
     VK_TO="28f777392a000014"
 fi
 
-HEX_PATCH "$TMP_DIR/unknown/apex_payload/lib64/libbluetooth_jni.so" \
-    "$VK_FROM" "$VK_TO" > /dev/null
+if [ -n "${VK_FROM:-}" ]; then
+    HEX_PATCH "$BT_NATIVE" "$VK_FROM" "$VK_TO" > /dev/null
+else
+    LOGW "VaultKeeper native branch not found in ${BT_NATIVE#$TMP_DIR/unknown/}; skipping donor HEX patch"
+fi
 
 BUILD_APK_IN_APEX "$BT_APK"
 BUILD_APK_IN_APEX "$TMP_DIR/unknown/apex_payload/javalib/framework-bluetooth.jar"
@@ -290,7 +298,7 @@ SIGN_APEX "$WORK_DIR/system/system/apex/com.android.bt.apex"
 
 rm -rf "$TMP_DIR"
 
-unset SOURCE_FIRMWARE_PATH BT_APK BT_APK_REL BT_APK_WORK_PATH VK_FROM VK_TO
+unset SOURCE_FIRMWARE_PATH BT_APK BT_APK_REL BT_APK_WORK_PATH BT_NATIVE VK_FROM VK_TO
 unset -f BUILD_APK_IN_APEX BUILD_APEX BUILD_PAYLOAD \
     DECODE_APEX DECODE_APK_IN_APEX EXTRACT_PAYLOAD \
     LOG_MISSING_PATCHES SIGN_APEX SIGN_PAYLOAD

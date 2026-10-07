@@ -1,0 +1,41 @@
+From 94effc1ac91cdb0640d904d711cd683872a64ae9 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Fri, 2 Oct 2026 22:32:00 -0300
+Subject: [PATCH] Disable satellite app routing on F415F
+
+The Android 17 connectivity module redirects applications carrying the
+SATELLITE_DATA_OPTIMIZED metadata to a satellite-only default network. The
+F415F has no satellite service, so that network is an empty placeholder and
+Samsung Account, SetupWizard and other opted-in applications lose the valid
+Wi-Fi route.
+
+Do not publish app opt-in policies on this target. Ordinary Wi-Fi and mobile
+default-network selection remains unchanged.
+---
+ .../AppOptInDefaultNetworkController.smali       | 12 +-----------
+ 1 file changed, 1 insertion(+), 11 deletions(-)
+
+diff --git a/smali/android/net/connectivity/com/android/server/connectivity/AppOptInDefaultNetworkController.smali b/smali/android/net/connectivity/com/android/server/connectivity/AppOptInDefaultNetworkController.smali
+index e31f49c..a547269 100644
+--- a/smali/android/net/connectivity/com/android/server/connectivity/AppOptInDefaultNetworkController.smali
++++ b/smali/android/net/connectivity/com/android/server/connectivity/AppOptInDefaultNetworkController.smali
+@@ -809,16 +809,8 @@
+ .end method
+
+ .method private reportAppOptInDefaultNetworkPolicies()V
+-    .locals 1
++    .locals 0
+
+-    iget-object v0, p0, Landroid/net/connectivity/com/android/server/connectivity/AppOptInDefaultNetworkController;->mCallback:Ljava/util/function/Consumer;
+-
+-    invoke-direct {p0}, Landroid/net/connectivity/com/android/server/connectivity/AppOptInDefaultNetworkController;->buildAppOptInDefaultNetworkPolicies()Ljava/util/List;
+-
+-    move-result-object p0
+-
+-    invoke-interface {v0, p0}, Ljava/util/function/Consumer;->accept(Ljava/lang/Object;)V
+-
+     return-void
+ .end method
+ 
+-- 
+2.51.0

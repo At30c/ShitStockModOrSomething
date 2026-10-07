@@ -133,6 +133,9 @@ GENERATE_UPDATER_SCRIPT()
         if $TARGET_USE_DYNAMIC_PARTITIONS; then
             # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#4007
             echo -e "\n# --- Start patching dynamic partitions ---\n"
+            if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify" ]; then
+                cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify"
+            fi
             echo -e "\n# Update dynamic partition metadata\n"
             echo -n 'assert(update_dynamic_partitions(package_extract_file("dynamic_partitions_op_list")'
             if [ -f "$TMP_DIR/unsparse_super_empty.img" ]; then

@@ -1,0 +1,69 @@
+From cb1703b9794bd2478511a8c9cee9b10ae34e2ea6 Mon Sep 17 00:00:00 2001
+From: At30c <PabloAtsoc9993@outlook.com>
+Date: Sun, 27 Sep 2026 01:01:24 -0300
+Subject: [PATCH] OMCAgent: append system recommended-app catalogue
+
+Legacy target firmwares retain their regional catalogue on /prism, which
+StockMod does not rebuild. Preserve that catalogue and append StockMod's
+system catalogue to its raw app list before OMCAgent initializes it. App
+discovery, download, and installation remain handled by OMCAgent's existing
+providers; duplicate app IDs stay owned by the regional catalogue.
+
+---
+ smali/u7/c.smali | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/smali/u7/c.smali b/smali/u7/c.smali
+index 180c53b..eaa7512 100644
+--- a/smali/u7/c.smali
++++ b/smali/u7/c.smali
+@@ -298,7 +298,47 @@
+     invoke-static {v1, v0}, Lu7/c;->m(Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;)Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;
+ 
+     move-result-object p1
+ 
++    # Merge raw rows before initApp() converts them into appMap.
++    const-string v0, "/system/etc/omcagent"
++
++    const-string v1, "unica_appres.json"
++
++    invoke-static {v0, v1}, Lu7/c;->d(Ljava/lang/String;Ljava/lang/String;)Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;
++
++    move-result-object v0
++
++    if-eqz v0, :stockmod_omc_catalog_ready
++
++    if-nez p1, :stockmod_omc_merge_catalogues
++
++    move-object p1, v0
++
++    goto :stockmod_omc_catalog_ready
++
++    :stockmod_omc_merge_catalogues
++    invoke-virtual {p1}, Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;->getAppRow()Ljava/util/List;
++
++    move-result-object v1
++
++    invoke-virtual {v0}, Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;->getAppRow()Ljava/util/List;
++
++    move-result-object v2
++
++    invoke-interface {v1, v2}, Ljava/util/List;->addAll(Ljava/util/Collection;)Z
++
++    invoke-virtual {p1, v1}, Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;->setAppRow(Ljava/util/List;)V
++
++    # ListChange uses the catalogue version to decide whether to replace its
++    # database. Preserve regional app ownership, but use StockMod's version
++    # so an updated fallback catalogue is not treated as unchanged.
++    invoke-virtual {v0}, Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;->getVersion()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-virtual {p1, v1}, Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;->setVersion(Ljava/lang/String;)V
++
++    :stockmod_omc_catalog_ready
+     if-eqz p1, :cond_3
+ 
+     sget-object v0, Lcom/samsung/android/app/omcagent/rna/code/ConfigType;->ar:Lcom/samsung/android/app/omcagent/rna/code/ConfigType;
+-- 
+2.53.0

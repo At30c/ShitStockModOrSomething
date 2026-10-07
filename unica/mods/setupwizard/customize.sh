@@ -26,8 +26,15 @@ SMALI_PATCH "system" "system/priv-app/SecSetupWizard_Global/SecSetupWizard_Globa
     > /dev/null
 unset NAV_STEP_FILE NAV_STEP_METHOD SETUPWIZARD_ACTIVITY SETUPWIZARD_ACTIVITY_METHOD
 
-LOG "- Disabling Recommended apps step"
-EVAL "sed -i \"/omcagent/d\" \"$APKTOOL_DIR/system/priv-app/SecSetupWizard_Global/SecSetupWizard_Global.apk/res/values/arrays.xml\""
+# Legacy target firmwares keep OMC carrier data in the separate prism
+# partition. That partition is not rebuilt by the ROM, and may contain an
+# empty catalogue. Keep a small, system-side fallback for OMCAgent; the agent
+# still resolves and downloads each package through its normal provider flow.
+LOG "- Adding OMCAgent recommended-app fallback catalogue"
+EVAL "mkdir -p \"$WORK_DIR/system/system/etc/omcagent\""
+EVAL "cp -a \"$MODPATH/omcagent/unica_appres.json\" \"$WORK_DIR/system/system/etc/omcagent/unica_appres.json\""
+SET_METADATA "system" "system/etc/omcagent" 0 0 755 "u:object_r:system_file:s0"
+SET_METADATA "system" "system/etc/omcagent/unica_appres.json" 0 0 644 "u:object_r:system_file:s0"
 
 # Dynamically patch SecSetupWizard_Global
 # - Add missing/non-xml files in place

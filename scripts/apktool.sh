@@ -7,6 +7,14 @@ source "$SRC_DIR/scripts/utils/build_utils.sh" || exit 1
 
 FRAMEWORK_DIR="$TOOLS_DIR/apktool/framework"
 FRAMEWORK_TAG="$(GET_PROP "system" "ro.build.version.incremental")"
+# aapt2 and Apktool's intermediate archives can be very large. The host
+# /tmp is often a small tmpfs, so keep Java/apktool intermediates on the ROM
+# build volume instead of failing with generic archive I/O errors.
+APKTOOL_JAVA_TMP_DIR="${APKTOOL_JAVA_TMP_DIR:-$TMP_DIR/apktool-java}"
+mkdir -p "$APKTOOL_JAVA_TMP_DIR" || exit 1
+# The apktool wrapper prepends the JVM option dash itself. Passing -J-D would
+# therefore become --Djava.io.tmpdir; use -JD so it emits -Djava.io.tmpdir.
+APKTOOL_JAVA_TMP_ARG="-JDjava.io.tmpdir=$APKTOOL_JAVA_TMP_DIR"
 
 FORCE=false
 JOBS="1"
@@ -32,7 +40,7 @@ BUILD()
     cp -a "$OUTPUT_PATH/original/META-INF" "$OUTPUT_PATH/build/apk/META-INF"
 
     # Build APK with --shorten-resource-paths (https://developer.android.com/tools/aapt2#optimize_options)
-    EVAL "apktool -JXmx${HEAP_SIZE}m b -j \"$THREAD_COUNT\" -p \"$FRAMEWORK_DIR\" -srp \"$OUTPUT_PATH\"" || exit 1
+    EVAL "apktool \"$APKTOOL_JAVA_TMP_ARG\" -JXmx${HEAP_SIZE}m b -j \"$THREAD_COUNT\" -p \"$FRAMEWORK_DIR\" -srp \"$OUTPUT_PATH\"" || exit 1
 
     local FILE_NAME
     FILE_NAME="$(basename "$INPUT_FILE")"
@@ -159,7 +167,7 @@ DECODE()
     # - Disabled debug info
     # - Use .locals directive instead of the .registers one
     # - Use a sequential numbering scheme for labels
-    EVAL "apktool -JXmx${HEAP_SIZE}m d --no-debug-info -j \"$THREAD_COUNT\" -o \"$OUTPUT_PATH\" -p \"$FRAMEWORK_DIR\" -t \"$FRAMEWORK_TAG\" \"$INPUT_FILE\"" || exit 1
+    EVAL "apktool \"$APKTOOL_JAVA_TMP_ARG\" -JXmx${HEAP_SIZE}m d --no-debug-info -j \"$THREAD_COUNT\" -o \"$OUTPUT_PATH\" -p \"$FRAMEWORK_DIR\" -t \"$FRAMEWORK_TAG\" \"$INPUT_FILE\"" || exit 1
 
     if [ -n "$CACHE_PATH" ]; then
         local DECODED_CLASS_COUNT

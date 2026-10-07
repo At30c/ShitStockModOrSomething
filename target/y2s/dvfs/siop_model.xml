@@ -75,12 +75,26 @@
 
         <component name="AP" tempType="LRP" >
             <limiter name="CPUFreqMax" step="0" temp="350:380:450:470" value="-1:1687587:1687587:1271689" />
-            <limiter name="GPUFreqMax" step="0" temp="350:380:450:470" value="-1:377000:377000:260000"  />
+            <!--
+              The Android 17 health service applies this limit directly to the
+              Exynos 990 Mali driver's gpu_max_clock.  The previous target
+              table capped the GPU at 377 MHz from 35 C onward, which made
+              normal UI interaction jank long before the GPU thermal trip
+              (65 C). Keep thermal derating, but reserve the severe cap for
+              genuinely elevated LRP temperatures.
+            -->
+            <limiter name="GPUFreqMax" step="0" temp="380:440:480:500" value="-1:572000:455000:455000:260000"  />
         </component>
 
         <component name="DISPLAY" tempType="LRP">
             <limiter name="Brightness" temp="390" value="-1:201:144" />
-            <limiter name="LimitHrr" temp="460" value="-1:1" />
+            <!--
+              Do not force the panel to 60 Hz during normal warm-climate use.
+              The previous 46 C LRP threshold was reached around 45 C SKIN and
+              overrode the user's Adaptive (120 Hz) selection. Keep the
+              thermal safeguard, but engage it only at elevated LRP levels.
+            -->
+            <limiter name="LimitHrr" temp="500" value="-1:1" />
         </component>
 
         <component name="CP" tempType="LRP*BAT">

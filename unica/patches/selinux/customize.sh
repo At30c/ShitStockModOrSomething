@@ -11,6 +11,19 @@ heatmap_default
 heatmap_default_exec
 "
 
+# The S24+ system_ext mapping contains these API-31 compatibility attributes,
+# but the M21s/F415F vendor policy does not publish them. Keeping their
+# expandtypeattribute/typeattributeset pairs makes Android 17's secilc abort
+# during first-stage SELinux policy compilation. They are not required by the
+# target vendor policy, so remove the aliases through the normal compatibility
+# mapping cleanup below.
+if [[ "$TARGET_CODENAME" == "m21s" ]]; then
+    ENTRIES+="
+perf_prop
+qb_id_prop
+"
+fi
+
 DUPLICATES+="
 init.svc.vendor.wvkprov_server_hal
 "
@@ -84,20 +97,62 @@ if ! grep -qF "$ION_ALLOCATOR_RULE" "$VENDOR_SEPOLICY"; then
     PATCHED=true
 fi
 
-# The Android 17 suspend daemon reads the legacy Exynos wakeup-source tree
-# while collecting wakelock statistics. The source policy labels that tree
-# but does not grant the system_suspend domain read access, so every wakeup
-# entry logs EACCES even though suspend itself is otherwise operational.
-SUSPEND_DEBUGFS_RULE="(allow system_suspend debugfs (dir (getattr search)))"
-SUSPEND_WAKEUP_DIR_RULE="(allow system_suspend debugfs_wakeup_sources (dir (ioctl read getattr lock open watch watch_reads search)))"
-SUSPEND_WAKEUP_FILE_RULE="(allow system_suspend debugfs_wakeup_sources (file (ioctl read getattr lock map open watch watch_reads)))"
-SUSPEND_WAKEUP_LINK_RULE="(allow system_suspend debugfs_wakeup_sources (lnk_file (ioctl read getattr lock open watch watch_reads)))"
-for SUSPEND_RULE in "$SUSPEND_DEBUGFS_RULE" "$SUSPEND_WAKEUP_DIR_RULE" "$SUSPEND_WAKEUP_FILE_RULE" "$SUSPEND_WAKEUP_LINK_RULE"; do
+# Both suspend implementations enumerate /sys/class/wakeup.  On current
+# devices its links resolve to sysfs_wakeup, but on the Exynos 990 they also
+# resolve to generic sysfs nodes (sensor/biometric wakeups) and to vendor
+# sysfs_battery nodes (charging wakeups).  Android 17 supplies the former
+# sysfs_wakeup rules, but not the two legacy target labels, which makes the
+# running system_suspend service continuously fail to read event_count.
+#
+# Keep the compatibility grant read-only and limited to system_suspend.  The
+# vendor policy already groups its intended suspend-readable target labels in
+# system_suspend_access_sysnode, so do not name every vendor type directly.
+# /sys/kernel/debug/wakeup_sources is not used here and deliberately remains
+# inaccessible.
+SUSPEND_REQUIRED_RULES=(
+    "(allow system_suspend sysfs_wakeup (dir (ioctl read getattr lock open watch watch_reads search)))"
+    "(allow system_suspend sysfs_wakeup (file (ioctl read getattr lock map open watch watch_reads)))"
+    "(allow system_suspend sysfs_wakeup (lnk_file (ioctl read getattr lock map open watch watch_reads)))"
+    "(allow system_suspend_server system_suspend_hwservice (hwservice_manager (add find)))"
+    "(allow system_suspend_server hidl_base_hwservice (hwservice_manager (add)))"
+)
+for SUSPEND_RULE in "${SUSPEND_REQUIRED_RULES[@]}"; do
     if ! grep -q -F "$SUSPEND_RULE" "$WORK_DIR/system/system/etc/selinux/plat_sepolicy.cil"; then
-        printf '%s\n' "$SUSPEND_RULE" >> "$WORK_DIR/system/system/etc/selinux/plat_sepolicy.cil"
+        ABORT "Missing required system suspend SELinux rule: $SUSPEND_RULE"
+        return 1
+    fi
+done
+
+SUSPEND_PLATFORM_POLICY="$WORK_DIR/system/system/etc/selinux/plat_sepolicy.cil"
+SUSPEND_PLATFORM_RULES=(
+    "(allow system_suspend sysfs (dir (ioctl read getattr lock open watch watch_reads search)))"
+    "(allow system_suspend sysfs (file (ioctl read getattr lock map open watch watch_reads)))"
+    "(allow system_suspend sysfs (lnk_file (ioctl read getattr lock map open watch watch_reads)))"
+)
+for SUSPEND_RULE in "${SUSPEND_PLATFORM_RULES[@]}"; do
+    if ! grep -q -F "$SUSPEND_RULE" "$SUSPEND_PLATFORM_POLICY"; then
+        printf '%s\n' "$SUSPEND_RULE" >> "$SUSPEND_PLATFORM_POLICY"
         PATCHED=true
     fi
 done
+
+# system_suspend_access_sysnode is declared by vendors that need system_suspend
+# to inspect legacy sysfs wakeup providers.  Add the narrow target-side grant
+# only when that compatibility attribute exists, so other targets are not
+# changed or made dependent on a target-private type.
+if grep -q -F '(typeattributeset system_suspend_access_sysnode ' "$VENDOR_SEPOLICY"; then
+    SUSPEND_VENDOR_RULES=(
+        "(allow system_suspend system_suspend_access_sysnode (dir (ioctl read getattr lock open watch watch_reads search)))"
+        "(allow system_suspend system_suspend_access_sysnode (file (ioctl read getattr lock map open watch watch_reads)))"
+        "(allow system_suspend system_suspend_access_sysnode (lnk_file (ioctl read getattr lock map open watch watch_reads)))"
+    )
+    for SUSPEND_RULE in "${SUSPEND_VENDOR_RULES[@]}"; do
+        if ! grep -q -F "$SUSPEND_RULE" "$VENDOR_SEPOLICY"; then
+            printf '%s\n' "$SUSPEND_RULE" >> "$VENDOR_SEPOLICY"
+            PATCHED=true
+        fi
+    done
+fi
 
 # Android 17 sources no longer ship the Android 10/11 compatibility mappings
 # required by the Exynos 990 vendor policy. They must exist in system_ext
@@ -170,7 +225,6 @@ if ! $PATCHED; then
 fi
 
 unset ENTRIES DUPLICATES CIL_NAME CIL_FILE PATCHED SYSTEM_EXT_SELINUX VENDOR_FILE_CONTEXTS VENDOR_SEPOLICY
-unset ION_ALLOCATOR_TYPE ION_ALLOCATOR_RULE SUSPEND_DEBUGFS_RULE SUSPEND_WAKEUP_DIR_RULE \
-    SUSPEND_WAKEUP_FILE_RULE SUSPEND_WAKEUP_LINK_RULE SUSPEND_RULE \
-    VENDOR_API_LIST LEGACY_MAPPING
+unset ION_ALLOCATOR_TYPE ION_ALLOCATOR_RULE SUSPEND_REQUIRED_RULES SUSPEND_PLATFORM_POLICY \
+    SUSPEND_PLATFORM_RULES SUSPEND_VENDOR_RULES SUSPEND_RULE VENDOR_API_LIST LEGACY_MAPPING
 unset -f GET_SYSTEM_EXT

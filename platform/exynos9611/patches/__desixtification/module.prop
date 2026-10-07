@@ -1,0 +1,6 @@
+id=_desixtification
+name=Exynos 9611 multilib compatibility
+version=1.0
+versionCode=1
+author=Tisenu100, ExtremeXT, At30c
+description=Reuses the audited ARM32 desixtification stack for the F415F/M21s Android 17 port.
