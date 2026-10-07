@@ -895,11 +895,11 @@ index 4c636da..c90fa6f 100644
  }
  
  /* The logic is similar to find_good_pkt_pointers(), both could eventually
-@@ -5442,7 +5512,6 @@ skip_full_check:
+@@ -5442,7 +5512,7 @@ skip_full_check:
  		convert_pseudo_ld_imm64(env);
  	}
  
--err_release_maps:
++err_release_maps:
  	if (!env->prog->aux->used_maps)
  		/* if we didn't copy map pointers into bpf_prog_info, release
  		 * them now. Otherwise free_used_maps() will release them.

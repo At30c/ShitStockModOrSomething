@@ -8417,3 +8417,8 @@ compilação, preservando o teste e a opção de stack protector. O mesmo conjun
 ignora somente opções de warning desconhecidas para que o clang 14 não trate as
 flags destinadas ao clang 20 como erro. As flags
 `-Wno-default-const-init-*` continuam condicionadas ao clang 20 ou mais novo.
+
+Na revisão antiga do `verifier.c`, o backport também precisa preservar o rótulo
+`err_release_maps:`. Ele é o destino dos caminhos de erro que liberam os mapas;
+removê-lo deixa `goto err_release_maps` sem destino e interrompe a compilação em
+`kernel/bpf/verifier.o`.
