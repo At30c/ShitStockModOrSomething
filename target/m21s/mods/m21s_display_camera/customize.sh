@@ -42,18 +42,24 @@ for CAMERA_PROCESSOR in \
 done
 
 # A late dlopen from SamsungCamera is checked against this camera-specific
-# public-library namespace. Publish the target closure explicitly; the target
-# firmware lists only MFP10, while LLHDR/HDR are reached by the node loader
-# and must also be visible in this mixed source/target image.
+# public-library namespace. Android 17 validates every entry here as a
+# Samsung-camera public library: it must end in .camera.samsung.so. The
+# ArcSoft implementations above retain their original .arcsoft.so names and
+# are resolved by the node loader from system/lib64; putting either name in
+# this list makes linkerconfig abort zygote before system_server starts.
 CAMERA_PUBLIC_LIBS="$WORK_DIR/system/system/etc/public.libraries-camera.samsung.txt"
 if [ ! -f "$CAMERA_PUBLIC_LIBS" ]; then
     ABORT "Samsung camera public-library list is missing"
     return 1
 fi
+# Remove entries left by an earlier M21s workdir or donor table. Keeping them
+# here is enough to make Android 17 abort zygote while parsing linkerconfig.
+sed -i \
+    -e '/^liblow_light_hdr\.arcsoft\.so$/d' \
+    -e '/^libhigh_dynamic_range\.arcsoft\.so$/d' \
+    "$CAMERA_PUBLIC_LIBS"
 for CAMERA_PUBLIC_LIB in \
-    "libMultiFrameProcessing10.camera.samsung.so" \
-    "liblow_light_hdr.arcsoft.so" \
-    "libhigh_dynamic_range.arcsoft.so"; do
+    "libMultiFrameProcessing10.camera.samsung.so"; do
     grep -qxF "$CAMERA_PUBLIC_LIB" "$CAMERA_PUBLIC_LIBS" || \
         printf '%s\n' "$CAMERA_PUBLIC_LIB" >> "$CAMERA_PUBLIC_LIBS"
 done
