@@ -8398,6 +8398,20 @@ Este procedimento é somente um teste manual; a build continua usando o HIDL
 original até que o AIDL seja habilitado explicitamente com
 `M21S_ENABLE_P3S_AIDL_VIBRATOR=1`.
 
+### Reversão do donor R11S no S20+ (2026-10-09)
+
+O HAL AIDL do `r11sxxx` foi removido de `prebuilts/samsung/r11sxxx/vendor`.
+Ele dependia de `android.hardware.vibrator-V2-ndk_platform.so`, que não estava
+presente no conjunto baixado, e não chegou a produzir uma build funcional para
+`y2s` ou `y2slte`. O donor `r11sxxx/system` continua disponível para os outros
+módulos de compatibilidade que o utilizam.
+
+`platform/exynos990/patches/vendor/customize.sh` voltou a usar o conjunto P3S
+para o vibrator em todos os targets Exynos 990: serviço AIDL, `rc`, VINTF,
+`android.hardware.vibrator-V1-ndk_platform.so` e
+`vendor.samsung.hardware.vibrator-V3-ndk_platform.so`. O donor P3S é o mesmo
+conjunto que foi carregado e registrado com sucesso no teste do M21s.
+
 ### Candidato AIDL completo encontrado no dump e2s (2026-10-08)
 
 O dump identificado no repositório como `e2s` (`SM-S926B`, Galaxy S24+,
