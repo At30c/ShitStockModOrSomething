@@ -17,7 +17,7 @@
 -    throw v0
 +    sget-object v0, Ll9/x2;->NOT_SUPPORT:Ll9/x2;
 +    iput-object v0, v2, Lv9/i;->e:Ll9/x2;
-+    move-object/from16 v1, p0
++    iget-object v1, v2, Lv9/i;->c:Lcom/sec/android/app/camera/layer/keyscreen/zoom/ZoomView;
 +    iput-object v0, v1, Lcom/sec/android/app/camera/layer/keyscreen/zoom/ZoomView;->f:Ll9/x2;
 +    # The F41 high-resolution profile reports a fixed 1.0x zoom range.
 +    # There is no zoom UI to configure; reject later touch events instead of

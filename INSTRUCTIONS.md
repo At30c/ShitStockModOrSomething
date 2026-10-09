@@ -8264,6 +8264,8 @@ do bootloop" abaixo registra a prova e o resultado no aparelho.
 O preview da câmera abre, mas o M21s ainda pode encerrar o aplicativo ao pressionar o disparador ou ao tocar no zoom. Há duas causas independentes na montagem Android 17:
 
 - O HAL F415F informa `minZoomLevel=maxZoomLevel=1000` no perfil de alta resolução. O primeiro patch removia apenas a exceção de `ZoomView.m()`, deixando eventos posteriores chegarem ao HAL com uma faixa inválida. O patch `target/m21s/mods/m21s_display_camera/SamsungCamera.apk/0002-Do-not-crash-when-high-resolution-zoom-is-fixed.patch` agora marca o presenter e a categoria da própria `ZoomView` como `Ll9/x2.NOT_SUPPORT` antes de retornar; assim tanto o caminho de toque quanto o clique direto são rejeitados quando o perfil é fixo.
+- O logcat `out/target/m21s/boot-diagnostics-2026-10-09_00:23:14-0300/logcat.txt` mostrou que a versão instalada ainda encerrava com `VerifyError` antes da captura: `ZoomView.m(cd.b)` rejeitava `copy-reference v1<-v20 type=PositiveShortConstant`. O método reutiliza `p0` como inteiro em `const/16 p0, 0x3e8`, portanto o patch não podia recuperar o objeto por `p0` no final. O patch foi corrigido para obter a instância segura por `iget-object v1, v2, Lv9/i;->c:ZoomView`; a fonte limpa recebeu o patch e o Apktool remontou o APK sem erro em `/tmp/m21s-camera-verify.Mjnloe/SamsungCamera-fixed.apk`.
+- A correção foi instalada no M21s pelo TWRP em 2026-10-09. O app permaneceu aberto, o estado chegou a `PREVIEWING` e o disparo concluiu o pós-processamento, salvando `20261009_004054.jpg`, sem novo `VerifyError`, `FATAL EXCEPTION` ou morte do processo. Os avisos restantes de `ExynosCameraMCPipe ... PIPE_3AA m_getBuffer fail ... ret(-1)` e o evento interno `Erro na câmera.(-10)` não interromperam esse teste; se voltarem a causar falha, devem ser tratados como diagnóstico separado do crash do verificador Java.
 - O APK SamsungCamera do Android 17 usa `libnode-jni` e carrega em tempo de captura os processadores que o S24+ não possui no sistema F415F: `libMultiFrameProcessing10.camera.samsung.so`, `liblow_light_hdr.arcsoft.so` e `libhigh_dynamic_range.arcsoft.so`. O módulo M21s importa somente as versões 64-bit do firmware `SM-F415F/ZTO`, com contexto `u:object_r:system_lib_file:s0`, e publica os nomes no namespace de câmera. Sem essa closure o preview pode funcionar, mas o disparo falha no primeiro `dlopen`/símbolo do pós-processamento.
 - O `logcat` de 2026-10-07 confirmou um bootloop diferente: o `zygote64` abortava em `linkerconfig` com `Cannot parse /system/etc/public.libraries-camera.samsung.txt` porque os nomes `liblow_light_hdr.arcsoft.so` e `libhigh_dynamic_range.arcsoft.so` não terminam em `.camera.samsung.so`. O módulo continua instalando essas bibliotecas em `system/lib64`, mas publica nessa lista somente `libMultiFrameProcessing10.camera.samsung.so`; os nomes ArcSoft originais não podem ser adicionados ao namespace público validado pelo Android 17.
 
@@ -8599,12 +8601,12 @@ Na revisão antiga do `verifier.c`, o backport também precisa preservar o rótu
 removê-lo deixa `goto err_release_maps` sem destino e interrompe a compilação em
 `kernel/bpf/verifier.o`.
 
-O método `ZoomView.m(Lcd/b;)V` declara `.locals 20`; portanto `p0` é um
-registrador físico alto e não pode ser usado diretamente por uma instrução que
-aceita somente `v0..v15`. O patch de zoom copia `p0` para `v1` com
-`move-object/from16` antes do `iput-object`, permitindo que o SamsungCamera
-seja remontado pelo Apktool. A instrução deve permanecer sem pontuação após
-`p0`, como exige a sintaxe Smali.
+O método `ZoomView.m(Lcd/b;)V` declara `.locals 20` e reutiliza o registrador
+físico de `p0` como constante durante o cálculo da faixa. Por isso o patch de
+zoom não pode usar `p0` depois desse ponto: o verificador o vê como inteiro e
+produz `VerifyError`. A instância correta da `ZoomView` permanece em
+`v2.c`; o patch usa `iget-object v1, v2, Lv9/i;->c:ZoomView` antes do `iput-object`,
+preservando a tipagem Smali e a montagem pelo Apktool.
 
 ### Donor HIDL do Galaxy A51 para o vibrator do M21s (2026-10-08)
 
