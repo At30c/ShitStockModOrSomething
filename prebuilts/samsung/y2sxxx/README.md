@@ -19,12 +19,12 @@ the standalone M21s test installer:
 ## Vibrator donor
 
 The same pinned `SM-G986B`/`AUT` donor also supplies the optional M21s S20+
-vibrator test module. The test consumes these files without replacing the
-M21s proprietary `vendor/lib64/hw/vibrator.default.so` in the ROM build:
+vibrator test module. The test consumes only the following service and HIDL
+interface files; it does not replace the M21s proprietary
+`vendor/lib64/hw/vibrator.default.so`:
 
 - `vendor/bin/hw/vendor.samsung.hardware.vibrator@2.2-service`
 - `vendor/etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc`
-- `vendor/lib64/hw/vibrator.default.so`
 - `system/system/lib64/android.hardware.vibrator@1.0.so` through `@1.3.so`
 - `vendor/lib64/vendor.samsung.hardware.vibrator@2.0.so` through `@2.2.so`
 

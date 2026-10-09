@@ -31,8 +31,6 @@ copy_payload "vendor/bin/hw/vendor.samsung.hardware.vibrator@2.2-service" \
     "vendor/bin/hw/vendor.samsung.hardware.vibrator@2.2-service"
 copy_payload "vendor/etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc" \
     "vendor/etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc"
-copy_payload "vendor/lib64/hw/vibrator.default.so" \
-    "vendor/lib64/hw/vibrator.default.so"
 
 for version in 1.0 1.1 1.2 1.3; do
     # The S20+ stores these HIDL interface libraries in system, while the
@@ -53,7 +51,6 @@ chmod 0755 "$TMP_DIR/META-INF/com/google/android/update-binary"
 
 (cd "$TMP_DIR" && sha256sum payload/vendor/bin/hw/vendor.samsung.hardware.vibrator@2.2-service \
     payload/vendor/etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc \
-    payload/vendor/lib64/hw/vibrator.default.so \
     payload/vendor/lib64/android.hardware.vibrator@1.0.so \
     payload/vendor/lib64/android.hardware.vibrator@1.1.so \
     payload/vendor/lib64/android.hardware.vibrator@1.2.so \
@@ -72,5 +69,6 @@ under /sdcard/m21s-vibrator-s20-backup-<timestamp>.
 EOF
 
 mkdir -p "$(dirname "$OUTPUT")"
+rm -f "$OUTPUT"
 (cd "$TMP_DIR" && zip -9qr "$OUTPUT" META-INF payload checksums.sha256 README.txt)
 printf '%s\n' "$OUTPUT"

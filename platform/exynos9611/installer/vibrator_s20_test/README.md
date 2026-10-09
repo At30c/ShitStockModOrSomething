@@ -4,7 +4,9 @@
 `out/fw/SM-G986B_AUT` firmware. The TWRP installer mounts `/vendor`, remounts
 it read-write, backs up every replaced file under `/sdcard`, installs the S20+
 vendor vibrator service and 64-bit HIDL dependencies, restores labels, and
-verifies the written files.
+verifies the written files. The M21s proprietary
+`vendor/lib64/hw/vibrator.default.so` is deliberately left untouched.
 
 This is a reversible hardware/HIDL test. It does not replace Android's system
-`libvibrator`/`libvibratorservice` or add the Android 17 AIDL vibrator HAL.
+`libvibrator`/`libvibratorservice`, the M21s hardware driver, or add the
+Android 17 AIDL vibrator HAL.

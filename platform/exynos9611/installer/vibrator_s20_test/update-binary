@@ -9,7 +9,6 @@ BACKUP_ROOT="/sdcard/m21s-vibrator-s20-backup-$(date +%Y%m%d-%H%M%S)"
 PAYLOADS="\
 vendor/bin/hw/vendor.samsung.hardware.vibrator@2.2-service \
 vendor/etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc \
-vendor/lib64/hw/vibrator.default.so \
 vendor/lib64/android.hardware.vibrator@1.0.so \
 vendor/lib64/android.hardware.vibrator@1.1.so \
 vendor/lib64/android.hardware.vibrator@1.2.so \

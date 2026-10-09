@@ -8318,6 +8318,167 @@ O teste opcional do vibrator do M21s usa agora o donor fixado em
 depender de `out/fw`; o `vibrator.default.so` incluído ali é apenas o payload
 do ZIP de teste e não é instalado automaticamente na ROM M21s.
 
+O módulo `target/m21s/mods/vendor` contém a migração experimental do vibrator
+usada no y2s em `platform/exynos990/patches/vendor`: remove o serviço HIDL F415F
+e instala o serviço AIDL, o `vendor.samsung.hardware.vibrator-default.rc`, a
+declaração VINTF e `vendor.samsung.hardware.vibrator-V3-ndk_platform.so` do
+`prebuilts/samsung/p3sxxx`. Ela permanece **desativada por padrão** mesmo com a
+dependência V1 agora disponível; pode ser habilitada somente para teste com
+`M21S_ENABLE_P3S_AIDL_VIBRATOR=1`. O
+`vibrator.default.so` e `libvibrator.so` originais do M21s permanecem intactos.
+
+### Teste P3S AIDL no M21s e rollback (2026-10-08)
+
+O ELF P3S declara `android.hardware.vibrator-V1-ndk_platform.so` em `DT_NEEDED`.
+O Android 17 do M21s só fornece a variante V2 no `com.android.vndk.v31.apex`
+(além da V4 no sistema). Uma tentativa anterior renomeou a V2 para V1 pelo
+TWRP; o serviço iniciou, mas caiu em `HwApi::hasAspEnable()` com `SIGSEGV`, e a
+consulta `supportsHapticEngine()` também derrubou o
+`system_server`. A causa foi incompatibilidade de ABI, não apenas o nome do
+arquivo. O rollback por `dd` restaurou o serviço HIDL, as bibliotecas
+`android.hardware.vibrator@1.x.so`, `vendor.samsung.hardware.vibrator@2.x.so` e
+o `vendor/etc/vintf/manifest.xml` original. Após o reboot,
+`sys.boot_completed=1`, sem crash do `system_server`; os hashes de
+`vendor/lib64/hw/vibrator.default.so` e `vendor/lib64/libvibrator.so` ficaram
+iguais aos blobs originais.
+
+### Dependência V1 real para o serviço AIDL P3S (2026-10-09)
+
+Foi adicionada a biblioteca arm64 oficial do [VNDK 30 do Android Open
+Source](https://android.googlesource.com/platform/prebuilts/vndk/v30/+/8252d85f0f7d0ea3263ab36dda6200e1ad3900e8/arm64/arch-arm64-armv8-a/shared/vndk-core/android.hardware.vibrator-V1-ndk_platform.so)
+em `prebuilts/samsung/p3sxxx/vendor/lib64`. Ela tem SONAME exatamente igual ao
+`DT_NEEDED` do serviço P3S e SHA-256
+`434f4ca8d7a4504ab1a4b9059e8c97f30b06754ebc08fadf15df902f9e136ab1`.
+
+A auditoria encontrou os seis símbolos Android `BnVibrator`/`IVibrator` que o
+serviço importa na V1; não foram usados aliases para V2/V4. O binário V1, o
+serviço P3S e `vendor.samsung.hardware.vibrator-V3-ndk_platform.so` também não
+contêm `ldaprb`, `ldaddal`, `paciasp` ou `autiasp`. O `customize.sh` do M21s
+agora copia essa V1 junto com o serviço quando
+`M21S_ENABLE_P3S_AIDL_VIBRATOR=1`; o caminho continua desativado por padrão.
+
+### Teste direto do AIDL P3S no M21s (2026-10-09)
+
+Para testar sem esperar uma compilação completa, o M21s foi confirmado pelo
+bootloader `F415FUBS3CWK2` e pelo hardware `exynos9611`, reiniciado no TWRP e
+teve a vendor original salva em
+`out/manual/m21s-vendor-before-p3s-aidl-20261009_001619.img` (758083584
+bytes; SHA-256
+`293c8afca2a86754206599baf9b4b0fcde59d4c17324cfae5c50037917afec08`).
+
+No `/vendor` montado em leitura e escrita, o teste moveu o serviço HIDL,
+seu `rc`, as bibliotecas `vendor.samsung.hardware.vibrator@2.0` a `@2.2` e
+as declarações HIDL para
+`/vendor/.m21s-vibrator-hidl-before-p3s-20261009`, e instalou o conjunto AIDL
+P3S:
+
+- `vendor/bin/hw/vendor.samsung.hardware.vibrator-service`;
+- `vendor/etc/init/vendor.samsung.hardware.vibrator-default.rc`;
+- `vendor/etc/vintf/manifest/vendor.samsung.hardware.vibrator-default.xml`;
+- `vendor/lib64/android.hardware.vibrator-V1-ndk_platform.so`;
+- `vendor/lib64/vendor.samsung.hardware.vibrator-V3-ndk_platform.so`.
+
+O `vendor/lib64/hw/vibrator.default.so` e o
+`vendor/lib64/libvibrator.so` permaneceram os blobs originais do M21s. Os
+contextos SELinux e permissões foram restaurados antes do reboot.
+
+Após iniciar o Android, o serviço AIDL ficou registrado como
+`android.hardware.vibrator.IVibrator/default`; o `VibratorManagerService`
+passou a reportar `vibratorIds=[0]`, `vibratorInfoLoadSuccessful=true` e
+`MOTOR_COIN_DC`. O comando
+`adb shell cmd vibrator_manager synced -f oneshot 500 255` terminou com
+`played: Step=500ms`, sem falha de linker, `SIGSEGV` ou `SIGILL`. Os artefatos
+de reprodução estão em
+`out/manual/m21s-p3s-aidl-test-20261009_001750/runtime/`, incluindo o
+`dumpsys-vibrator-manager.txt`, a lista de serviços e o logcat. Os avisos sobre
+`event_cmd`, `intensity` e outros nós opcionais ausentes são esperados no
+driver do M21s e não impediram o registro nem o acionamento do HAL.
+
+Este procedimento é somente um teste manual; a build continua usando o HIDL
+original até que o AIDL seja habilitado explicitamente com
+`M21S_ENABLE_P3S_AIDL_VIBRATOR=1`.
+
+### Candidato AIDL completo encontrado no dump e2s (2026-10-08)
+
+O dump identificado no repositório como `e2s` (`SM-S926B`, Galaxy S24+,
+Exynos 2400) não é o firmware do S20+ (`SM-G986B`, Exynos 990). Ele contém
+um conjunto AIDL diferente do P3S. O serviço
+`vendor.samsung.hardware.vibrator-service` declara apenas dependências que vêm
+junto do próprio conjunto:
+
+- `android.hardware.vibrator-V2-ndk.so` — SHA-256
+  `ea372345288f3222a906f6d50248cd511f72e7c2194710c4053d8c65da936f9f`;
+- `vendor.samsung.hardware.vibrator-V5-ndk.so` — SHA-256
+  `74a9f8007d455e060b7c281836cd493ae5d358cab80c08e40d386ae947221bb3`;
+- serviço AIDL — SHA-256
+  `fb30a93664c986f55f7250f0f1755fdd5cb12808cf54806159bcc26245eea2a0`.
+
+O fragmento VINTF declara `IVibrator/default` e `IVibratorManager/default`,
+ambos na versão 2. O `rc` usa os mesmos nós `timed_output` e `leds` presentes
+no driver original do M21s, acrescentando apenas nós opcionais de FIFO,
+`hybrid_haptic_engine` e `sec_vib_inputff`. O conjunto foi apenas baixado para
+`out/manual/samsung-dump-e2s-candidate`; não foi instalado. A auditoria de CPU
+abaixo bloqueia o uso direto via `dd` no M21s, mesmo mantendo
+`vibrator.default.so` e `libvibrator.so` originais.
+
+### Auditoria de compatibilidade Binder dos candidatos (2026-10-08)
+
+O `libbinder_ndk.so` 64-bit da base M21s e o do dump `e2s` são byte a byte
+idênticos:
+
+```text
+035395be52c63c9c6c0d00df93bbe009175b17d3a0f149cf9af6cf23821b5b6f
+```
+
+O Binder do S20+ tem um hash diferente, mas também exporta
+`LIBBINDER_NDK`/`LIBBINDER_NDK30`. O serviço e as duas bibliotecas AIDL `e2s`
+exigem apenas esses dois conjuntos de símbolos, que estão presentes nas três
+bases. O serviço não tem `DT_NEEDED` para `vibrator.default.so` ou
+`libvibrator.so`; esses blobs originais podem continuar intocados.
+
+O candidato `r11s` também exige apenas `LIBBINDER_NDK`/`LIBBINDER_NDK30`, e o
+`android.hardware.vibrator-V2-ndk_platform.so` do seu VNDK é byte a byte igual
+ao VNDK v31 extraído do M21s. Porém, o conjunto r11s usa nomes `_platform` e
+um `vendor.samsung.hardware.vibrator-V5-ndk_platform.so` específico da base;
+por isso ele é ABI-compatível no Binder, mas menos autocontido que o conjunto
+e2s. A compatibilidade de Binder não garante que os nós específicos do motor
+vibratório existam no kernel do M21s; isso ainda requer teste funcional.
+
+### Auditoria de instruções CPU do candidato e2s (2026-10-08)
+
+A auditoria ELF foi ampliada para não confundir ABI do Binder com compatibilidade
+do processador. Os três arquivos AArch64 do candidato e2s contêm instruções
+reais no segmento `.text`:
+
+| Arquivo | `ldaprb` | `ldaddal` |
+| --- | ---: | ---: |
+| `android.hardware.vibrator-V2-ndk.so` | 3 | 31 |
+| `vendor.samsung.hardware.vibrator-V5-ndk.so` | 4 | 15 |
+| `vendor.samsung.hardware.vibrator-service` | 4 | 22 |
+
+`ldaprb` requer a extensão ARMv8.3-A FEAT_LRCPC (RCpc), e `ldaddal` pertence
+às atomics LSE de ARMv8.1-A. O M21s usa Exynos 9611, com Cortex-A73/A53, e
+esses núcleos não oferecem FEAT_LRCPC. Isso já foi confirmado em execução com
+o candidato V2: o serviço abortou com `SIGILL` exatamente ao executar
+`ldaprb`. Portanto, o conjunto e2s **não pode ser instalado sem recompilação
+ou transformação para o M21s**, mesmo que o Binder seja compatível.
+
+O S20+ y2s usa Exynos 990, com núcleos Cortex-A76/A55 e o cluster customizado
+M5. A documentação dos A76/A55 confirma LDAPR/RCpc e LSE nos núcleos Arm,
+mas não temos uma leitura de `ID_AA64ISAR1_EL1` de cada núcleo M5 do aparelho.
+Além disso, os blobs HIDL originais do S20+ não contêm `ldaprb`; portanto o
+donor e2s não pode ser marcado como CPU-compatível com o S20+ sem esse teste
+por núcleo. Assim, a conclusão operacional é:
+
+* Binder: compatível entre e2s, S20+ e M21s (os símbolos exigidos são
+  `LIBBINDER_NDK`/`LIBBINDER_NDK30`; os arquivos do S20+ e do e2s não são
+  byte a byte iguais);
+* CPU: não comprovado para o S20+ y2s/Exynos 990 e incompatível com o M21s/
+  Exynos 9611 no estado binário atual;
+* não usar `dd` para colocar o conjunto e2s no M21s. A alternativa segura é
+  recompilar os binários para uma ISA compatível ou manter o serviço original
+  enquanto se faz um port específico.
+
 ### y2slte: causa definitiva do bootloop do `bpfloader` (2026-10-07)
 
 O backport de bounded loops em
@@ -8430,3 +8591,56 @@ aceita somente `v0..v15`. O patch de zoom copia `p0` para `v1` com
 `move-object/from16` antes do `iput-object`, permitindo que o SamsungCamera
 seja remontado pelo Apktool. A instrução deve permanecer sem pontuação após
 `p0`, como exige a sintaxe Smali.
+
+### Donor HIDL do Galaxy A51 para o vibrator do M21s (2026-10-08)
+
+O [dump público do Galaxy A51](https://dumps.tadiphone.dev/dumps/samsung/a51)
+foi fixado na branch
+`a51nsxx-user-13-TP1A.220624.014-A515FXXU8HWK1-release-keys` (Android 13,
+One UI 5.1). O A51 é um dos donors mais próximos do M21s porque usa a mesma
+família Exynos 9611; a página da Samsung descreve esse SoC com quatro Cortex-A73
+e quatro Cortex-A53.
+
+O conjunto HIDL foi preservado em
+`prebuilts/samsung/a51nsxx/vendor` e não está ligado à build. Ele contém o
+serviço `vendor.samsung.hardware.vibrator@2.2-service`, seu `rc`, o fragmento
+VINTF e as bibliotecas `android.hardware.vibrator@1.0` até `@1.3` e
+`vendor.samsung.hardware.vibrator@2.0` até `@2.2`. A auditoria contra os blobs
+originais do M21s encontrou:
+
+- o mesmo conjunto `DT_NEEDED` no serviço e todas as dependências resolvidas na
+  vendor do M21s;
+- os mesmos símbolos definidos, com a mesma contagem, no serviço e nas sete
+  bibliotecas HIDL;
+- ausência de `ldaprb`, `ldaddal`, `paciasp` e `autiasp` em todos os arquivos
+  analisados;
+- `vendor.samsung.hardware.vibrator@2.2-service.rc` byte a byte igual ao do
+  M21s e o mesmo bloco VINTF `ISehVibrator@2.2/default`.
+
+O A51 não deve fornecer `vendor/lib64/hw/vibrator.default.so` nem
+`vendor/lib64/libvibrator.so`: eles diferem dos blobs específicos do M21s e
+ficaram fora do prebuilt. Também não se deve substituir o `vendor/etc/vintf/manifest.xml`
+inteiro; apenas a declaração do HAL é relevante. O donor está preparado para
+um teste HIDL controlado, mas ainda não foi instalado no aparelho nem aplicado
+ao `customize.sh`.
+
+### Teste do donor A51 aplicado na vendor do M21s (2026-10-08)
+
+O aparelho foi confirmado pelo bootloader `F415FUBS3CWK2` e pelo hardware
+`exynos9611`, reiniciado no TWRP e teve a vendor extraída para
+`out/manual/m21s-vendor-original-20261008_010246.img` (SHA-256
+`70b27d3ddcfdb7950fce0015a0a37cca9551daa4ee6a3f2102767d0e9c8e09ee`). A
+vendor foi montada em `rw` no TWRP e recebeu apenas o serviço HIDL A51, o `rc`
+e as sete bibliotecas HIDL. O `vibrator.default.so`, o `libvibrator.so` e o
+`manifest.xml` original permaneceram intactos; os contexts foram restaurados.
+
+Após o reboot, o serviço A51 ficou ativo e registrou
+`vendor.samsung.hardware.vibrator@2.2::ISehVibrator/default` sem crash. O
+framework Android 17, porém, procura as instâncias AIDL
+`android.hardware.vibrator.IVibrator/default` e
+`IVibratorManager/default`; o `VibratorManagerService` terminou com
+`vibratorIds=[]` e `MOTOR_NONE`. Portanto, o donor HIDL A51 é carregável no
+M21s, mas não resolve a vibração nesta base Android 17 sem uma ponte AIDL ou
+um serviço AIDL compatível. Os registros estão em
+`out/manual/a51-vibrator-test-20261008_0107` e o rollback individual está em
+`out/manual/m21s-vendor-before-a51-20261008_0105`.

@@ -77,6 +77,7 @@ vendor/lib64/vendor.samsung.hardware.biometrics.face@2.0.so 0 0 644 capabilities
 vendor/lib64/vendor.samsung.hardware.biometrics.face@3.0.so 0 0 644 capabilities=0x0
 vendor/lib64/vendor.samsung.hardware.light-V1-ndk_platform.so 0 0 644
 vendor/lib64/vendor.samsung.hardware.vibrator-V3-ndk_platform.so 0 0 644 capabilities=0x0
+vendor/lib64/android.hardware.vibrator-V1-ndk_platform.so 0 0 644 capabilities=0x0
 vendor/saiv 0 2000 755 capabilities=0x0
 vendor/saiv/swisp_1.0 0 2000 755 capabilities=0x0
 vendor/saiv/swisp_1.0/db 0 2000 755 capabilities=0x0

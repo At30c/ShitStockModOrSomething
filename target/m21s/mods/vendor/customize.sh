@@ -106,6 +106,97 @@ grep -q -F '<fqname>@6.0::IEffectsFactory/default</fqname>' "$AUDIO_MANIFEST" ||
 }
 
 # -----------------------------------------------------------------------------
+# P3S AIDL vibrator HAL (experimental; enabled only explicitly)
+# -----------------------------------------------------------------------------
+# The P3S executable has a DT_NEEDED entry for
+# android.hardware.vibrator-V1-ndk_platform.so.  The exact arm64 VNDK 30
+# library is now kept with the P3S prebuilt; do not replace it with a renamed
+# V2/V4 library because those versions have different generated AIDL ABIs.
+if [ "${M21S_ENABLE_P3S_AIDL_VIBRATOR:-0}" != "1" ]; then
+    LOG "  - Keeping the stock M21s HIDL vibrator (P3S AIDL port is disabled by default)"
+else
+# Android 17's framework uses the AIDL vibrator provider. The stock F415F
+# vendor still exposes only the HIDL 1.3/2.2 services, so it is invisible to
+# libvibratorservice even though the kernel timed_output nodes are present.
+# Port the same P3S service used by the working y2s image. Keep the F415F
+# vibrator.default.so and libvibrator.so untouched: they are device-owned
+# implementation files and are not part of this interface migration.
+VIBRATOR_DONOR="p3sxxx"
+VIBRATOR_ROOT="$SRC_DIR/prebuilts/samsung/$VIBRATOR_DONOR"
+VIBRATOR_SERVICE="bin/hw/vendor.samsung.hardware.vibrator-service"
+VIBRATOR_RC="etc/init/vendor.samsung.hardware.vibrator-default.rc"
+VIBRATOR_VINTF="etc/vintf/manifest/vendor.samsung.hardware.vibrator-default.xml"
+VIBRATOR_CORE="lib64/android.hardware.vibrator-V1-ndk_platform.so"
+VIBRATOR_IMPL="lib64/vendor.samsung.hardware.vibrator-V3-ndk_platform.so"
+for VIBRATOR_PREBUILT in \
+    "$VIBRATOR_ROOT/vendor/$VIBRATOR_SERVICE" \
+    "$VIBRATOR_ROOT/vendor/$VIBRATOR_RC" \
+    "$VIBRATOR_ROOT/vendor/$VIBRATOR_VINTF" \
+    "$VIBRATOR_ROOT/vendor/$VIBRATOR_CORE" \
+    "$VIBRATOR_ROOT/vendor/$VIBRATOR_IMPL"; do
+    [ -f "$VIBRATOR_PREBUILT" ] || {
+        ABORT "P3S vibrator prebuilt is incomplete: ${VIBRATOR_PREBUILT#$VIBRATOR_ROOT/}"
+        return 1
+    }
+done
+
+for VIBRATOR_STOCK_BLOB in \
+    "bin/hw/vendor.samsung.hardware.vibrator@2.2-service" \
+    "etc/init/vendor.samsung.hardware.vibrator@2.2-service.rc" \
+    "lib64/vendor.samsung.hardware.vibrator@2.0.so" \
+    "lib64/vendor.samsung.hardware.vibrator@2.1.so" \
+    "lib64/vendor.samsung.hardware.vibrator@2.2.so"; do
+    DELETE_FROM_WORK_DIR "vendor" "$VIBRATOR_STOCK_BLOB" || return 1
+done
+
+# Remove stale HIDL declarations from the monolithic manifest. The AIDL
+# fragment below becomes the sole vibrator provider declaration.
+VIBRATOR_MANIFEST="$WORK_DIR/vendor/etc/vintf/manifest.xml"
+[ -f "$VIBRATOR_MANIFEST" ] || {
+    ABORT "M21s vendor VINTF manifest is missing while migrating the vibrator"
+    return 1
+}
+python3 - "$VIBRATOR_MANIFEST" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+manifest = Path(sys.argv[1])
+text = manifest.read_text()
+for hal_name in ("android.hardware.vibrator", "vendor.samsung.hardware.vibrator"):
+    block = re.compile(
+        r'\n?[ \t]*<hal format="hidl">\s*'
+        + re.escape(f"<name>{hal_name}</name>")
+        + r'.*?</hal>\s*',
+        re.S,
+    )
+    text, count = block.subn("\n", text, count=1)
+    if count != 1:
+        raise SystemExit(f"M21s VINTF has no HIDL vibrator block: {hal_name}")
+manifest.write_text(text)
+PY
+grep -q '<name>android.hardware.vibrator</name>' "$VIBRATOR_MANIFEST" && {
+    ABORT "HIDL android.hardware.vibrator declaration was not removed"
+    return 1
+}
+grep -q '<name>vendor.samsung.hardware.vibrator</name>' "$VIBRATOR_MANIFEST" && {
+    ABORT "HIDL Samsung vibrator declaration was not removed"
+    return 1
+}
+
+ADD_TO_WORK_DIR "$VIBRATOR_DONOR" "vendor" "$VIBRATOR_SERVICE" \
+    0 2000 755 "u:object_r:hal_vibrator_default_exec:s0" || return 1
+ADD_TO_WORK_DIR "$VIBRATOR_DONOR" "vendor" "$VIBRATOR_RC" \
+    0 0 644 "u:object_r:vendor_configs_file:s0" || return 1
+ADD_TO_WORK_DIR "$VIBRATOR_DONOR" "vendor" "$VIBRATOR_VINTF" \
+    0 0 644 "u:object_r:vendor_configs_file:s0" || return 1
+ADD_TO_WORK_DIR "$VIBRATOR_DONOR" "vendor" "$VIBRATOR_CORE" \
+    0 0 644 "u:object_r:vendor_file:s0" || return 1
+ADD_TO_WORK_DIR "$VIBRATOR_DONOR" "vendor" "$VIBRATOR_IMPL" \
+    0 0 644 "u:object_r:vendor_file:s0" || return 1
+fi
+
+# -----------------------------------------------------------------------------
 # Android 17 FBE userdata contract
 # -----------------------------------------------------------------------------
 FSTAB="$WORK_DIR/vendor/etc/fstab.exynos9611"
@@ -299,6 +390,7 @@ LOG_STEP_OUT
 unset VENDOR_FLOATING_FEATURE AUDIO_MANIFEST AUDIO_FILE AUDIO_SEC_POLICY AUDIO_POLICY_FRAGMENT AUDIO_VOLUME_TABLE WIFI_UDI_TOOL
 unset FSTAB CODEC2_POLICY CODEC2_OLD_RULE CODEC2_NEW_RULE CODEC2_SYSCALL_RULE
 unset SYSINPUT_DONOR SYSINPUT_ROOT SYSINPUT_MANIFEST SYSINPUT_SERVICE SYSINPUT_RC SYSINPUT_FILE SYSINPUT_VERSION SYSINPUT_LIB
+unset M21S_ENABLE_P3S_AIDL_VIBRATOR VIBRATOR_DONOR VIBRATOR_ROOT VIBRATOR_SERVICE VIBRATOR_RC VIBRATOR_VINTF VIBRATOR_CORE VIBRATOR_IMPL VIBRATOR_PREBUILT VIBRATOR_STOCK_BLOB VIBRATOR_MANIFEST
 unset TEEGRIS_RC TEEGRIS_PATCH TEEGRIS_TZDEV_PATCH TEEGRIS_IWD_PATCH TEEGRIS_KEYSTORE_PATCH TEEGRIS_TZTS_PATCH TEEGRIS_ORDER_PATCH TEEGRIS_PATCH_FILE
 unset RECOVERY_INIT BASEBAND_INIT VENDOR_PASSWD VENDOR_GROUP LEGACY_UEVENTD VENDOR_UEVENTD
 unset STOCK_DTBO_IMAGE SENSORHUB_FIRMWARE
