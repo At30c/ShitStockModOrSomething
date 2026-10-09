@@ -8601,12 +8601,12 @@ One UI 5.1). O A51 é um dos donors mais próximos do M21s porque usa a mesma
 família Exynos 9611; a página da Samsung descreve esse SoC com quatro Cortex-A73
 e quatro Cortex-A53.
 
-O conjunto HIDL foi preservado em
-`prebuilts/samsung/a51nsxx/vendor` e não está ligado à build. Ele contém o
+O conjunto HIDL foi usado somente para a auditoria e o teste manual abaixo;
+ele não é mantido como prebuilt nem está ligado à build. Ele continha o
 serviço `vendor.samsung.hardware.vibrator@2.2-service`, seu `rc`, o fragmento
 VINTF e as bibliotecas `android.hardware.vibrator@1.0` até `@1.3` e
-`vendor.samsung.hardware.vibrator@2.0` até `@2.2`. A auditoria contra os blobs
-originais do M21s encontrou:
+`vendor.samsung.hardware.vibrator@2.0` até `@2.2`. A auditoria contra os
+blobs originais do M21s encontrou:
 
 - o mesmo conjunto `DT_NEEDED` no serviço e todas as dependências resolvidas na
   vendor do M21s;
