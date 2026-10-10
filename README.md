@@ -10,6 +10,8 @@
 </p>
 <p align="center">UN1CA <i>(/ˈu.ni.ka/)</i> is a work-in-progress custom firmware for Samsung Galaxy devices.</p>
 
+> **Fork provenance:** This repository is a device-focused fork of [salvogiangri/UN1CA](https://github.com/salvogiangri/UN1CA), with additional ports and compatibility work for the supported devices.
+
 <p align="center">
   <a href="https://github.com/salvogiangri/UN1CA/discussions">🚀 Discussions</a>
   •
