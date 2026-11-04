@@ -69,6 +69,17 @@ if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 37 ]]; then
     SET_PROP "vendor" "ro.slmk.swap_free_low_percentage" "10"
     SET_PROP "vendor" "ro.slmk.2nd.swap_free_low_percentage" "10"
 
+    # The target vendor also carries ro.slmk.base_swaptotal=2560, sized for
+    # the stock S20 2 GiB zram.  The source lmkd's One UI 7 "SwapFreeLow"
+    # logic rebases the watermark on it at boot: 90% of 2560 MiB becomes a
+    # 2.25 GiB used-swap threshold (sys.lmk.slmk_16up_* = 71% free), while
+    # RAM Plus sizes zram to 8 GiB.  Cached apps were killed for
+    # LOW_MEM_AND_SWAP with ~70% of swap still free, and the same apps were
+    # restarted and killed again within minutes.  The S24+ source vendor does
+    # not declare it; without it lmkd keeps the 10% watermark on the real
+    # swap ("SwapFreeLow: init done 10 -> 10").
+    SET_PROP "vendor" "ro.slmk.base_swaptotal" --delete
+
     # Android 17's framework defaults to retaining 512 cached applications
     # when ro.slmk.cached_max is absent. That is disproportionate on the
     # 8 GiB S20 variants: it delays trimming until foreground workloads are
