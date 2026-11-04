@@ -232,8 +232,20 @@ if $SAMLOADER; then
     BUILD "samloader" "$SRC_DIR/external/samloader-rs" "${SAMLOADER_CMDS[@]}"
 fi
 if $SIGNAPK; then
+    SIGNAPK_JAVA_HOME="${JAVA_HOME:-}"
+    if [ ! -x "$SIGNAPK_JAVA_HOME/bin/javac" ] && command -v javac &> /dev/null; then
+        SIGNAPK_JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+    fi
+
+    SIGNAPK_GRADLE_CMD=""
+    if [ -x "$SIGNAPK_JAVA_HOME/bin/javac" ]; then
+        SIGNAPK_GRADLE_CMD="env JAVA_HOME=\"$SIGNAPK_JAVA_HOME\" PATH=\"$SIGNAPK_JAVA_HOME/bin:\$PATH\" ./gradlew build"
+    else
+        SIGNAPK_GRADLE_CMD="./gradlew build"
+    fi
+
     SIGNAPK_CMDS=(
-        "./gradlew build"
+        "$SIGNAPK_GRADLE_CMD"
         "cp -a \"scripts/linux/signapk\" \"$TOOLS_DIR/bin\""
         "cp -a \"signapk/build/libs/signapk-all.jar\" \"$TOOLS_DIR/bin/signapk.jar\""
     )

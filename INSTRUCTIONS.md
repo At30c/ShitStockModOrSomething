@@ -4810,6 +4810,36 @@ Meta-Overlayfsx is used, its own log must report that the module overlay was
 mounted; a KernelSU module cannot mount `/system` by itself on a read-only
 dynamic partition.
 
+### Magic Mount do KernelSU-Next no y2s/y2slte (2026-10-23)
+
+O KernelSU-Next 3.4.2/UAPI 5 não inclui mais um montador de módulos no kernel
+ou no `ksud`. O kernel injeta `post-fs-data` e chama o `ksud`; a operação que
+aplica uma árvore `system/`, `vendor/`, `product/` ou `system_ext/` é delegada
+a um **metamódulo**. Sem ele, `ksud module list` pode mostrar `mount=true`,
+mas nenhum overlay ou bind mount aparece no namespace global.
+
+No aparelho y2s de teste, `ksud module metamodule` retornava `Unsupported` e
+os módulos existiam em `/data/adb/modules` sem qualquer mount. Foi instalado
+o Meta Magic Mount oficial `meta-mm` v1.0.1-sprout (SHA-256 do ZIP:
+`4e2bfbccd80b0d787223cc8fe36315e8b269514a28f6d7ffb8e6e1f855e6e92b`).
+Após `ksud post-fs-data`, o estado passou para `Installed` e o log
+`/data/adb/magic_mount/mm.log` confirmou a varredura das árvores de módulos e
+`Magic Mount Completed Successfully`.
+
+Os módulos experimentais `fod_qhd_*`, `resolution_physical_test*` e
+`resolution_native_modes_fix` foram marcados como `disable` antes de ativar o
+metamódulo, para que JARs/APKs antigos não sejam reaplicados. O
+`kernel_umount` permanece habilitado: ele só remove a visibilidade dos mounts
+em processos filhos de zygote e não impede o metamódulo de montar arquivos
+para serviços do sistema ou HALs da vendor.
+
+Para um módulo de vendor, mantenha o layout `vendor/...` no ZIP. O
+`metainstall.sh` do `meta-mm` converte esse layout em
+`/data/adb/modules/<id>/vendor`, e o `metamount.sh` executado em
+`post-fs-data` monta os arquivos antes de notificar `EVENT_MODULE_MOUNTED` ao
+KernelSU. Não é necessário alterar `CONFIG_OVERLAY_FS` nem criar outro patch
+no kernel para habilitar Magic Mount.
+
 ### Initial Galaxy M21s/F41 target (2026-09-29)
 
 The StockMod tree now contains an initial `m21s` target for the Exynos 9611

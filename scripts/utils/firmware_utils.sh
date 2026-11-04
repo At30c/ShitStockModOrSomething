@@ -62,8 +62,8 @@ ODIN_FIRMWARE_IS_COMPLETE()
     PDA="$(cut -d "/" -f 1 -s <<< "$DOWNLOADED_FIRMWARE")"
     [[ -n "$PDA" ]] || return 1
 
-    find "$FIRMWARE_DIR" -maxdepth 1 -type f -name "AP_${PDA}*.md5" -print -quit | grep -q . || return 1
-    find "$FIRMWARE_DIR" -maxdepth 1 -type f -name "BL_${PDA}*.md5" -print -quit | grep -q . || return 1
+    find -L "$FIRMWARE_DIR" -maxdepth 1 -type f -name "AP_${PDA}*.md5" -print -quit | grep -q . || return 1
+    find -L "$FIRMWARE_DIR" -maxdepth 1 -type f -name "BL_${PDA}*.md5" -print -quit | grep -q . || return 1
 }
 
 # EXTRACT_FILE_FROM_TAR <tar> <file>

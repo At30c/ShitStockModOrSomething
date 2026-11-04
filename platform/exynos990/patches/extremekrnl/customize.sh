@@ -213,9 +213,23 @@ BUILD_KERNEL()
 
 INIT_KERNEL_SUBMODULES()
 {
+    local KERNELSU_DIR="$KERNEL_TMP_DIR/KernelSU-Next"
+
     # The kernel repository pins the tested KernelSU-Next legacy revision.
     # Sync first so URL/branch changes from a kernel update are respected.
     EVAL "git -C \"$KERNEL_TMP_DIR\" submodule sync --recursive"
+    # A previous interrupted build may have left one of the KernelSU patches
+    # applied in the generated clone.  submodule update refuses to checkout a
+    # pinned revision over tracked changes, although APPLY_KERNELSU_PATCHES
+    # below is designed to apply those patches afresh on every build.  Reset
+    # only this disposable submodule worktree; never touch the source repo.
+    if [ -d "$KERNELSU_DIR" ] && {
+        ! git -C "$KERNELSU_DIR" diff --quiet ||
+        ! git -C "$KERNELSU_DIR" diff --cached --quiet;
+    }; then
+        LOGW "Discarding stale tracked changes in generated KernelSU-Next tree"
+        EVAL "git -C \"$KERNELSU_DIR\" reset --hard HEAD"
+    fi
     EVAL "git -C \"$KERNEL_TMP_DIR\" submodule update --init --recursive"
 }
 

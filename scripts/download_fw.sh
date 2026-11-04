@@ -119,7 +119,7 @@ VERIFY_ODIN_PACKAGES()
         fi
 
         LOG_STEP_OUT
-    done < <(find "$ODIN_DIR/${MODEL}_${CSC}" -type f -name "*.md5")
+    done < <(find -L "$ODIN_DIR/${MODEL}_${CSC}" -type f -name "*.md5")
 }
 # ]
 
@@ -177,7 +177,7 @@ for i in "${FIRMWARES[@]}"; do
     LOG "- Downloading firmware..."
     [ -f "$ODIN_DIR/${MODEL}_${CSC}/.downloaded" ] && rm -rf "$ODIN_DIR/${MODEL}_${CSC}"
     mkdir -p "$ODIN_DIR/${MODEL}_${CSC}"
-    find "$ODIN_DIR/${MODEL}_${CSC}" -maxdepth 1 -type f -name "*.zip" -delete
+    find -L "$ODIN_DIR/${MODEL}_${CSC}" -maxdepth 1 -type f -name "*.zip" -delete
 
     COUNT=1
     while true; do
@@ -187,7 +187,7 @@ for i in "${FIRMWARES[@]}"; do
             --version "$DOWNLOAD_FIRMWARE" \
             --out-dir "$ODIN_DIR/${MODEL}_${CSC}" || exit 1
 
-        ZIP_FILE="$(find "$ODIN_DIR/${MODEL}_${CSC}" -maxdepth 1 -type f -name "*.zip" | head -n 1)"
+        ZIP_FILE="$(find -L "$ODIN_DIR/${MODEL}_${CSC}" -maxdepth 1 -type f -name "*.zip" | head -n 1)"
         if [ ! "$ZIP_FILE" ] || [ ! -f "$ZIP_FILE" ]; then
             if [ "$COUNT" -gt 10 ]; then
                 LOG "\033[0;31m! Download failed after 10 retries\033[0m"
