@@ -10740,6 +10740,188 @@ preview. Se a câmera continuar verde, o próximo log deve capturar `Camera
 usage probe`, `Camera LOCK_FLEX planes` e `Camera YUV probe`; esses registros
 distinguem fence/cache de um layout privado que não é legível pela CPU.
 
+## Game Home e métricas do Game Booster no y2s (26/10/2026)
+
+A cadeia de métricas já presente no y2s é composta por `GameTools_Dream`,
+`GameOptimizingService`, `GpuWatchApp`, `gpuservice`, `gpustat_launcher`,
+`perfsdkserver`, `perfsdk.jar`/`perfsdkservice.jar` e pelas bibliotecas
+`libgfxgrab.gpuwatchapp.samsung.so`, `libgpustat.gpuwatchapp.samsung.so`,
+`libsysinfo.gpuwatchapp.samsung.so` e `libperfsdk.performance.samsung.so`.
+Esses componentes expõem CPU, GPU, RAM e FPS; o `libsysinfo` do donor S947B
+tem os caminhos do Mali/Exynos 9 (`/sys/kernel/gpu/*`, `mali0`,
+`cpufreq` e `mem_info`) e é funcionalmente igual ao binário usado no M21s,
+com diferença apenas no identificador ELF.
+
+O problema encontrado foi anterior à coleta: `unica/debloat.sh` removia
+`system/priv-app/GameHome` e sua permissão privilegiada, embora o framework
+mantivesse `broadcast_allowlist`, `allowed-system-preload-apps.xml` e o
+registro de `/data/app/GameHome/GameHome.apk`. Assim, a tela do Game Home não
+tinha o cliente que chama o GOS e apresenta as métricas.
+
+O módulo específico
+`target/y2s/mods/game_home_metrics` restaura, somente no y2s, o `GameHome.apk`
+original do `SM-G986B_AUT`,
+`privapp-permissions-com.samsung.android.game.gamehome.xml` e o grupo
+`system/heimdallddata/com.samsung.android.game.gamehome.group`. Ele também
+recoloca as entradas correspondentes em `apks_count_list.txt` e
+`irremovable_list.txt`, sem duplicá-las. O binário `gperf` não foi importado:
+ele é um controlador de perfil que depende de `libexynos_profiler`, modelos
+TFLite e um domínio SELinux `gperfd`; não é a fonte direta dos valores do
+painel e sua importação sem o domínio/kernel correspondente seria insegura.
+
+A build ainda precisa ser instalada e validada no aparelho. Durante o teste,
+coletar `dumpsys package com.samsung.android.game.gamehome`,
+`dumpsys activity services` para `GameOptimizingService`/`GpuWatchApp` e os
+logs com `GameTools`, `GpuWatch`, `gpuservice` e `perfsdkserver`; isso separa
+falha de instalação/permite-privileged de falha na leitura dos nós do kernel.
+
+
+### Auditoria runtime do Game Booster no S20+ (2026-10-26)
+
+Com `com.supercell.clashroyale` em primeiro plano, o aparelho foi identificado
+como `SM-S947B`/`m2s`, Exynos 990, Android 17 e kernel 4.19. Os processos
+`gpuservice`, `perfmond`, `perfsdkserver`, `com.samsung.android.game.gametools`
+e `com.samsung.android.game.gos` estavam ativos.
+
+O kernel publicou dados utilizáveis em `/sys/kernel/gpu`: `gpu_model` retornou
+`Mali-G77 11 cores r0p1 0x9080`, `gpu_busy` retornou `16%`, `gpu_clock`
+`260000`, `gpu_max_clock` `455000`, `gpu_min_clock` `260000`, governador
+`Interactive`, tabela `156000 260000 377000 455000 572000 702000 800000` e
+`gpu_tmu` `62.0`. O `/proc` também publicou carga, memória, swap e PSI.
+
+`dumpsys gpu` confirmou a camada de sistema: a memória global de GPU estava em
+`410656768` bytes e o processo do Clash Royale (PID 19897 na coleta) aparecia
+com `169619456` bytes. Os carregamentos GL e Vulkan não tinham falhas
+(`glLoadingFailureCount=0` e `vkLoadingFailureCount=0`). O `dumpsys game` e o
+`dumpsys gamemanager` reconheceram o jogo e aplicaram DSS `0.6667`, resolução
+`2400x1080` e perfil GOS ativo.
+
+A limitação encontrada é outra: `dumpsys performance_hint` informa
+`Hint Session Support: false`, `CPU Headroom Supported: false` e
+`GPU Headroom Supported: false`. Portanto, o kernel e os serviços expõem
+contadores diretos suficientes para uma implementação própria de CPU/GPU/RAM/FPS,
+mas não fornecem a API moderna de headroom usada por alguns painéis Android 17.
+
+Nesta sessão `pm path com.supercell.android.game.gamehome` não retornou APK;
+apenas GameTools, GOS e GpuWatch estavam instalados. Isso confirma que a
+ausência do painel do Gaming Hub é causada pela remoção do cliente GameHome,
+enquanto os dados básicos já chegam do kernel e do framework. O diagnóstico bruto
+foi salvo em `out/target/y2s/game_metrics_audit-20261026_0510.txt`.
+
+### Correção da hipótese sobre o M21s e herança de métricas no S26+ (26/10/2026)
+
+O M21s apresenta as métricas de CPU, GPU, RAM e FPS. Portanto, a ausência do
+`GameHome` não pode ser a causa do backend de métricas: esse APK é o cliente de
+interface/launcher do Gaming Hub. O caminho que entrega os dados é independente
+dele e passa por `GameTools_Dream` → Binder `IGosService` →
+`GameOptimizingService`/`RinglogInterface`; o `GpuWatchApp` também possui uma
+leitura própria por JNI.
+
+No aparelho S947B usado como base do y2s, o GOS normaliza a identidade antes de
+buscar a política: `ro.boot.em.model=SM-G985F`, `ro.product.model=SM-S947B` e
+`ro.product.device=m2s` resultam em `DeviceNameFromGOS=y2s`, com
+`SupportedByServer=true`. O APK contém a tabela de modelos (`SM-G985F`,
+`SM-G986B`, `SM-M215F` e os nomes internos `x1q/x1s/y2q/y2s/z3q/z3s`), além
+das consultas `Global.deviceName`, `defaultCpuLevel` e `defaultGpuLevel`.
+Essa é a herança observada: o produto/boot model é convertido para um nome de
+plataforma interno, e esse nome seleciona a política remota e as configurações
+por jogo; não é uma cópia das métricas de outro aparelho.
+
+O `libipm.so` do GOS coleta os valores nativos em `/proc/stat`, `/proc/meminfo`,
+`/sys/kernel/gpu/*`, `mali0`, `cpufreq`, bateria/temperatura e, quando existe,
+`/dev/gos_device`. O `perfsdkserver` e o `perfsdkservice` fornecem os níveis de
+CPU/GPU/BUS por Binder. O `gpuservice` e as bibliotecas `libgfxgrab`,
+`libgpustat` e `libperfsdk.performance` são byte a byte iguais entre o donor
+S947B, o y2s e o M21s; os símbolos e caminhos exportados pelo `libsysinfo` de
+64 bits também são iguais, embora os binários tenham hashes/build IDs distintos.
+
+A falha observada no S947B/y2s está depois dessa coleta: o GameTools envia
+`perf_data_simple_request` ao GOS a cada segundo, mas recebe
+`fpsList=[]`, `cpuLoadList=[]` e `gpuLoadList=[]`, gerando `NaN`, enquanto
+`dumpsys gpu` e os nós `/sys/kernel/gpu` continuam válidos. Assim, o problema
+não é falta de contador no kernel nem ausência do GameHome; é a produção/entrega
+do ringlog de desempenho pela combinação GOS/IPM/política da identidade `y2s`.
+O M21s deve ser usado como referência de configuração e versão do GOS/IPM, não
+como motivo para importar o GameHome. A auditoria bruta permanece em
+`out/target/y2s/game_metrics_audit-20261026_0510.txt`.
+
+### Auditoria runtime do serviço de métricas no M21s (26/10/2026)
+
+Com `com.supercell.clashroyale` em primeiro plano, o aparelho conectado foi
+identificado como `SM-F415F` no bootloader, `SM-A185F` em `ro.product.model`,
+`a18` em `ro.product.device`, Exynos 9611 e Android 17. O GOS normalizou essa
+combinação para `DeviceNameFromGOS=f41` e retornou `SupportedByServer=true`.
+Isso explica como o M21s herda a política: o modelo do bootloader e os props do
+produto são convertidos para o nome interno `f41`, que então seleciona as
+configurações de desempenho do jogo.
+
+O serviço Binder está realmente ativo: `GameTools_Dream` mantém duas conexões
+com `com.samsung.android.game.gos/.endpoint.GosService` através da ação
+`com.samsung.android.game.gos.IGosService`. O registro de desempenho retornou
+`{"successful":true}`, `cmdGetGlobalData` informou que o GOS suporta GPP e
+`cmdGetPackageData` devolveu DSS `0.73`, SIOP `1`, DFS `60` e controle térmico
+ativo para o Clash Royale.
+
+Nesta sessão o IPM também produziu Ringlog de forma contínua: a chamada
+`getIpmEncodedRinglog()` retornou strings de `2.924.780` a `2.932.064` bytes em
+menos de dois minutos, e o histórico do GOS registrou sessões do Clash Royale
+com `LRPST`, `DVFSWU` e `SFF`. Os serviços `gpuservice`, `perfmond` e
+`perfsdkserver` estavam em execução.
+
+Os contadores nativos estavam acessíveis no mesmo momento: `gpu_model` retornou
+`Mali-G72 3 cores r0p1 0x6221`, `gpu_busy` ficou entre `63%` e `71%`,
+`gpu_clock` chegou a `455000`, e `mali0/utilization` chegou a `96`. Portanto,
+no M21s a cadeia completa é boot/product props → identidade `f41` → política GOS
+→ IPM/Ringlog → GameTools, com dados nativos do Exynos 9611 disponíveis. A
+coleta foi salva em `out/target/m21s/game_metrics_audit-20261026_0525.txt`.
+
+### Portabilidade do GOS do M21s para o y2s (26/10/2026)
+
+A troca integral do `GameOptimizingService.apk` do M21s não é uma correção
+segura por si só. As duas versões usam os mesmos caminhos gerais de coleta
+(`/dev/gos_device`, `/sys/kernel/gpu/*`, `mali0` e `cpufreq`), mas não são o
+mesmo binário: o M21s usa GOS `4.4.00.29` e `libipm.so` com hash
+`9a36aced...`; o y2s usa GOS `4.4.00.30` e `libipm.so` com hash
+`15681ecf...`. Os `classes.dex` também são diferentes.
+
+O `libipm` é hardware dependente: no M21s ele coleta de um Mali-G72 de três
+núcleos e de tabelas de frequência do Exynos 9611; no y2s a GPU é Mali-G77 de
+onze núcleos e as tabelas de Exynos 990 são diferentes. Importar o APK inteiro
+pode fazer o Ringlog aparecer, mas pode aplicar níveis CPU/GPU/BUS e limites
+térmicos incorretos ou falhar ao acessar os nós esperados.
+
+A abordagem correta é comparar e portar primeiro `ringlogPolicy`, `ipmPolicy`,
+`defaultCpuLevel`, `defaultGpuLevel` e o mapeamento de identidade, mantendo o
+`libipm` compatível com Exynos 990. Só depois deve ser feito um A/B controlado
+com a versão `4.4.00.29`; nenhuma troca integral foi aplicada ao aparelho.
+
+### Verificação de ABI do GOS M21s → y2s (26/10/2026)
+
+A auditoria posterior refinou a ressalva anterior: a troca completa do APK ainda
+não é uma correção comprovada, mas a compatibilidade estrutural não é um
+impedimento para um A/B controlado, exclusivo do y2s.
+
+- Os dois `GameOptimizingService.apk` usam o mesmo certificado Samsung
+  (`SHA-256 34:DF:0E:7A:9F:1C:F1:89:2E:45:C0:56:B4:97:3C:D8:1C:CF:14:8A:40:50:D1:1A:EA:4A:C5:A6:5F:90:0A:42`) e o mesmo
+  `privapp-permissions-com.samsung.android.game.gos.xml`.
+- Os dois `libipm.so` têm as mesmas dependências dinâmicas (`libsync`, `liblog`,
+  `libm`, `libdl` e `libc`), o mesmo SONAME e o mesmo conjunto de 285 exports
+  JNI públicos. Ambos usam os mesmos nós genéricos de GPU, CPU e `/dev/gos_device`.
+- O GOS do M21s contém os modelos `SM-G985F`/`SM-G986B` e a família `y2s`. O
+  GameTools dos dois aparelhos usa as mesmas chamadas de métricas: `registerPerfData`
+  e `perf_data_simple_request`.
+- Embora os `gamemanager.jar` não sejam idênticos, os dois expõem
+  `IGosSystemService`, `requestWithJson` e `requestWithJsonNoReturn`.
+
+Ainda há duas incógnitas funcionais: as diferenças internas entre as versões do
+GOS/IPM e a política remota selecionada pela identidade `y2s`. Por isso o teste
+deve trocar somente `GameOptimizingService.apk`, preservando GameTools, GPUWatch
+e `gamemanager.jar` do y2s, e validar `getIpmEncodedRinglog()`,
+`perf_data_simple_request` e as listas FPS/CPU/GPU. Como a versão do M21s é
+menor (`4.4.00.29` contra `4.4.00.30`), a troca deve entrar em imagem de sistema
+ou sobreposição reversível, nunca como atualização normal de pacote. Nenhum
+arquivo foi instalado nesta auditoria.
+
 ### Crash loop do SystemUI no y2s após boot (26/10/2026)
 
 O piscar contínuo da tela não era falha do GOS nem do Composer: cada piscada
@@ -10763,6 +10945,34 @@ temporária em aparelho confirmou a causa: com SELinux permissivo, o PID do
 SystemUI permaneceu estável e os crashes cessaram. Essa permissividade é apenas
 uma medida de recuperação da sessão atual; a próxima imagem deve permanecer em
 Enforcing e conter o patch de política acima.
+
+### Port A18 de GOS e Quick Share para Exynos 990 (26/10/2026)
+
+O donor `SM-A185F_EUY` foi registrado em `prebuilts/samsung/a18xxx` com os
+APKs originais de `GameOptimizingService`, `MCFDeviceSync`, `ShareLive` e
+`EasySetup`. O MCFDeviceSync é o serviço/API do Quick Share; ShareLive atende
+transferências por link e EasySetup participa da descoberta próxima.
+
+O bloco de compatibilidade foi integrado a
+`platform/exynos990/patches/stock_blobs/customize.sh` e é limitado a
+`y2s`/`y2slte`. Ele remove OAT/VDEX antigos e instala os quatro APKs dos
+donors, para que ART os recompile contra o sistema-alvo. Não substitui
+`mcfsdk.jar` nem os XMLs de permissões: todos foram comparados e são byte a
+byte idênticos entre A18 e S947B. As assinaturas dos quatro APKs também são o
+mesmo certificado Samsung usado pelo y2s.
+
+O módulo não foi aplicado em aparelho nesta etapa. O GOS A18 continua sendo
+uma hipótese para o Ringlog do y2s e requer validação de boot, Quick Share e
+GameTools em uma build Enforcing.
+
+### y2s: remoção do bloqueio de descoberta MCF (26/10/2026)
+
+O patch `0001-disable-tv-signin-mcf-scan.patch` foi removido de
+`platform/exynos990/patches/framework_compat`. A próxima build não altera mais
+o metadata `com.samsung.android.mcfds.support_remote_signin` do Samsung
+Account: o MCFDeviceSync volta a poder criar o scanner `Nearby` e oferecer o
+login remoto em TVs. Os outros patches de compatibilidade permanecem
+inalterados.
 
 ### y2s: segunda propriedade que reiniciava o SystemUI (26/10/2026)
 
@@ -10798,6 +11008,177 @@ arquivo e `getattr/read` no link para `platform_app_36` sobre
 reinicie a SystemUI ou o aparelho e confirme que o log deixou de registrar
 `readFingerprintSensor : No file for sensor pos`; a margem do Now Bar deve
 passar a ser calculada a partir da posição física do painel.
+
+### GOS sem métricas no y2s e separação dos donors (26/10/2026)
+
+O teste do Clash Royale confirmou que o GOS A18 (`4.4.00.29`) está ativo e
+aceita `perf_data_register` e `perf_data_simple_request`, mas o
+`PerformanceMonitorFeature` do Game Tools permanece `isEnabled=false`. Na
+primeira consulta o IPM também registra `mSiopInit`, erro de `mimalloc` e a
+leitura bloqueada de `ro.serialno`; portanto o fato de o handshake funcionar
+não significa que amostras CPU/GPU/FPS estejam sendo retornadas.
+
+O APK correto do aparelho é o GOS do S947B (`4.4.00.30`, SHA-256
+`7ee986c4b97eeb83c82e37a46ea131b7660b706210803e3e5512a47e910efcc2`). Ele foi
+copiado para `prebuilts/samsung/s947bxxx` e o bloco de `stock_blobs` usa esse
+donor somente para `GameOptimizingService`; `MCFDeviceSync`, `ShareLive` e
+`EasySetup` continuam vindo do A18. Assim o Quick Share conserva o port solicitado, mas o
+backend IPM passa a acompanhar o hardware S947B/Exynos 990.
+
+Essa alteração é de origem da build e ainda não foi instalada no aparelho.
+O monitor visual continua dependendo de ativar `Performance Monitor` no Game
+Tools; o registro do canal GOS, sozinho, não o habilita.
+
+### Quick Share sem envio/recebimento no y2s (26/10/2026)
+
+A auditoria da árvore gerada mostrou que `MCFDeviceSync`, `ShareLive` e
+`EasySetup` estavam presentes, mas `AutoHotspotMDE` não estava. Também faltavam
+`default-permissions`, `privapp-permissions` e `preinstalled-packages` de
+`com.samsung.android.mcf.autohotspot`. Sem esse serviço, o MCF consegue
+descobrir o aparelho, mas não consegue abrir o caminho Wi-Fi usado para a
+transferência, afetando envio e recebimento.
+
+O bloco de `stock_blobs` agora instala `AutoHotspotMDE` do S947B, remove o
+OAT/VDEX antigo e importa os três XMLs correspondentes do firmware-alvo. O APK
+prebuilt está em `prebuilts/samsung/s947bxxx`; sua SHA-256 é
+`9f94d728ebebd46b47e64d1be2de18308035b61bbd5dce8292e635d03dc869ef`.
+
+## GOS sem métricas após a build (28/10/2026)
+
+O teste com `com.supercell.clashroyale` confirmou que o `GameOptimizingService`
+está iniciado e reconhece o jogo. O `dumpsys gamemanager` retornou
+`mIsGosEnabled: true`, `mIsGameBoosterInstalled: true`, perfil do jogo
+`DSS: 0.6667` e chamadas de `setPerformanceMode()`/`SIOP`. Portanto, o SIOP e
+o serviço GOS não eram a falha principal.
+
+O mesmo diagnóstico retornou `mIsGameLauncherEnabled: false`, e
+`com.samsung.android.game.gamehome` não estava instalado. A causa foi o
+debloat global remover `system/priv-app/GameHome` e os contratos privilegiados;
+o GameTools continuava funcionando, mas não havia cliente Game Home para
+apresentar as métricas de CPU, GPU, RAM e FPS.
+
+Foi criado o módulo específico
+`target/y2s/mods/game_home_metrics`. Ele é aplicado depois do debloat e
+restaura, a partir do firmware original `SM-G986B_AUT`, o `GameHome.apk`,
+`privapp-permissions-com.samsung.android.game.gamehome.xml` e o grupo
+`system/heimdallddata/com.samsung.android.game.gamehome.group`. A declaração de
+assinaturas compatível também é incluída. O APK preservado no prebuilt tem
+SHA-256 `963853c9f481cb52492bbff4b3263c0636da60c6536d3646c3f7fbaa247110`.
+
+Depois da próxima instalação, validar `pm path
+com.samsung.android.game.gamehome`, `dumpsys gamemanager` (esperado:
+`mIsGameLauncherEnabled: true`) e os logs `GameTools`, `GpuWatch`,
+`gpuservice` e `perfsdkserver` enquanto um jogo estiver em primeiro plano.
+
+### M21s: métricas sem GameHome e módulo KSU de comparação (28/10/2026)
+
+Uma auditoria do `out/target/m21s/work_dir` mostrou que o provedor das métricas
+é independente do Gaming Hub. Mesmo sem o APK `GameHome` no `work_dir`, o M21s
+mantém `GameTools_Dream`, `GpuWatchApp`, `gpuservice`, `perfsdkserver`,
+`perfsdk.jar`/`perfsdkservice.jar` e as bibliotecas JNI
+`libgfxgrab.gpuwatchapp.samsung.so`, `libgpustat.gpuwatchapp.samsung.so` e
+`libsysinfo.gpuwatchapp.samsung.so`. O `GameTools_Dream` contém
+`PerfMonitorFeature`, `PerformanceMetricViewModel` e `METRICS`; o
+`GpuWatchApp` expõe a leitura própria de GPU, frames, CPU e memória.
+
+Assim, `GameHome` deve ser tratado como cliente do Gaming Hub, histórico e
+estado de `mIsGameLauncherEnabled`, e não como a fonte dos contadores. O módulo
+`target/y2s/mods/game_home_metrics` continua útil para testar somente a
+integração do launcher no y2s.
+
+Para testar isso sem uma nova build foi criado o módulo KernelSU-Next:
+
+`platform/exynos990/installer/game_home_metrics_ksu/build.sh`
+
+O ZIP gerado é
+`out/target/y2s/ksu-game-home-metrics-test-v1.zip`, com SHA-256
+`198271cc56b4398624055b7bbf796cae52603c6f3e4288800f8051731818b9e5`. A
+revisão 1.1 corrige o destino do grupo Heimdall para
+`system/etc/heimdallddata`; o ZIP atualizado mantém o mesmo nome e deve ser
+reinstalado antes do teste final. Ele usa
+o `GameHome.apk` original preservado em `prebuilts/samsung/y2sxxx`, injeta os
+XMLs de permissões e o grupo Heimdall, e possui uma guarda para aceitar apenas
+`y2s`/`m2s` ou bootloaders `G985F`/`S947B`. O módulo não substitui GOS,
+GameTools, GpuWatch ou qualquer biblioteca de vendor. Depois de instalar pelo
+KernelSU Next e reiniciar, comparar `dumpsys gamemanager` e os logs de
+`GameTools`, `GpuWatch`, `gpuservice` e `perfsdkserver`; remover ou desabilitar o
+módulo retorna ao estado anterior.
+
+O teste foi aplicado no y2s sem nova build. Após o `post-fs-data` do
+KernelSU-Next e o reinício do zygote, o módulo ficou com `update=false` e
+`mount=true`; `pm path` retornou
+`/system/priv-app/GameHome/GameHome.apk` e o `dumpsys gamemanager` passou a
+mostrar `mIsGameLauncherEnabled: true`.
+
+O GameTools abriu o painel, mas o backend ainda retornou listas vazias:
+`fpsList=[]`, `cpuLoadList=[]` e `gpuLoadList=[]`; somente `ram` retornou valor
+(`71`--`73`). O GOS registrou requisições para `fps`, `game_fps`, `cpu_load`,
+`gpu_load`, `cpu_utilization_*` e `gpu_utilization`, seguidas de
+`Cannot round NaN value`. Portanto, o GameHome foi aplicado corretamente e
+resolveu apenas a integração do launcher; a ausência de CPU/GPU/FPS continua
+no provedor `perfsdk`/`GpuWatch` ou na coleta do kernel, não no APK GameHome.
+
+### Game Launcher sem abrir no y2s: overlay oculto pelo KernelSU (28/10/2026)
+
+O `GameHome.apk` não estava corrompido. O `PackageManager` o encontrava em
+`/system/priv-app/GameHome/GameHome.apk`, mas o processo caía antes de criar a
+atividade com:
+
+```text
+java.lang.NullPointerException: Attempt to invoke virtual method
+'android.content.res.Configuration android.content.res.Resources.getConfiguration()'
+on a null object reference
+at android.app.ConfigurationController.updateLocaleListFromAppContext
+```
+
+O log completo mostrou a causa imediatamente antes do crash:
+
+```text
+KernelSU: handle_setresuid from 0 to 10359
+KernelSU: umount_tw_func: unmounting: /system/priv-app/GameHome/GameHome.apk
+KernelSU: umount_tw_func: unmounting: /system/priv-app
+... ResourcesManager: Failed to open APK '/system/priv-app/GameHome/GameHome.apk'
+```
+
+O recurso `kernel_umount` desmontava os mounts do módulo no namespace do filho
+do Zygote. O `system_server` ainda via o APK e registrava a atividade, mas o
+processo do GameHome recebia o caminho sem o arquivo; `ResourcesManager` então
+retornava `null` e a exceção parecia uma corrupção do launcher.
+
+Como confirmação, `ksud feature set 1 0` fez o GameHome abrir e criar
+`WelcomeActivity`/`MainActivity`. A correção não desliga a proteção global:
+`platform/exynos990/installer/game_home_metrics_ksu/build.sh` agora inclui
+`service.sh`, que resolve o UID do pacote depois do boot e grava um perfil
+KernelSU específico com `non_root.umount_modules=false`. O `kernel_umount`
+global permanece habilitado. O módulo v1.2 foi gerado em
+`out/target/y2s/ksu-game-home-metrics-test-v1.3.zip`, SHA-256
+`0cc25987bbb9b155941ea83a746664ca8e63c10470dbc57d481043163ab52707`.
+
+No aparelho, o perfil já foi aplicado e validado:
+
+```json
+{
+  "key": "com.samsung.android.game.gamehome",
+  "uid": 10359,
+  "non_root": { "use_default": false, "umount_modules": false }
+}
+```
+
+O Game Launcher abriu sem crash com `kernel_umount=1`. A atualização v1.3 do
+módulo está em `modules_update` e será promovida no próximo reboot; até lá, o
+perfil runtime já mantém o launcher funcional.
+
+Na promoção do overlay, o estado persistido do debloat também podia deixar o
+pacote como `enabled=0` e `stopped=true`. A versão v1.3 do módulo reativa
+`com.samsung.android.game.gamehome` para o usuário 0 após o scan do
+PackageManager, além de manter o perfil de `umount_modules=false`.
+
+**Estado atual:** este teste foi encerrado. O instalador KSU
+`platform/exynos990/installer/game_home_metrics_ksu`, o módulo de build
+`target/y2s/mods/game_home_metrics` e os prebuilts exclusivos do GameHome para
+`y2sxxx` foram removidos da árvore em 28/10/2026. Os parágrafos acima são
+apenas o registro histórico da validação; nenhuma dessas etapas é executada
+por uma nova build.
 
 ### Contenção do custo do preview no Composer3 (29/10/2026)
 

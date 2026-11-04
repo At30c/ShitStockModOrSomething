@@ -228,3 +228,67 @@ if [[ "$TARGET_CODENAME" == "x1s" || "$TARGET_CODENAME" == "y2s" || "$TARGET_COD
     ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "system" "system/etc/permissions/privapp-permissions-com.samsung.android.app.ledbackcover.xml" 0 0 644 "u:object_r:system_file:s0"
 fi
 LOG_STEP_OUT
+
+# Game services and Quick Share compatibility for the Exynos 990 S20 targets.
+# Keep this in the stock-blobs module because it already owns donor-backed
+# system APK imports.  Quick Share stays on the A18 donor, while GOS/IPM uses
+# the S947B donor matching the running hardware.
+if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
+    LOG_STEP_IN "- Adding S947B GOS and A18 Quick Share services"
+    GAME_SERVICE_APPS=(
+        "GameOptimizingService"
+        "MCFDeviceSync"
+        "ShareLive"
+        "EasySetup"
+        "AutoHotspotMDE"
+    )
+    for GAME_SERVICE_APP in "${GAME_SERVICE_APPS[@]}"; do
+        GAME_SERVICE_DONOR="a18xxx"
+        if [[ "$GAME_SERVICE_APP" == "GameOptimizingService" ||
+                "$GAME_SERVICE_APP" == "AutoHotspotMDE" ]]; then
+            GAME_SERVICE_DONOR="s947bxxx"
+        fi
+        GAME_SERVICE_APK="system/priv-app/$GAME_SERVICE_APP/$GAME_SERVICE_APP.apk"
+        GAME_SERVICE_SOURCE="$SRC_DIR/prebuilts/samsung/$GAME_SERVICE_DONOR/system/$GAME_SERVICE_APK"
+        if [[ ! -f "$GAME_SERVICE_SOURCE" ]]; then
+            ABORT "Missing game-service prebuilt: prebuilts/samsung/$GAME_SERVICE_DONOR/system/$GAME_SERVICE_APK"
+            return 1
+        fi
+        DELETE_FROM_WORK_DIR "system" "system/priv-app/$GAME_SERVICE_APP/oat" || return 1
+        ADD_TO_WORK_DIR "$GAME_SERVICE_DONOR" "system" "$GAME_SERVICE_APK" \
+            0 0 644 "u:object_r:system_file:s0" || return 1
+    done
+
+    QUICK_SHARE_CONTRACTS=(
+        "system/framework/mcfsdk.jar"
+        "system/etc/permissions/mcfsdk.xml"
+        "system/etc/permissions/privapp-permissions-com.samsung.android.mcfds.xml"
+        "system/etc/permissions/privapp-permissions-com.samsung.android.easysetup.xml"
+        "system/etc/permissions/privapp-permissions-com.samsung.android.app.sharelive.xml"
+    )
+    for QUICK_SHARE_CONTRACT in "${QUICK_SHARE_CONTRACTS[@]}"; do
+        if [[ ! -f "$WORK_DIR/system/$QUICK_SHARE_CONTRACT" ]]; then
+            ABORT "Missing Quick Share framework contract: /$QUICK_SHARE_CONTRACT"
+            return 1
+        fi
+    done
+
+    # AutoHotspotMDE is part of the MCF transfer path.  The target work tree
+    # may not carry these source-firmware declarations even when the other MCF
+    # contracts are present, so import the matching S947B declarations here.
+    QUICK_SHARE_AUTOHOTSPOT_CONTRACTS=(
+        "system/etc/default-permissions/default-permissions-com.samsung.android.mcf.autohotspot.xml"
+        "system/etc/permissions/privapp-permissions-com.samsung.android.mcf.autohotspot.xml"
+        "system/etc/sysconfig/preinstalled-packages-com.samsung.android.mcf.autohotspot.xml"
+    )
+    for QUICK_SHARE_AUTOHOTSPOT_CONTRACT in "${QUICK_SHARE_AUTOHOTSPOT_CONTRACTS[@]}"; do
+        if [[ ! -f "$WORK_DIR/system/$QUICK_SHARE_AUTOHOTSPOT_CONTRACT" ]]; then
+            ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "system" "$QUICK_SHARE_AUTOHOTSPOT_CONTRACT" \
+                0 0 644 "u:object_r:system_file:s0" || return 1
+        fi
+    done
+    unset GAME_SERVICE_APP GAME_SERVICE_APPS GAME_SERVICE_DONOR GAME_SERVICE_APK \
+        GAME_SERVICE_SOURCE QUICK_SHARE_CONTRACT QUICK_SHARE_CONTRACTS \
+        QUICK_SHARE_AUTOHOTSPOT_CONTRACT QUICK_SHARE_AUTOHOTSPOT_CONTRACTS
+    LOG_STEP_OUT
+fi

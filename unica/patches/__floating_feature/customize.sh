@@ -250,6 +250,33 @@ APPLY_CUSTOM_FEATURE()
         fi
     done < "$1"
 }
+
+# Ensure a feature exists in every floating_feature.xml that is packaged by
+# the current target.  The source and target firmware do not always advertise
+# the same Game Booster capability, so relying only on APPLY_TARGET_FEATURE()
+# can silently remove it.  Keep an existing entry untouched; add it only when
+# the XML has no exact tag yet.
+ENSURE_FLOATING_FEATURE_CONFIG()
+{
+    local FILE="$1"
+    local CONFIG="$2"
+    local VALUE="$3"
+
+    [ -f "$FILE" ] || return 0
+
+    if grep -q -F "<${CONFIG}>" "$FILE"; then
+        LOG "- Keeping existing \"${CONFIG}\" in ${FILE#$WORK_DIR/}"
+        return 0
+    fi
+
+    if ! grep -q -F '</SecFloatingFeatureSet>' "$FILE"; then
+        ABORT "Floating feature file has no closing SecFloatingFeatureSet tag: ${FILE#$WORK_DIR/}"
+        return 1
+    fi
+
+    LOG "- Adding \"${CONFIG}\" config with \"${VALUE}\" in ${FILE#$WORK_DIR/}"
+    sed -i "/<\\/SecFloatingFeatureSet>/i\\    <${CONFIG}>${VALUE}</${CONFIG}>" "$FILE" || return 1
+}
 # ]
 
 LOG_STEP_IN "- Applying target floating feature config"
@@ -325,5 +352,5 @@ if [ "$DUPLICATE_FEATURES" ]; then
 fi
 
 unset DEPRECATED BLACKLIST FALLBACK
-unset DUPLICATE_FEATURES
-unset -f APPLY_TARGET_FEATURE APPLY_CUSTOM_FEATURE
+unset DUPLICATE_FEATURES GAMEBOOSTER_PERF_FEATURE
+unset -f APPLY_TARGET_FEATURE APPLY_CUSTOM_FEATURE ENSURE_FLOATING_FEATURE_CONFIG
