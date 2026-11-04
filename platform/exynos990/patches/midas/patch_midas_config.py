@@ -16,6 +16,7 @@ def main() -> int:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     found = False
     patched = False
+    non_empty_candidates = []
 
     for enhancement in config.get("enhancements", []):
         if enhancement.get("type") != "upscale":
@@ -27,17 +28,27 @@ def main() -> int:
                 if "SRIBMidas_aiUPSCALER_4X_LITE_V100_INT8.tflite" not in model_files:
                     continue
                 models = compatible_model.setdefault("models_list", [])
-                # The same filenames also occur in a chipset-specific entry
-                # (s5e9955). Only extend the empty generic fallback.
                 if models:
                     if "Exynos 990" in models:
                         found = True
+                    elif compatible_model.get("id") in {"adreno,amd", "lite"}:
+                        # Newer S947B configs attach the generic Lite TFLite
+                        # models to s5e9955 instead of leaving an empty
+                        # fallback entry. Reuse that exact model set for the
+                        # legacy Exynos 990 GPU path.
+                        non_empty_candidates.append(models)
                     continue
 
                 found = True
                 if "Exynos 990" not in models:
                     models.append("Exynos 990")
                     patched = True
+
+    if not found and non_empty_candidates:
+        models = non_empty_candidates[0]
+        models.append("Exynos 990")
+        found = True
+        patched = True
 
     if not found:
         raise SystemExit("Exynos 990 MIDAS model entry was not found")

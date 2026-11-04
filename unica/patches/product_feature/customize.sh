@@ -52,6 +52,53 @@ PATCH_GRAPHICS_COMMON_NDK_DEPENDENCY()
     done
 }
 
+# The record-alive library contract is embedded as a five-digit string in
+# SemMultiMicManager. Samsung changed 08020 to 08030 between the S926B and
+# S947B sources, so resolve the value from the decoded methods instead of
+# making the patch fail when the source configuration lags the framework.
+RESOLVE_RECORDALIVE_LITERAL()
+{
+    local FILE_PATH="$1"
+    local EXPECTED="$2"
+    local REPLACEMENT="$3"
+    local METHOD METHOD_CONTENT MATCHES
+
+    for METHOD in 'isSupported()Z' 'isSupported(I)Z'; do
+        METHOD_CONTENT="$(awk -v method="$METHOD" '
+            /^\.method[[:space:]]/ {
+                in_method = (index($0, method) != 0)
+            }
+            in_method { print }
+            in_method && /^\.end method[[:space:]]*$/ {
+                in_method = 0
+            }
+        ' "$FILE_PATH")"
+        if grep -Fq -- "\"$EXPECTED\"" <<< "$METHOD_CONTENT"; then
+            printf '%s\n' "$EXPECTED"
+            return 0
+        fi
+        if grep -Fq -- "\"$REPLACEMENT\"" <<< "$METHOD_CONTENT"; then
+            LOG "- SemMultiMicManager already uses $REPLACEMENT" >&2
+            # Keep the configured source value as the SMALI_PATCH needle so
+            # its existing-replacement check can make this operation idempotent.
+            printf '%s\n' "$EXPECTED"
+            return 0
+        fi
+
+        MATCHES="$(sed -nE 's/^[[:space:]]*const-string(\/jumbo)?[[:space:]]+[^,]+,[[:space:]]+"(0[0-9]{4})"[[:space:]]*$/\2/p' <<< "$METHOD_CONTENT" | sort -u)"
+        if [ "$(printf '%s\n' "$MATCHES" | sed '/^$/d' | wc -l)" -eq 1 ]; then
+            if [[ "$MATCHES" != "$EXPECTED" ]]; then
+                LOG "- Resolved source record-alive literal: $MATCHES (configured value was $EXPECTED)" >&2
+            fi
+            printf '%s\n' "$MATCHES"
+            return 0
+        fi
+    done
+
+    ABORT "Unable to resolve the source record-alive literal in SemMultiMicManager"
+    return 1
+}
+
 # Some Android 16 donors already contain the complete display stack used by
 # the target (resolution policy, HFR framework code and density handling).
 # Applying the legacy y2s compatibility patches on top of that stack can
@@ -73,11 +120,17 @@ if [[ "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" != "$TARGET_PRODUCT_SHIPPING_API_LEVE
         "<clinit>()V" \
         "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" \
         "$TARGET_PRODUCT_SHIPPING_API_LEVEL"
-    SMALI_PATCH "system" "system/framework/services.jar" \
-        "smali/com/android/server/enterprise/hdm/HdmSakManager.smali" "replace" \
-        "isSupported(Landroid/content/Context;)Z" \
-        "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" \
-        "$TARGET_PRODUCT_SHIPPING_API_LEVEL"
+    DECODE_APK "system" "system/framework/services.jar" || return 1
+    HDM_SAK_MANAGER_SMALI="$APKTOOL_DIR/system/framework/services.jar/smali/com/android/server/enterprise/hdm/HdmSakManager.smali"
+    if [ -f "$HDM_SAK_MANAGER_SMALI" ]; then
+        SMALI_PATCH "system" "system/framework/services.jar" \
+            "smali/com/android/server/enterprise/hdm/HdmSakManager.smali" "replace" \
+            "isSupported(Landroid/content/Context;)Z" \
+            "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" \
+            "$TARGET_PRODUCT_SHIPPING_API_LEVEL"
+    else
+        LOG "HdmSakManager is absent; skipping legacy shipping API patch"
+    fi
     # Recent AIDL-only HDM implementations no longer carry the shipping API
     # check (or even an explicit constructor) in HdmVendorController.
     # Patch it only on older sources where that literal is actually present.
@@ -92,11 +145,16 @@ if [[ "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" != "$TARGET_PRODUCT_SHIPPING_API_LEVE
     else
         LOG "HdmVendorController has no shipping API literal; skipping legacy patch"
     fi
-    SMALI_PATCH "system" "system/framework/services.jar" \
-        "smali/com/android/server/knox/dar/ddar/ta/TAProxy.smali" "replace" \
-        "updateServiceHolder(Z)V" \
-        "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" \
-        "$TARGET_PRODUCT_SHIPPING_API_LEVEL"
+    TA_PROXY_SMALI="$APKTOOL_DIR/system/framework/services.jar/smali/com/android/server/knox/dar/ddar/ta/TAProxy.smali"
+    if [ -f "$TA_PROXY_SMALI" ]; then
+        SMALI_PATCH "system" "system/framework/services.jar" \
+            "smali/com/android/server/knox/dar/ddar/ta/TAProxy.smali" "replace" \
+            "updateServiceHolder(Z)V" \
+            "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" \
+            "$TARGET_PRODUCT_SHIPPING_API_LEVEL"
+    else
+        LOG "TAProxy is absent; skipping legacy shipping API patch"
+    fi
     SMALI_PATCH "system" "system/framework/services.jar" \
         "smali/com/android/server/SystemServer.smali" "replace" \
         "startOtherServices(Lcom/android/server/utils/TimingsTraceAndSlog;)V" \
@@ -117,20 +175,36 @@ if [[ "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" != "$TARGET_PRODUCT_SHIPPING_API_LEVE
         "<clinit>()V" \
         "$SOURCE_PRODUCT_SHIPPING_API_LEVEL" \
         "$TARGET_PRODUCT_SHIPPING_API_LEVEL"
+    unset HDM_SAK_MANAGER_SMALI TA_PROXY_SMALI
 fi
 
 # SEC_PRODUCT_FEATURE_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION
 if [[ "$SOURCE_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" != "$TARGET_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" ]]; then
     if [[ "$SOURCE_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" != "none" ]]; then
-        SMALI_PATCH "system" "system/framework/framework.jar" \
-            "smali_classes6/com/samsung/android/camera/mic/SemMultiMicManager.smali" "replace" \
-            "isSupported()Z" \
+        DECODE_APK "system" "system/framework/framework.jar" || return 1
+        SEM_MULTI_MIC_ROOT="$APKTOOL_DIR/system/framework/framework.jar"
+        SEM_MULTI_MIC_SMALI="smali_classes6/com/samsung/android/camera/mic/SemMultiMicManager.smali"
+        if [ ! -f "$SEM_MULTI_MIC_ROOT/$SEM_MULTI_MIC_SMALI" ]; then
+            SEM_MULTI_MIC_SMALI="$(find "$SEM_MULTI_MIC_ROOT" -type f \
+                -name 'SemMultiMicManager.smali' -printf '%P\n' -quit)"
+        fi
+        [ "$SEM_MULTI_MIC_SMALI" ] || {
+            ABORT "SemMultiMicManager.smali was not found in framework.jar"
+            return 1
+        }
+        SOURCE_RECORDALIVE_LITERAL="$(RESOLVE_RECORDALIVE_LITERAL \
+            "$SEM_MULTI_MIC_ROOT/$SEM_MULTI_MIC_SMALI" \
             "$SOURCE_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" \
+            "${TARGET_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION//none/}")" || return 1
+        SMALI_PATCH "system" "system/framework/framework.jar" \
+            "$SEM_MULTI_MIC_SMALI" "replace" \
+            "isSupported()Z" \
+            "$SOURCE_RECORDALIVE_LITERAL" \
             "${TARGET_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION//none/}"
         SMALI_PATCH "system" "system/framework/framework.jar" \
-            "smali_classes6/com/samsung/android/camera/mic/SemMultiMicManager.smali" "replace" \
+            "$SEM_MULTI_MIC_SMALI" "replace" \
             "isSupported(I)Z" \
-            "$SOURCE_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION" \
+            "$SOURCE_RECORDALIVE_LITERAL" \
             "${TARGET_AUDIO_CONFIG_RECORDALIVE_LIB_VERSION//none/}"
     else
         # TODO handle this condition
@@ -157,7 +231,7 @@ if $SOURCE_AUDIO_SUPPORT_ACH_RINGTONE; then
                 if grep -Fq 'SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z = true' "$ACH_RUNE"; then
                     EVAL "sed -i 's/SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z = true/SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z = false/' \"$ACH_RUNE\""
                 elif ! grep -Fq 'sput-boolean v1, Lcom/samsung/android/audio/Rune;->SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z' "$ACH_RUNE"; then
-                    EVAL "sed -i '/sput-boolean v[0-9][0-9]*, Lcom\\/samsung\\/android\\/audio\\/Rune;->SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z/ s/sput-boolean v[0-9][0-9]*/sput-boolean v1/' \"$ACH_RUNE\""
+                    EVAL "sed -i -E '/SEC_AUDIO_SUPPORT_ACH_RINGTONE:Z/ s/sput-boolean v[0-9]+/sput-boolean v1/' \"$ACH_RUNE\""
                 fi
             else
                 ABORT "Rune.smali has no recognizable ACH ringtone flag"
@@ -325,7 +399,12 @@ if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_COMMON_CONFIG_MDNIE_MODE" != 
 fi
 
 # SEC_PRODUCT_FEATURE_COMMON_CONFIG_DYN_RESOLUTION_CONTROL
-if ! $PRESERVE_NATIVE_DISPLAY_STACK && ! $SOURCE_COMMON_SUPPORT_DYN_RESOLUTION_CONTROL; then
+# The transplant below was generated against the Android 16 S24+ display
+# classes. Android 17 changed the multi-resolution flow again; an SDK 37
+# source must keep its native implementation even when the feature flag is
+# absent, otherwise the old patch can target an unrelated Settings method.
+if ! $PRESERVE_NATIVE_DISPLAY_STACK && ! $SOURCE_COMMON_SUPPORT_DYN_RESOLUTION_CONTROL && \
+        [ "$SOURCE_PLATFORM_SDK_VERSION" -lt 37 ]; then
     if $TARGET_COMMON_SUPPORT_DYN_RESOLUTION_CONTROL; then
         if [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$TARGET_FINGERPRINT_CONFIG_SENSOR")" == "optical" ]]; then
             ABORT "TARGET_COMMON_SUPPORT_DYN_RESOLUTION_CONTROL is not supported on targets with an optical fingerprint sensor"
@@ -568,7 +647,15 @@ if [[ "$SOURCE_FINGERPRINT_CONFIG_SENSOR" != "$TARGET_FINGERPRINT_CONFIG_SENSOR"
         "$TARGET_FINGERPRINT_CONFIG_SENSOR"
 
     if [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$SOURCE_FINGERPRINT_CONFIG_SENSOR")" != "$(GET_FINGERPRINT_SENSOR_TYPE "$TARGET_FINGERPRINT_CONFIG_SENSOR")" ]]; then
-        if [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$SOURCE_FINGERPRINT_CONFIG_SENSOR")" == "ultrasonic" ]]; then
+        if [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$SOURCE_FINGERPRINT_CONFIG_SENSOR")" == "side" ]] && \
+                [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$TARGET_FINGERPRINT_CONFIG_SENSOR")" == "rear" ]]; then
+            # A185F uses a capacitive power-key reader. It shares the side
+            # fingerprint feature contract, but the F415F target has its
+            # reader on the rear. No side-key UI/HAL donor is needed here;
+            # convert the framework string and keep the target rear path.
+            SOURCE_FINGERPRINT_CONFIG_SENSOR="google_touch_rear"
+            LOG "Converting the A185F power-key fingerprint contract to the target rear reader"
+        elif [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$SOURCE_FINGERPRINT_CONFIG_SENSOR")" == "ultrasonic" ]]; then
             if [[ "$(GET_FINGERPRINT_SENSOR_TYPE "$TARGET_FINGERPRINT_CONFIG_SENSOR")" == "optical" ]]; then
                 SOURCE_FINGERPRINT_CONFIG_SENSOR="google_touch_display_optical,settings=3"
 
@@ -766,11 +853,21 @@ if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_LCD_CONFIG_CONTROL_AUTO_BRIGH
     if [ ! "$SECSETTINGS_DISPLAY_UTILS" ]; then
         ABORT "Unable to locate com/samsung/android/settings/display/SecDisplayUtils.smali in SecSettings.apk"
     fi
-    SMALI_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
-        "$SECSETTINGS_RUNE" "replace" \
-        "<clinit>()V" \
-        "$SOURCE_LCD_CONFIG_CONTROL_AUTO_BRIGHTNESS" \
-        "$TARGET_LCD_CONFIG_CONTROL_AUTO_BRIGHTNESS"
+    # Recent SecSettings builds no longer keep the auto-brightness level in
+    # Rune.<clinit>; the only remaining literal 0x5 values are sensor type
+    # constants in supportCameraSensor/supportLightSensor. Do not rewrite
+    # those constants as an unrelated display setting.
+    if sed -n '/^\.method static constructor <clinit>()V$/,/^\.end method$/p' \
+            "$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk/$SECSETTINGS_RUNE" | \
+            grep -Eq 'const/(4|16|high16)[[:space:]]+[vp][0-9]+,[[:space:]]+(0x)?5([[:space:]]|$)'; then
+        SMALI_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
+            "$SECSETTINGS_RUNE" "replace" \
+            "<clinit>()V" \
+            "$SOURCE_LCD_CONFIG_CONTROL_AUTO_BRIGHTNESS" \
+            "$TARGET_LCD_CONFIG_CONTROL_AUTO_BRIGHTNESS"
+    else
+        LOG "SecSettings Rune has no auto-brightness literal in <clinit>; skipping legacy Rune patch"
+    fi
 fi
 
 # SEC_PRODUCT_FEATURE_LCD_CONFIG_SEAMLESS_BRT
@@ -830,11 +927,23 @@ fi
 if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" != "$TARGET_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" ]]; then
     SET_FLOATING_FEATURE_CONFIG "SEC_FLOATING_FEATURE_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" "$TARGET_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE"
 
-    SMALI_PATCH "system" "system/framework/framework.jar" \
-        "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
-        "dump(Ljava/io/PrintWriter;Ljava/lang/String;Z)V" \
-        "HFR_DEFAULT_REFRESH_RATE: $SOURCE_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" \
-        "HFR_DEFAULT_REFRESH_RATE: $TARGET_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE"
+    REFRESH_RATE_CONFIG="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali"
+    REFRESH_RATE_DUMP_METHOD=""
+    if grep -q '^\.method .*dumpProductFeature(Ljava/io/PrintWriter;Ljava/lang/String;Z)V' "$REFRESH_RATE_CONFIG"; then
+        REFRESH_RATE_DUMP_METHOD="dumpProductFeature(Ljava/io/PrintWriter;Ljava/lang/String;Z)V"
+    elif grep -q '^\.method .*dump(Ljava/io/PrintWriter;Ljava/lang/String;Z)V' "$REFRESH_RATE_CONFIG"; then
+        REFRESH_RATE_DUMP_METHOD="dump(Ljava/io/PrintWriter;Ljava/lang/String;Z)V"
+    fi
+    if [[ -n "$REFRESH_RATE_DUMP_METHOD" ]] && \
+            grep -Fq "HFR_DEFAULT_REFRESH_RATE: $SOURCE_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" "$REFRESH_RATE_CONFIG"; then
+        SMALI_PATCH "system" "system/framework/framework.jar" \
+            "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
+            "$REFRESH_RATE_DUMP_METHOD" \
+            "HFR_DEFAULT_REFRESH_RATE: $SOURCE_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" \
+            "HFR_DEFAULT_REFRESH_RATE: $TARGET_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE"
+    else
+        LOG "RefreshRateConfig has no legacy HFR default dump literal; skipping diagnostic patch"
+    fi
     SMALI_PATCH "system" "system/priv-app/SecSettings/SecSettings.apk" \
         "$SECSETTINGS_DISPLAY_UTILS" "replace" \
         "getHighRefreshRateDefaultValue(Landroid/content/Context;I)I" \
@@ -856,11 +965,16 @@ if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_LCD_CONFIG_HFR_MODE" != "$TAR
         "<clinit>()V" \
         "$SOURCE_LCD_CONFIG_HFR_MODE" \
         "$TARGET_LCD_CONFIG_HFR_MODE"
-    SMALI_PATCH "system" "system/framework/framework.jar" \
-        "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
-        "dump(Ljava/io/PrintWriter;Ljava/lang/String;Z)V" \
-        "HFR_MODE: $SOURCE_LCD_CONFIG_HFR_MODE" \
-        "HFR_MODE: $TARGET_LCD_CONFIG_HFR_MODE"
+    if [[ -n "$REFRESH_RATE_DUMP_METHOD" ]] && \
+            grep -Fq "HFR_MODE: $SOURCE_LCD_CONFIG_HFR_MODE" "$REFRESH_RATE_CONFIG"; then
+        SMALI_PATCH "system" "system/framework/framework.jar" \
+            "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
+            "$REFRESH_RATE_DUMP_METHOD" \
+            "HFR_MODE: $SOURCE_LCD_CONFIG_HFR_MODE" \
+            "HFR_MODE: $TARGET_LCD_CONFIG_HFR_MODE"
+    else
+        LOG "RefreshRateConfig has no legacy HFR mode dump literal; skipping diagnostic patch"
+    fi
     SMALI_PATCH "system" "system/framework/framework.jar" \
         "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
         "getMainInstance()Lcom/samsung/android/hardware/display/RefreshRateConfig;" \
@@ -871,11 +985,18 @@ if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_LCD_CONFIG_HFR_MODE" != "$TAR
         "<clinit>()V" \
         "$SOURCE_LCD_CONFIG_HFR_MODE" \
         "$TARGET_LCD_CONFIG_HFR_MODE"
-    SMALI_PATCH "system" "system/framework/gamemanager.jar" \
-        "smali/com/samsung/android/game/GameManagerService.smali" "replace" \
-        "isVariableRefreshRateSupported()Ljava/lang/String;" \
-        "$SOURCE_LCD_CONFIG_HFR_MODE" \
-        "$TARGET_LCD_CONFIG_HFR_MODE"
+    GAMEMANAGER_VRR_SMALI="$(find "$APKTOOL_DIR/system/framework/gamemanager.jar" -type f -name '*.smali' \
+        -exec grep -l 'isVariableRefreshRateSupported()Ljava/lang/String;' {} + 2>/dev/null | head -1 || true)"
+    if [[ -n "$GAMEMANAGER_VRR_SMALI" ]]; then
+        GAMEMANAGER_VRR_SMALI="${GAMEMANAGER_VRR_SMALI#"$APKTOOL_DIR/system/framework/gamemanager.jar/"}"
+        SMALI_PATCH "system" "system/framework/gamemanager.jar" \
+            "$GAMEMANAGER_VRR_SMALI" "replace" \
+            "isVariableRefreshRateSupported()Ljava/lang/String;" \
+            "$SOURCE_LCD_CONFIG_HFR_MODE" \
+            "$TARGET_LCD_CONFIG_HFR_MODE"
+    else
+        LOG "GameManager has no variable refresh-rate method; skipping legacy HFR patch"
+    fi
     SMALI_PATCH "system" "system/framework/secinputdev-service.jar" \
         "smali/com/samsung/android/hardware/secinputdev/utils/SemInputFeatures.smali" "replaceall" \
         "\\\"$SOURCE_LCD_CONFIG_HFR_MODE\\\"" \
@@ -928,11 +1049,13 @@ if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFR
         REFRESH_RATE_CONFIG="$APKTOOL_DIR/system/framework/framework.jar/smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali"
         if grep -Fq "HFR_SUPPORTED_REFRESH_RATE: $SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE" \
                 "$REFRESH_RATE_CONFIG"; then
-            SMALI_PATCH "system" "system/framework/framework.jar" \
-                "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
-                "dump(Ljava/io/PrintWriter;Ljava/lang/String;Z)V" \
-                "HFR_SUPPORTED_REFRESH_RATE: $SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE" \
-                "HFR_SUPPORTED_REFRESH_RATE: ${TARGET_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE//none/}"
+            if [[ -n "$REFRESH_RATE_DUMP_METHOD" ]]; then
+                SMALI_PATCH "system" "system/framework/framework.jar" \
+                    "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
+                    "$REFRESH_RATE_DUMP_METHOD" \
+                    "HFR_SUPPORTED_REFRESH_RATE: $SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE" \
+                    "HFR_SUPPORTED_REFRESH_RATE: ${TARGET_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE//none/}"
+            fi
         fi
         SMALI_PATCH "system" "system/framework/framework.jar" \
             "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
@@ -964,11 +1087,13 @@ if ! $PRESERVE_NATIVE_DISPLAY_STACK && [[ "$SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFR
             SET_FLOATING_FEATURE_CONFIG "SEC_FLOATING_FEATURE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS" --delete
         fi
 
-        SMALI_PATCH "system" "system/framework/framework.jar" \
-            "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
-            "dump(Ljava/io/PrintWriter;Ljava/lang/String;Z)V" \
-            "HFR_SUPPORTED_REFRESH_RATE_NS: $SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS" \
-            "HFR_SUPPORTED_REFRESH_RATE_NS: ${TARGET_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS//none/}"
+        if [[ -n "$REFRESH_RATE_DUMP_METHOD" ]]; then
+            SMALI_PATCH "system" "system/framework/framework.jar" \
+                "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
+                "$REFRESH_RATE_DUMP_METHOD" \
+                "HFR_SUPPORTED_REFRESH_RATE_NS: $SOURCE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS" \
+                "HFR_SUPPORTED_REFRESH_RATE_NS: ${TARGET_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS//none/}"
+        fi
         SMALI_PATCH "system" "system/framework/framework.jar" \
             "smali_classes6/com/samsung/android/hardware/display/RefreshRateConfig.smali" "replace" \
             "getMainInstance()Lcom/samsung/android/hardware/display/RefreshRateConfig;" \
@@ -1365,24 +1490,54 @@ if [[ "$SOURCE_WLAN_CONFIG_CONNECTION_PERSONALIZATION" != "$TARGET_WLAN_CONFIG_C
         [[ "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" != "$TARGET_WLAN_CONFIG_DYNAMIC_SWITCH" ]] || \
         [[ "$SOURCE_WLAN_SUPPORT_APE_SERVICE" != "$TARGET_WLAN_SUPPORT_APE_SERVICE" ]]; then
     if [[ "$SOURCE_WLAN_CONFIG_CONNECTION_PERSONALIZATION" != "0" ]] && $SOURCE_WLAN_SUPPORT_APE_SERVICE; then
+        DECODE_APK "system" "system/framework/semwifi-service.jar"
+        SEMWIFI_INJECTOR_ROOT="$APKTOOL_DIR/system/framework/semwifi-service.jar"
+        SEMWIFI_INJECTOR_SMALI="smali/com/samsung/android/server/wifi/SemWifiInjector.smali"
+        if [ ! -f "$SEMWIFI_INJECTOR_ROOT/$SEMWIFI_INJECTOR_SMALI" ]; then
+            SEMWIFI_INJECTOR_MATCHES="$(find "$SEMWIFI_INJECTOR_ROOT" -type f \
+                -path '*/com/samsung/android/server/wifi/SemWifiInjector.smali' \
+                -printf '%P\n' -quit)"
+            if [ "$SEMWIFI_INJECTOR_MATCHES" ]; then
+                SEMWIFI_INJECTOR_SMALI="$SEMWIFI_INJECTOR_MATCHES"
+            fi
+        fi
         if [[ "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" != "0" ]]; then
             SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
-                "smali/com/samsung/android/server/wifi/SemWifiInjector.smali" "replace" \
+                "$SEMWIFI_INJECTOR_SMALI" "replace" \
                 "<init>(Landroid/content/Context;)V" \
                 "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" \
                 "0" > /dev/null
         fi
-        APPLY_PATCH "system" "system/framework/semwifi-service.jar" \
-            "$MODPATH/wifi/connection_personalization/semwifi-service.jar/0001-Allow-custom-CONNECTION_PERSONALIZATION-value.patch"
+        # Older donor diffs assumed SemWifiInjector's source literal was
+        # exactly "2". Resolve the current source value in the constructor
+        # instead, because newer source firmware can change that literal while
+        # keeping the same feature contract.
+        SEMWIFI_INJECTOR_PATH="$SEMWIFI_INJECTOR_ROOT/$SEMWIFI_INJECTOR_SMALI"
+        SEMWIFI_INIT_CONTENT="$(sed -n \
+            '/^\.method.*<init>(Landroid\/content\/Context;)V$/,/^\.end method$/p' \
+            "$SEMWIFI_INJECTOR_PATH")"
+        if ! grep -Fq 'CONFIG_CONNECTION_PERSONALIZATION' <<< "$SEMWIFI_INIT_CONTENT"; then
+            if grep -Fq -- "\"$SOURCE_WLAN_CONFIG_CONNECTION_PERSONALIZATION\"" \
+                    <<< "$SEMWIFI_INIT_CONTENT"; then
+                SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+                    "$SEMWIFI_INJECTOR_SMALI" "replace" \
+                    "<init>(Landroid/content/Context;)V" \
+                    "$SOURCE_WLAN_CONFIG_CONNECTION_PERSONALIZATION" \
+                    "CONFIG_CONNECTION_PERSONALIZATION"
+            else
+                ABORT "Unable to locate the source CONNECTION_PERSONALIZATION literal in SemWifiInjector"
+                return 1
+            fi
+        fi
         if [[ "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" != "0" ]]; then
             SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
-                "smali/com/samsung/android/server/wifi/SemWifiInjector.smali" "replace" \
+                "$SEMWIFI_INJECTOR_SMALI" "replace" \
                 "<init>(Landroid/content/Context;)V" \
                 "0" \
                 "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" > /dev/null
         fi
         SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
-            "smali/com/samsung/android/server/wifi/SemWifiInjector.smali" "replace" \
+            "$SEMWIFI_INJECTOR_SMALI" "replace" \
             "<init>(Landroid/content/Context;)V" \
             "CONFIG_CONNECTION_PERSONALIZATION" \
             "$TARGET_WLAN_CONFIG_CONNECTION_PERSONALIZATION" | \
@@ -1401,7 +1556,7 @@ if [[ "$SOURCE_WLAN_CONFIG_CONNECTION_PERSONALIZATION" != "$TARGET_WLAN_CONFIG_C
 
         if [[ "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" != "$TARGET_WLAN_CONFIG_DYNAMIC_SWITCH" ]]; then
             SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
-                "smali/com/samsung/android/server/wifi/SemWifiInjector.smali" "replace" \
+                "$SEMWIFI_INJECTOR_SMALI" "replace" \
                 "<init>(Landroid/content/Context;)V" \
                 "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" \
                 "$TARGET_WLAN_CONFIG_DYNAMIC_SWITCH"
@@ -1416,6 +1571,8 @@ if [[ "$SOURCE_WLAN_CONFIG_CONNECTION_PERSONALIZATION" != "$TARGET_WLAN_CONFIG_C
                 "$SOURCE_WLAN_CONFIG_DYNAMIC_SWITCH" \
                 "$TARGET_WLAN_CONFIG_DYNAMIC_SWITCH"
         fi
+        unset SEMWIFI_INJECTOR_ROOT SEMWIFI_INJECTOR_SMALI \
+            SEMWIFI_INJECTOR_MATCHES SEMWIFI_INJECTOR_PATH SEMWIFI_INIT_CONTENT
 
         if ! $TARGET_WLAN_SUPPORT_APE_SERVICE; then
             APPLY_PATCH "system" "system/framework/semwifi-service.jar" \
@@ -1565,8 +1722,19 @@ if ! $SOURCE_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY; then
     fi
 else
     if ! $TARGET_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY; then
-        # TODO handle this condition
-        LOG_MISSING_PATCHES "SOURCE_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY" "TARGET_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY"
+        # The S947B donor advertises the feature, while the Exynos 990 target
+        # does not. Keep the target capability map coherent by disabling the
+        # donor's diagnostic flag instead of aborting on an unsupported
+        # source-to-target downgrade.
+        SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+            "smali/com/samsung/android/server/wifi/ap/SemSoftApConfiguration.smali" "replaceall" \
+            "SPF_5G_BASEDON_COUNTRY=true" \
+            "SPF_5G_BASEDON_COUNTRY=false"
+        SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+            "smali/com/samsung/android/server/wifi/ap/SemWifiApServiceImpl.smali" "return" \
+            "supportWifiAp5GBasedOnCountry()Z" \
+            "false"
+        LOG "- Disabled MOBILEAP_5G_BASEDON_COUNTRY in the modern semwifi-service implementation"
     fi
 fi
 
@@ -1720,8 +1888,16 @@ if ! $SOURCE_WLAN_SUPPORT_MOBILEAP_WIFI_CONCURRENCY; then
     fi
 else
     if ! $TARGET_WLAN_SUPPORT_MOBILEAP_WIFI_CONCURRENCY; then
-        # TODO handle this condition
-        LOG_MISSING_PATCHES "SOURCE_WLAN_SUPPORT_MOBILEAP_WIFI_CONCURRENCY" "TARGET_WLAN_SUPPORT_MOBILEAP_WIFI_CONCURRENCY"
+        SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+            "smali/com/samsung/android/server/wifi/ap/SemSoftApConfiguration.smali" "replaceall" \
+            "SPF_Concurrency=true" \
+            "SPF_Concurrency=false"
+        SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
+            "smali/com/samsung/android/server/wifi/ap/SemWifiApChipInfo.smali" "replace" \
+            "checkWifiSharingAndPowerSave()V" \
+            "    sput-boolean v5, Lcom/samsung/android/server/wifi/ap/SemWifiApChipInfo;->mSupportWifiSharing:Z"$'\n\n    '"new-instance v2" \
+            "    sput-boolean v4, Lcom/samsung/android/server/wifi/ap/SemWifiApChipInfo;->mSupportWifiSharing:Z"$'\n\n    '"new-instance v2"
+        LOG "- Disabled MOBILEAP_WIFI_CONCURRENCY in the modern semwifi-service implementation"
     fi
 fi
 
@@ -1800,5 +1976,7 @@ elif $SOURCE_WLAN_SUPPORT_WIFI_TO_CELLULAR && ! $TARGET_WLAN_SUPPORT_WIFI_TO_CEL
 fi
 
 unset TARGET_FIRMWARE_PATH TELEPHONY_FEATURES TELEPHONY_LOGGER TELEPHONY_LOGGER_SOURCE TELEPHONY_LOGGER_TARGET
-unset STRONGBOX_WORKER FP_SETTINGS_UTILS BTM_CONTROLLER APE_CONTROLLER APE_CONTROLLER_PATH
-unset -f GET_FINGERPRINT_SENSOR_TYPE LOG_MISSING_PATCHES PATCH_GRAPHICS_COMMON_NDK_DEPENDENCY
+unset STRONGBOX_WORKER FP_SETTINGS_UTILS BTM_CONTROLLER APE_CONTROLLER APE_CONTROLLER_PATH \
+    SEM_MULTI_MIC_ROOT SEM_MULTI_MIC_SMALI SOURCE_RECORDALIVE_LITERAL
+unset -f GET_FINGERPRINT_SENSOR_TYPE LOG_MISSING_PATCHES \
+    PATCH_GRAPHICS_COMMON_NDK_DEPENDENCY RESOLVE_RECORDALIVE_LITERAL

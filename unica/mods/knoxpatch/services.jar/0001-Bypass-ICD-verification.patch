@@ -67,10 +67,11 @@ diff --git a/smali_classes2/com/android/server/pm/UserManagerService.smali b/sma
 index 896ef2e1..2502c10f 100644
 --- a/smali_classes2/com/android/server/pm/UserManagerService.smali
 +++ b/smali_classes2/com/android/server/pm/UserManagerService.smali
-@@ -7079,22 +7079,6 @@
+@@ -7078,22 +7078,6 @@
+     move-result-object v9
  
      invoke-direct {v8, v0, v9}, Lcom/samsung/android/security/keystore/AttestParameterSpec$Builder;-><init>(Ljava/lang/String;[B)V
- 
+-
 -    const-class v9, Lcom/samsung/android/security/keystore/AttestParameterSpec$Builder;
 -
 -    const-string/jumbo v13, "mVerifiableIntegrity"
@@ -86,10 +87,9 @@ index 896ef2e1..2502c10f 100644
 -    sget-object v13, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;
 -
 -    invoke-virtual {v9, v8, v13}, Ljava/lang/reflect/Field;->set(Ljava/lang/Object;Ljava/lang/Object;)V
--
+ 
      invoke-virtual {v8}, Lcom/samsung/android/security/keystore/AttestParameterSpec$Builder;->build()Lcom/samsung/android/security/keystore/AttestParameterSpec;
  
-     move-result-object v8
 diff --git a/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali b/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali
 index b7ff4552..43fef60b 100644
 --- a/smali_classes2/com/samsung/android/security/keystore/AttestationUtils.smali

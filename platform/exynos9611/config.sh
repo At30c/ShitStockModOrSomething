@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Platform configuration for Samsung Exynos 9611 targets.
-# The S24+ ESSI source is still used for the system/framework side; the
-# target firmware supplies the Exynos 9611 vendor and partition layout.
+# The M21s Android 17 test port uses the Galaxy A18 4G (A185F/ESSI) system
+# framework as its donor; the target firmware still supplies the Exynos 9611
+# vendor and partition layout.
 # The F415F/M21s stock vendor reports ro.vndk.version=31 and its bundled
 # com.android.vndk.current.apex has the internal name com.android.vndk.v31.
 # Keep the framework compatibility layer aligned with that vendor ABI.

@@ -62,7 +62,7 @@ if [[ "$TARGET_CODENAME" == "m21s" ]]; then
     unset M21S_CAMERA_FEATURE
 fi
 # the Autoframe implementation, but the Exynos 990 target is missing the
-# S24+ tracker/plugin stack and its detector model. Import only this isolated
+# source-firmware tracker/plugin stack and its detector model. Import only this isolated
 # closure from the source firmware; do not replace the camera HAL or all
 # source camera blobs.
 if [[ "$TARGET_CODENAME" == "y2s" ]]; then
@@ -92,7 +92,7 @@ if [[ "$TARGET_CODENAME" == "y2s" ]]; then
         for AUTOFRAME_FILE in "${AUTOFRAME_FILES[@]}"; do
             ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "${AUTOFRAME_FILE%%/*}" "${AUTOFRAME_FILE#*/}"
         done
-        LOG "- Imported S24+ Autoframe tracker/plugin stack and detector model"
+        LOG "- Imported source Autoframe tracker/plugin stack and detector model"
     else
         LOGW "Skipping Autoframe import because the source closure is incomplete"
     fi
@@ -189,12 +189,30 @@ fi
 # SEC_PRODUCT_FEATURE_CAMERA_SINGLETAKE_SOLUTIONS
 if ! grep -q "ENABLE_SINGLE_TAKE_LITE.*true" "$WORK_DIR/system/system/cameradata/singletake/service-feature.xml" 2>/dev/null && \
         ! grep -q "SUPPORT_SMART_CROP.*false" "$WORK_DIR/system/system/cameradata/singletake/service-feature.xml" 2>/dev/null; then
-    if [ -d "$FW_DIR/$SOURCE_FIRMWARE_PATH/vendor/etc/singletake/SmartCrop" ]; then
+    SOURCE_SMART_CROP_DIR="$FW_DIR/$SOURCE_FIRMWARE_PATH/vendor/etc/singletake/SmartCrop"
+    TARGET_SMART_CROP_DIR="$WORK_DIR/vendor/etc/singletake/SmartCrop"
+    SOURCE_SALIENCY_DIR="$FW_DIR/$SOURCE_FIRMWARE_PATH/vendor/etc/singletake/saliency"
+    TARGET_SALIENCY_DIR="$WORK_DIR/vendor/etc/singletake/saliency"
+    if [ -d "$SOURCE_SMART_CROP_DIR" ]; then
         if [ ! -d "$WORK_DIR/vendor/etc/singletake/SmartCrop" ] || \
                 [ "$TARGET_PLATFORM_SDK_VERSION" -lt "$SOURCE_PLATFORM_SDK_VERSION" ]; then
             ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "vendor" \
                 "etc/singletake/SmartCrop/SmartCrop.tflite" 0 0 644 "u:object_r:vendor_configs_file:s0"
         fi
+    elif [ -d "$SOURCE_SALIENCY_DIR" ] && [ -d "$TARGET_SALIENCY_DIR" ]; then
+        # Android 16/17 donors replaced the legacy SmartCrop.tflite directory
+        # with the saliency model closure. The target already has that modern
+        # closure, so the true feature flag is valid without the old blob.
+        if [ -d "$TARGET_SMART_CROP_DIR" ]; then
+            DELETE_FROM_WORK_DIR "vendor" "etc/singletake/SmartCrop"
+        fi
+        LOG "- Keeping the modern SingleTake saliency Smart Crop implementation"
+    elif [ -d "$SOURCE_SALIENCY_DIR" ]; then
+        if [ -d "$TARGET_SMART_CROP_DIR" ]; then
+            DELETE_FROM_WORK_DIR "vendor" "etc/singletake/SmartCrop"
+        fi
+        ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "vendor" \
+            "etc/singletake/saliency" 0 0 755 "u:object_r:vendor_configs_file:s0"
     else
         # TODO handle this condition
         # shellcheck disable=SC2034
@@ -204,6 +222,7 @@ if ! grep -q "ENABLE_SINGLE_TAKE_LITE.*true" "$WORK_DIR/system/system/cameradata
         LOG_MISSING_PATCHES "SOURCE_SUPPORT_SMART_CROP" "TARGET_SUPPORT_SMART_CROP"
         unset SOURCE_SUPPORT_SMART_CROP TARGET_SUPPORT_SMART_CROP
     fi
+    unset SOURCE_SMART_CROP_DIR TARGET_SMART_CROP_DIR SOURCE_SALIENCY_DIR TARGET_SALIENCY_DIR
 else
     if [ -d "$WORK_DIR/vendor/etc/singletake/SmartCrop" ]; then
         DELETE_FROM_WORK_DIR "vendor" "etc/singletake/SmartCrop"
@@ -215,10 +234,25 @@ SOURCE_CAMERA_CONFIG_ACTION_CLASSIFIER="$(GET_FLOATING_FEATURE_CONFIG "$FW_DIR/$
 TARGET_CAMERA_CONFIG_ACTION_CLASSIFIER="$(GET_FLOATING_FEATURE_CONFIG "SEC_FLOATING_FEATURE_CAMERA_CONFIG_ACTION_CLASSIFIER")"
 if [ "$SOURCE_CAMERA_CONFIG_ACTION_CLASSIFIER" ]; then
     if [ "$TARGET_CAMERA_CONFIG_ACTION_CLASSIFIER" ]; then
-        if [ -d "$WORK_DIR/vendor/etc/singletake/dynamic_viewing" ]; then
-            DELETE_FROM_WORK_DIR "vendor" "etc/singletake/dynamic_viewing"
+        SOURCE_DYNAMIC_VIEWING_DIR="$FW_DIR/$SOURCE_FIRMWARE_PATH/vendor/etc/singletake/dynamic_viewing"
+        TARGET_DYNAMIC_VIEWING_DIR="$WORK_DIR/vendor/etc/singletake/dynamic_viewing"
+        if [ -d "$SOURCE_DYNAMIC_VIEWING_DIR" ]; then
+            if [ -d "$TARGET_DYNAMIC_VIEWING_DIR" ]; then
+                DELETE_FROM_WORK_DIR "vendor" "etc/singletake/dynamic_viewing"
+            fi
+            ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "vendor" "etc/singletake/dynamic_viewing" \
+                0 2000 755 "u:object_r:vendor_configs_file:s0"
+        elif [ -d "$TARGET_DYNAMIC_VIEWING_DIR" ]; then
+            # S947B advertises the feature but no longer ships the old vendor
+            # model directory. Keep the target's complete closure instead of
+            # deleting it and aborting on a missing donor path.
+            LOG "- Keeping target SingleTake dynamic_viewing closure; donor has no replacement"
+        else
+            LOGW "Neither donor nor target provides dynamic_viewing; removing its native classifier libraries"
+            DELETE_FROM_WORK_DIR "system" "system/lib64/libVideoClassifier.camera.samsung.so"
+            DELETE_FROM_WORK_DIR "system" "system/lib64/libtensorflowLite2_11_0_dynamic_camera.so"
         fi
-        ADD_TO_WORK_DIR "$SOURCE_FIRMWARE" "vendor" "etc/singletake/dynamic_viewing" 0 2000 755 "u:object_r:vendor_configs_file:s0"
+        unset SOURCE_DYNAMIC_VIEWING_DIR TARGET_DYNAMIC_VIEWING_DIR
     else
         DELETE_FROM_WORK_DIR "system" "system/lib64/libVideoClassifier.camera.samsung.so"
         DELETE_FROM_WORK_DIR "system" "system/lib64/libtensorflowLite2_11_0_dynamic_camera.so"
@@ -445,7 +479,7 @@ if [ -f "$WORK_DIR/system/system/lib/libstagefright.so" ]; then
     HEX_PATCH "$WORK_DIR/system/system/lib/libstagefright.so" \
         "726f2e70726f647563742e6d6f64656c00" "726f2e626f6f742e656d2e6d6f64656c00"
 else
-    # Android 16 source firmware (for example S926B) is arm64-only and does
+    # Android 16/17 source firmware is arm64-only and does
     # not ship the legacy 32-bit stagefright library.
     LOG "- Skipping 32-bit libstagefright model patch (library is absent)"
 fi

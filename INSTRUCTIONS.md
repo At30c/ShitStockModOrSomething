@@ -1,5 +1,6 @@
 # Current One UI 9 Port Handoff Instructions
 
+
 ## M21s camera `camera-feature.xml`: authoritative baseline and state (2026-10-05)
 
 This is the current reference for the M21s camera XML. Everything below supersedes
@@ -8690,3 +8691,57 @@ M21s, mas não resolve a vibração nesta base Android 17 sem uma ponte AIDL ou
 um serviço AIDL compatível. Os registros estão em
 `out/manual/a51-vibrator-test-20261008_0107` e o rollback individual está em
 `out/manual/m21s-vendor-before-a51-20261008_0105`.
+
+### SAIV: doadores opcionais por firmware (2026-10-10)
+
+`unica/patches/saiv/customize.sh` agora valida cada modelo ou diretório antes
+de chamar `ADD_TO_WORK_DIR`. O S947B usado como donor declara
+`SRIBMQA_aiIQA_V100_FP32.tflite` no `midas_config.json`, mas não entrega esse
+arquivo em `vendor/etc/midas`; o G986B alvo também não o possui. A build agora
+mantém o modelo do alvo quando existir e registra a ausência quando nenhum dos
+firmwares tiver o recurso, em vez de abortar.
+
+As mesmas proteções cobrem os bundles de moiré/aiFiQA, face cluster, AIG,
+Photo Editor, pet search, Bixby Vision, document dewarp, Smart Cropping,
+textrecognition e SmartScan. Os donors `gts11xx` e `a34xxx` só removem o
+modelo atual depois que o conjunto substituto completo foi encontrado. O
+script foi validado com `bash -n` e os caminhos presentes/ausentes foram
+checados contra os diretórios extraídos em `out/fw` e `prebuilts/samsung`;
+nenhuma build foi iniciada nesta auditoria.
+
+### HMA: ComputerEngine da FW S947B (2026-10-10)
+
+O patch `unica/mods/hma/smali/system/framework/services.jar/0001-Introduce-HideAppListUtils.patch`
+falhava no `ComputerEngine.getApplicationInfoInternal()` porque a FW atual
+usa `v1/v2` na chamada a `resolveInternalPackageName()` e mantém
+`mPackages` em `v1`; o patch antigo esperava `v0/v1` e `mPackages` em `v0`.
+O contexto do hunk foi atualizado para o layout Smali atual. Os demais hunks
+de `services.jar`, incluindo `ActivityStarter`, e o patch correspondente de
+`framework.jar` passam em `git apply --check` contra os APKs/JARs decodificados
+do alvo y2s.
+
+### Auditoria da sequência pós-HMA na FW S947B (2026-10-10)
+
+O `make_rom-20260928_204924.log` foi usado como referência para a ordem dos
+módulos depois do HMA: Keybox, KnoxPatch, Monotype, Multi-user, Outdoor,
+Paradigm/PIF, Settings, Setup Wizard, Misc tweaks, wallpapers, fallback do
+mapper gráfico e compatibilidade de geração de superfície. A sequência foi
+reproduzida em cópias temporárias dos artefatos decodificados atuais, sem
+iniciar uma nova build.
+
+O hunk do Knox ICD em `UserManagerService.smali` foi atualizado para os
+registradores `v8/v9/v13` usados pela S947B; o patch completo agora passa junto
+com os dois patches seguintes do Knox. O patch ASKS também foi ajustado para o
+bloco atual que mantém a constante `"true"` em `v0`; os três checks de
+`persist.sys.unica.asks` passam na ordem correta.
+
+Os patches estáticos de Keybox, Multi-user, PIF, Settings, MultiSound,
+OMCAgent e os três patches do SystemUI passaram. O patch de compactação de
+aplicativos não corresponde ao layout atual de `CachedAppOptimizer` e
+`DynamicHiddenApp`, mas `unica/mods/tweaks/customize.sh` já o trata como
+opcional com `|| true`, portanto ele não interrompe a build. Os patches
+dinâmicos de Knox, Monotype, Outdoor, PIN, PIF, Settings e Setup Wizard tiveram
+seus métodos e literais encontrados e aplicados na cópia de auditoria. O
+fallback de `libui.so` ainda encontra as duas sequências originais; o patch de
+`libgui.so` é corretamente ignorado no SDK 37 pela própria condição do módulo.
+

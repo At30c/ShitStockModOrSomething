@@ -12,13 +12,21 @@ if [[ "$TARGET_PLATFORM" != "exynos990" && \
     return 0
 fi
 
+# These byte sequences belong to the Android 16 S24+ libgui. Android 17
+# sources have a different Surface/BufferQueue implementation; applying the
+# old offsets there would either abort the build or patch an unrelated branch.
+if [[ "${SOURCE_PLATFORM_SDK_VERSION:-0}" -ge 37 ]]; then
+    LOG "- Skipping Android 16 Surface generation patch on the Android 17 source"
+    return 0
+fi
+
 LIBGUI="$WORK_DIR/system/system/lib64/libgui.so"
 if [[ ! -f "$LIBGUI" ]]; then
     LOGE "Missing $LIBGUI"
     return 1
 fi
 
-# Surface::attachBuffer() at the S926B donor's stable instruction sequence:
+# Surface::attachBuffer() at the Android 16 donor's stable instruction sequence:
 #   cmp w9, #1; b.ne skip_generation_write
 # Make the generation write unconditional.  This keeps the producer-side
 # buffer metadata synchronized before the compatibility guard below runs.

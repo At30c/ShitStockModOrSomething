@@ -1,11 +1,11 @@
 # S24 FE OneUI 7 -> SoundBooster 2000
 # S20 Series -> SoundBooster 1050
 #
-# The S926B Android 16 firmware exposes a 7.1 service. That service is linked
+# Newer source firmware may expose a 7.1 service. That service is linked
 # against symbols which are not available in the y2slte vendor namespace. Use
-# the tested HIDL 6.0 wrapper from the older Exynos donor instead. The old
-# donor is intentionally discovered by its extracted files so a build remains
-# safe when the optional firmware has not been downloaded yet.
+# a tested HIDL 6.0 wrapper from an older Exynos donor instead. The donor is
+# discovered by its extracted files so changing SOURCE_FIRMWARE does not leave
+# this module tied to one S24+ directory name.
 AUDIO_DONOR_SOURCE="${AUDIO_LEGACY_DONOR_DIR:-}"
 AUDIO_DONOR_LABEL="${AUDIO_LEGACY_DONOR_DIR:-}"
 if [ "$AUDIO_DONOR_SOURCE" ] && \
@@ -16,10 +16,19 @@ if [ "$AUDIO_DONOR_SOURCE" ] && \
     AUDIO_DONOR_LABEL=""
 fi
 if [ ! "$AUDIO_DONOR_SOURCE" ]; then
-    for AUDIO_CANDIDATE in \
-            "$FW_DIR/SM-S901B_EUX" \
-            "$FW_DIR/SM-S711B_EUX" \
-            "$FW_DIR/SM-S926B_EUX"; do
+    AUDIO_SOURCE_PATH="$(cut -d "/" -f 1 -s <<< "$SOURCE_FIRMWARE")_$(cut -d "/" -f 2 -s <<< "$SOURCE_FIRMWARE")"
+    AUDIO_CANDIDATES=(
+        "$FW_DIR/SM-S901B_EUX"
+        "$FW_DIR/SM-S711B_EUX"
+    )
+    for AUDIO_CANDIDATE in "$FW_DIR"/SM-*_EUX; do
+        [ -d "$AUDIO_CANDIDATE" ] || continue
+        case "$AUDIO_CANDIDATE" in
+            "$FW_DIR/$AUDIO_SOURCE_PATH") continue ;;
+        esac
+        AUDIO_CANDIDATES+=("$AUDIO_CANDIDATE")
+    done
+    for AUDIO_CANDIDATE in "${AUDIO_CANDIDATES[@]}"; do
         [ -d "$AUDIO_CANDIDATE" ] || continue
         if [ -f "$AUDIO_CANDIDATE/vendor/lib64/hw/android.hardware.audio@6.0-impl.so" ] && \
                 [ -f "$AUDIO_CANDIDATE/vendor/bin/hw/android.hardware.audio.service" ]; then
@@ -28,6 +37,7 @@ if [ ! "$AUDIO_DONOR_SOURCE" ]; then
             break
         fi
     done
+    unset AUDIO_SOURCE_PATH AUDIO_CANDIDATES
 fi
 
 AUDIO_DEVICE_FACTORY_VERSION=""

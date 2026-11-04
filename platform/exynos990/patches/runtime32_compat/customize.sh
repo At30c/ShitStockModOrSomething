@@ -2,7 +2,7 @@
 # The late module order is intentional: install and validate the compatibility
 # runtime after the platform donor modules have populated the work directory.
 #
-# The Android 16 S926B source image is 64-bit-only and therefore has no
+# The Android 16/17 source image is 64-bit-only and therefore has no
 # /system/bin/linker or 32-bit system library namespace.  The M35x runtime
 # APEX is also Android 16, but contains both Bionic architectures.  Keep this
 # module platform-wide and do not change zygote/abilist properties: the goal is
@@ -61,7 +61,7 @@ if [ ! -f "$ART_APEX_PATH" ]; then
     return 1
 fi
 
-# These are the system-side ARM32 libraries that are absent from the S926B
+# These are the system-side ARM32 libraries that are absent from the 64-bit
 # 64-bit-only source but are required by the target's existing 32-bit vendor
 # executables and the legacy audio HAL shared-object graph.  Use r11s for all
 # loose libraries; m35x is retained only as the multilib Runtime APEX donor.
@@ -140,7 +140,7 @@ while read -r RUNTIME_LIB; do
 done <<< "$RUNTIME_LIBS"
 
 # gralloc.exynos990.so is a legacy 32-bit target module and links against
-# GLESv1 directly.  The S926B source is 64-bit-only, while the generic M35x
+# GLESv1 directly.  The source is 64-bit-only, while the generic M35x
 # runtime set above does not ship this compatibility library.  Keep the
 # target implementation (it matches the Exynos 990 gralloc ABI); its Android
 # EGL entry point is provided by the imported 32-bit libEGL.so.
@@ -236,7 +236,7 @@ if ! readelf -h "$OMX_SERVICE" 2>/dev/null | grep "ELF32" >/dev/null; then
 fi
 
 # Recreate the standard runtime links present on a multilib Android image.
-# The S926B source has only the linker64 variants.  Do not overwrite a real
+# The source has only the linker64 variants.  Do not overwrite a real
 # file: a stale/non-standard file is safer to reject than to silently replace.
 ADD_RUNTIME_LINK()
 {
