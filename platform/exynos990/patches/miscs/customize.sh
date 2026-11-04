@@ -217,6 +217,15 @@ fi
 unset VENDOR_BUILD_PROP
 LOG_STEP_OUT
 
+LOG_STEP_IN "- Using the stable Exynos 990 SurfaceFlinger backend"
+# Android 17 selects Skia Vulkan for SurfaceFlinger's RenderEngine even when
+# ro.hwui.use_vulkan is empty.  The legacy Mali-G77 Vulkan driver eventually
+# loses its device while composing Samsung background-blur layers, which
+# aborts SurfaceFlinger and restarts zygote/system_server.  This property only
+# moves system composition to threaded SkiaGL; applications retain Vulkan.
+SET_PROP "vendor" "debug.renderengine.backend" "skiaglthreaded"
+LOG_STEP_OUT
+
 if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 37 ]]; then
     LOG_STEP_IN "- Fixing legacy AVC HDR-static capability discovery"
 

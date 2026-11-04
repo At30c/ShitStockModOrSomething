@@ -8785,6 +8785,45 @@ seus métodos e literais encontrados e aplicados na cópia de auditoria. O
 fallback de `libui.so` ainda encontra as duas sequências originais; o patch de
 `libgui.so` é corretamente ignorado no SDK 37 pela própria condição do módulo.
 
+### Exynos 990: soft reboot por perda do RenderEngine Vulkan (2026-10-16)
+
+Os soft reboots observados no y2s não reiniciavam o kernel: o uptime do kernel
+continuava acima de 45 horas, enquanto `surfaceflinger`, `zygote64` e
+`system_server` tinham sido recriados. Os registros Samsung preservados em
+`/data/log/prev_dump.log` e `dumpstate_sys_native.zip` provaram dois eventos
+iguais, em 15 de outubro às 06:31:26 e em 16 de outubro às 06:48:53. Em ambos,
+o `surfaceflinger` abortou na thread `RenderEngine` com:
+
+```text
+VK_ERROR_DEVICE_LOST (non-protected): No details:
+VK_EXT_device_fault not available/enabled.
+```
+
+O backtrace passa por `GrVkPrimaryCommandBuffer::finished`,
+`GaneshVkRenderEngine::flushAndSubmit` e `SkiaRenderEngine::drawLayersInternal`.
+No segundo evento, o dump mostra a composição da janela do Spotify, StatusBar
+e NotificationShade com várias regiões de blur imediatamente antes da perda
+do dispositivo Mali-G77. O `init` então executa o `onrestart` do
+SurfaceFlinger, mata o zygote e recria todo o framework, produzindo a aparência
+de soft reboot.
+
+O crash do `com.samsung.android.kgclient` não foi o gatilho. Ele ocorre por
+ausência de contexto SELinux para UID 5959, inclusive em horários sem
+`SYSTEM_RESTART`; no evento de 16 de outubro ele reapareceu depois do reinício,
+quando os aplicativos estavam sendo recriados. O modo deKnox para Android 16+
+já desativa KnoxGuard em `services.jar` e agora também remove o APK órfão, os
+dois XMLs de permissões e seu registro em `system/etc/sysconfig`, evitando os
+tombstones sem ampliar a política SELinux. Na instalação existente, até
+`pm disable-user` executado como root é recusado porque o Package Manager marca
+o KnoxGuard como pacote protegido; a remoção deve entrar pela imagem `system`.
+
+`ro.hwui.use_vulkan=` e `persist.sys.unica.vulkan=false` afetam o HWUI dos
+aplicativos, não o RenderEngine do SurfaceFlinger. O `dumpsys SurfaceFlinger`
+continuava mostrando `RE Vulkan (Ganesh)`. O patch Exynos 990 agora define
+`debug.renderengine.backend=skiaglthreaded` antes da inicialização do
+compositor. Isso mantém o RenderEngine moderno e encadeado, troca somente a
+composição do sistema para Skia OpenGL ES e preserva Vulkan para aplicativos.
+
 ### Exynos 990: aquecimento causado pelo hotword do Google (2026-10-12)
 
 Após instalar a build atualizada no y2s, o iNTC estava ausente como esperado.
