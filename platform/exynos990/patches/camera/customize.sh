@@ -59,6 +59,39 @@ wait $(jobs -p) || exit 1
 
 LOG_STEP_OUT
 
+# Once the Exynos HAL receives the Samsung Camera parameter string it selects
+# SUPER_NIGHT_HANDHELD by itself, and the camera app dlopen()s the MPI solution.
+# The source firmware ships it in /vendor with /vendor-relative dependencies;
+# the target build loads /system/lib64/{libLocalTM_pcc,libMultiFrameProcessing30,
+# libSwIsp_wrapper_v1}, which matches this platform's system closure.
+LOG_STEP_IN "- Restoring the target Super Night MPI solution"
+# A Samsung Camera (priv-app) carrega estas libs de /system/lib64 sem entrada
+# em public.libraries; validado no y2s com as versões do G986B (02/11/2026).
+for blob in \
+    "system/lib64/libAIQSolution_MPI.camera.samsung.so" \
+    "system/lib64/libLocalTM_pcc.camera.samsung.so"
+do
+    if [ -f "$FW_DIR/$TARGET_FIRMWARE_PATH/system/$blob" ]; then
+        ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "system" "$blob" 0 0 644 "u:object_r:system_lib_file:s0"
+    fi
+done
+LOG_STEP_OUT
+
+LOG_STEP_IN "- Exposing ArcSoft Object Capture to updated DressRoom builds"
+ARCSOFT_PUBLIC_LIBS="$WORK_DIR/system/system/etc/public.libraries-arcsoft.txt"
+if [ ! -f "$ARCSOFT_PUBLIC_LIBS" ]; then
+    ABORT "Missing ArcSoft public native-library list"
+fi
+for ARCSOFT_PUBLIC_LIB in \
+    "libobjectcapture.arcsoft.so" \
+    "libobjectcapture_jni.arcsoft.so"
+do
+    grep -qxF "$ARCSOFT_PUBLIC_LIB" "$ARCSOFT_PUBLIC_LIBS" || \
+        printf '%s\n' "$ARCSOFT_PUBLIC_LIB" >> "$ARCSOFT_PUBLIC_LIBS"
+done
+unset ARCSOFT_PUBLIC_LIB ARCSOFT_PUBLIC_LIBS
+LOG_STEP_OUT
+
 LOG_STEP_IN "- Adding libc++_shared.so dependency for __cxa_demangle symbol"
 patchelf --add-needed "libc++_shared.so" "$WORK_DIR/system/system/lib64/libMultiFrameProcessing20Core.camera.samsung.so"
 LOG_STEP_OUT
@@ -262,4 +295,23 @@ done
 # shellcheck disable=SC2046
 wait $(jobs -p) || exit 1
 
+LOG_STEP_OUT
+
+LOG_STEP_IN "- Hardening the Exynos 990 snaplite session cleanup"
+# O MotionPhoto da source envia o modelo BeepRemover (op TFLite 156) ao
+# snap-service; o snaplite do S20+ (SNAP v22.09) não o registra, e
+# SnapliteSession::Close() lia this+0x208 nulo, derrubando o serviço a cada
+# foto. O desvio leva o ponteiro nulo à limpeza já existente em +0x27ec0; o
+# app recebe a falha normal ("fail to open snap session"). Ver INSTRUCTIONS.md.
+SNAPLITE_LIB="$WORK_DIR/vendor/lib64/libsnaplite_native.so"
+SNAPLITE_CLOSE_FROM="680641f9083940f9080140f900a1009187ac0d94740641f97f0601f9"
+SNAPLITE_CLOSE_TO="680641f9280600b4083940f9080140f900a1009186ac0d942c000014"
+if [ -f "$SNAPLITE_LIB" ]; then
+    if xxd -p -c 0 "$SNAPLITE_LIB" | grep -q "$SNAPLITE_CLOSE_FROM"; then
+        HEX_PATCH "$SNAPLITE_LIB" "$SNAPLITE_CLOSE_FROM" "$SNAPLITE_CLOSE_TO" || exit 1
+    elif ! xxd -p -c 0 "$SNAPLITE_LIB" | grep -q "$SNAPLITE_CLOSE_TO"; then
+        LOG "- Unknown libsnaplite_native.so build; skipping Close() hardening"
+    fi
+fi
+unset SNAPLITE_LIB SNAPLITE_CLOSE_FROM SNAPLITE_CLOSE_TO
 LOG_STEP_OUT

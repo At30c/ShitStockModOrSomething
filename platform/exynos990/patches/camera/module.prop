@@ -1,4 +1,4 @@
 id=camera
 name=Camera fix
 author=ExtremeXT, BotchedRPR
-description=Various camera-related patches.
+description=Updates the ArcSoft Object Capture stack and applies Exynos 990 camera compatibility fixes.

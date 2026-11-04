@@ -9306,6 +9306,49 @@ janela desconectada do USB antes de qualquer alteração na vendor; a captura
 atual foi feita a 100% e alimentada por USB, portanto não permite medir a
 corrente real de repouso. Não houve `FATAL EXCEPTION` nem ANR novo.
 
+### y2s: atualização do ArcSoft Object Capture (2026-10-16)
+
+O DressRoom instalado foi atualizado pela Galaxy Store para `3.0.10.38`, mas a
+ROM ainda expunha uma pilha ArcSoft misturada: o JNI
+`libobjectcapture_jni.arcsoft.so` era `1.0.1.58` (2022-12-15), enquanto o
+engine vinha de outra revisão. O próprio DressRoom suporta as interfaces JNI
+1.0.1, 1.0.2 e 1.0.3 e escolhe entre `native_ARC_OBJECT_CAPTURE_Init()` e
+`native_ARC_OBJECT_CAPTURE_Init(int)` depois de ler a versão nativa.
+
+O par foi atualizado a partir da firmware Samsung do S23 FE/r11s Android 15,
+branch
+`r11sxxx-user-15-AP3A.240905.015.A2-S711BXXSAEYI1-release-keys` do Samsung
+Dumps. O JNI agora é `ArcSoft_ObjectCapture_1.0.3.168`, compilado em
+2024-12-12. Os arquivos estão em
+`platform/exynos990/patches/camera/system/lib64/` e têm os hashes:
+
+- `libobjectcapture.arcsoft.so`: `9d7b5d3c729715a9e00c383e5de57e80adfcd1123086173af9130f3f84dac14d`
+- `libobjectcapture_jni.arcsoft.so`: `61ef6f30c32a12b73b89fc0417b318955da906cbc6ba059333fd37d7a7fb10b5`
+
+Ambos são ARM64, mantêm os mesmos SONAMEs e dependem somente de bibliotecas já
+presentes. A única dependência específica, `libmpbase.so`, usa apenas
+`MMemAlloc` e `MMemFree`; esses símbolos existem com a mesma ABI na versão da
+base S947B, então ela foi preservada para não alterar as demais bibliotecas
+ArcSoft do sistema.
+
+Para o teste sem build, o par novo foi copiado para `/data/local/tmp`, recebeu
+`root:root`, modo `0644` e contexto `u:object_r:system_lib_file:s0`, e foi
+montado por bind sobre `/system/lib64`. Os hashes vistos pelo linker coincidem
+com os prebuilts e o DressRoom abre sem erro de link. Essa sobreposição é
+volátil e desaparece no próximo reboot; a inclusão permanente já está na pasta
+de câmera da build. O fluxo continua ativo no y2s; o patch específico do m21s
+que desativa Object Capture não foi reutilizado.
+
+A auditoria do namespace nativo encontrou ainda uma diferença indispensável:
+`public.libraries-arcsoft.txt` da S947B não declarava Object Capture, enquanto
+o arquivo original do G986B declarava o JNI e o engine. Isso afeta
+principalmente o DressRoom atualizado em `/data/app`, cujo classloader somente
+pode abrir bibliotecas públicas da partição system. O `customize.sh` do módulo
+de câmera agora acrescenta, sem duplicar, `libobjectcapture.arcsoft.so` e
+`libobjectcapture_jni.arcsoft.so` à lista pública. A abertura simples da tela
+de wallpaper no teste live não inicializa o detector; a validação funcional
+exige selecionar uma imagem e concluir o salvamento.
+
 ### exynos990: protótipo allocator AIDL v2 / mapper stable-C (2026-10-16)
 
 A troca direta do gralloc/mapper do A18 não é segura para o S20+: o donor usa
@@ -11043,6 +11086,68 @@ OAT/VDEX antigo e importa os três XMLs correspondentes do firmware-alvo. O APK
 prebuilt está em `prebuilts/samsung/s947bxxx`; sua SHA-256 é
 `9f94d728ebebd46b47e64d1be2de18308035b61bbd5dce8292e635d03dc869ef`.
 
+### y2s: medição do loop de preview da câmera (27/10/2026)
+
+Para separar a implementação AIDL do HAL legado, o mapper
+`platform/exynos990/patches/graphics_allocator_bridge/src/mapper.cpp` recebeu
+medição temporária de `LOCK_FLEX`, cópia YUV e `unlock`. A imagem AVB de teste
+foi escrita no `/dev/block/dm-1` pelo recovery com `dd`. O hash da imagem e do
+bloco foi `ba3435312662a2db6fa56d82716e4f2615f915aa3e3ceea829f439a9fd406517`;
+o mapper instalado foi
+`2c38deedd5b3ad80040a57d6f64430d923948905c8080cef11b50494472a778d`.
+
+O mapper concluiu os primeiros locks em 0--2 ms e a maior cópia foi 51 ms.
+Durante o mesmo período, `processBatchCaptureRequests` atingiu 1,956 s,
+`Camera3-OutputStream` esperou 950 ms por um buffer, e o HAL/kernel registrou
+`shot mismatch`, `FIMC_IS_SYNC 1` e `wait and pop fail, ret(-110)`. A
+`BeautyPhotoMaker::produceFrameWithYuv420` também atingiu 323--983 ms. O
+primeiro `RESULT ERROR` aconteceu antes do primeiro acesso a `PlaneLayouts`.
+
+O preview ficou preto com uma barra roxa, mas a interface e a miniatura
+continuaram ativas. A cópia `LOCK_FLEX` não era lenta o bastante para explicar
+o loop; porém, essa captura ainda misturava a sincronização do HAL/kernel com a
+seleção global do mapper e não isolava os dois efeitos. A stream era
+`YUV_420_888`, `1440x1080`, com nove buffers. Retornar
+`AIMAPPER_ERROR_UNSUPPORTED` para o formato privado `0x11d` não cria fallback
+automático para HIDL e já foi descartado por travar o caminho global. O scratch
+validado permanece como ponte temporária; a correção definitiva exige manter o
+HIDL da câmera ou adaptar explicitamente seus handles, fences e fila antes de
+aposentá-lo.
+
+### y2s: controle da câmera sem o mapper AIDL (27/10/2026)
+
+A vendor original e a vendor usada no teste mantêm os mesmos blobs de captura:
+`camera.exynos990.so`, `camera.unihal.default.so`,
+`camera.device@3.5-impl.so`, `vendor.samsung.hardware.camera.device@5.0-impl.so`,
+`libGrallocMapperCamera.so` e `libexynoscamera3.so`. A diferença do teste foi o
+mapper AIDL compatível global.
+
+O log de controle `runtime-hidl-noaidl-20261025.log` já apresentava, sem o
+mapper AIDL, `RESULT ERROR`, `shot mismatch`, `FIMC_IS_SYNC`,
+`processBatchCaptureRequests` lento e `wait and pop fail, ret(-110)`. Assim,
+esses erros não foram introduzidos pela conversão AIDL do gralloc. A próxima
+análise deve comparar o HAL UniHAL original com o kernel atual, especialmente o
+módulo/firmware do sensor FIMC-IS, a contagem de frames e a fila da stream 1.
+
+### Revisão da conclusão sobre o loop no modo global (28/10/2026)
+
+A comparação entre os testes mostrou uma distinção necessária: o caminho não
+global, em que o AIDL fica privado do Composer3, preserva o allocator HIDL/
+Gralloc1 da câmera e entregou preview estável. Já o registro AIDL global muda a
+seleção do `GraphicBufferMapper` para todos os clientes, inclusive o
+`ImageReader` da câmera. Esse caminho expõe ao HAL HIDL handles, planos e fences
+com contratos diferentes dos esperados por `libGrallocMapperCamera.so` e pelo
+`private_handle_t` Mali.
+
+Portanto, os eventos `FIMC_IS_SYNC`, `shot mismatch` e `-110` já existiam como
+falhas recuperáveis de inicialização da stream, mas o modo global pode
+transformá-los em repetição de frame, preview preto ou loop ao devolver buffers
+com layout, fence ou ciclo de vida incompatíveis. O teste global também confirmou
+essa incompatibilidade com `ImageReader` abortando ao receber um plano nulo.
+Isso separa o custo da cópia `LOCK_FLEX` — que foi baixo — da mudança de rota
+global, que é o gatilho relevante para o loop observado. A arquitetura segura
+continua sendo AIDL privado no Composer3 e HIDL original para a câmera até que
+os clientes da câmera sejam migrados explicitamente.
 ## GOS sem métricas após a build (28/10/2026)
 
 O teste com `com.supercell.clashroyale` confirmou que o `GameOptimizingService`
@@ -11220,4 +11325,692 @@ SHA-256 `199ea78654fb53ec2ea98efdc96880d0abf713ed9c82276185916fb21ad9cddd`.
 Após o boot, `init.svc.graphics_allocator_trace` e
 `sys.init.updatable_crashing_process_name` ficaram vazios, enquanto o
 Composer manteve o SHA `78c00483060af...e8e01b5` esperado.
+
+### Definição de HIDL usada na auditoria (29/10/2026)
+
+Neste projeto, quando a comparação mencionar **HIDL completo**, ela significa
+a pilha inteira de gráficos e câmera: `composer@2.x`,
+`allocator/mapper@2.x` e o provedor `camera.device@*`/`camera.provider@*`.
+Parar somente o allocator HIDL não é um teste equivalente, porque o
+`libui`/`libgui` desta base já contém as alterações necessárias para resolver o
+Composer3/allocator AIDL e não possui o caminho original para selecionar a
+pilha HIDL completa.
+
+Por isso, não restaurar a pilha HIDL completa nesta base. O estado suportado é
+híbrido e deliberado: `vendor.graphics.composer3-exynos990` fornece o
+Composer3 AIDL global; o `vendor.graphics.allocator-exynos990` fornece o
+allocator AIDL global; `vendor.gralloc-2-0` permanece disponível apenas como
+compatibilidade para blobs legados; e
+`vendor.samsung.hardware.camera.provider@4.0-service_64` continua sendo o HAL
+HIDL da câmera. O Composer HIDL `vendor.hwcomposer-2-3` fica desativado.
+
+O teste de 29/10 confirmou os serviços após o reboot:
+
+```text
+init.svc.vendor.graphics.allocator-exynos990=running
+init.svc.vendor.gralloc-2-0=running
+init.svc.vendor.graphics.composer3-exynos990=running
+vendor.samsung.hardware.camera.provider@4.0-service_64=running
+```
+
+Essa configuração mantém os contratos HIDL que a câmera proprietária ainda
+exige, sem tentar fazer `libui`/`libgui` voltar a procurar o Composer HIDL.
+Qualquer redução adicional do HIDL deve ser feita por cliente individual,
+depois de validar o ABI e o caminho de buffers desse cliente; um rollback da
+pilha inteira não é uma opção segura para esta base.
+
+### Auditoria desmembrada do HIDL da câmera (29/10/2026)
+
+O inventário completo de contratos e entregas do Camera Provider HIDL, das
+sessões Camera3, do `camera.exynos990.so`, do `libexynoscamera3.so`, do
+`libGrallocMapperCamera.so`, dos buffers `0x11d`, dos streams RAW/YUV/JPEG e
+das acquire/release fences está em
+`platform/exynos990/patches/graphics_allocator_bridge/CAMERA_HIDL_CONTRACT_AUDIT_20261029.md`.
+
+O documento separa os contratos confirmados por VINTF/ELF/runtime dos pontos
+que ainda exigem instrumentação do kernel FIMC-IS. Ele também registra que o
+provider HIDL continua ativo e que o AIDL global de gráficos não substitui as
+dependências HIDL privadas do HAL da câmera.
+
+### Port completo do provider Camera3 AIDL do Exynos 990 (29/10/2026)
+
+Foi iniciada a substituição planejada do provider HIDL da câmera pelo provider
+Camera3 AIDL próprio em `platform/exynos990/patches/camera_aidl_port`. O alvo
+real não é a ABI V3 do S26+: a system do y2s fornece
+`android.hardware.camera.provider-V4-ndk.so` e
+`android.hardware.camera.device-V4-ndk.so`. O provider final será, portanto,
+`android.hardware.camera.provider.ICameraProvider/internal/0` em AIDL V4.
+
+O S26+ continua sendo referência de lógica e de separação de contratos, nunca
+fonte de blobs. O backend físico será o `camera.exynos990.so`,
+`libexynoscamera3.so` e o mapper da própria vendor do S20+, acessados pela
+ABI Camera3 nativa. Assim o transporte Samsung/Android HIDL deixa de ser a
+dependência externa do CameraService, sem perder o conhecimento proprietário
+de FIMC-IS, ION, sensores, tags Samsung e buffers Mali.
+
+O módulo está deliberadamente bloqueado em
+`EXYNOS990_CAMERA_AIDL=0`. Definir `1` ainda aborta a build: publicar um
+provider que enumera câmeras sem converter integralmente sessões, streams,
+requests, resultados, metadata, handles, fences, flush e offline faria o
+framework escolher AIDL e quebraria câmera. A verificação read-only
+`audit_camera_aidl_contract.sh <work_dir>` confirma antes de cada avanço as
+bibliotecas AIDL V4 do sistema e o backend Camera3 Exynos da vendor.
+
+### Fachada Camera3 HIDL encaminhada ao núcleo AIDL (30/10/2026)
+
+O primeiro contrato privado que ainda prendia a câmera ao mapper antigo foi
+separado sem alterar o blob: `libexynoscamera3.so` continua chamando os três
+métodos C++ que procura em `libGrallocMapperCamera.so` (`lock`, `lock(YCbCr)`
+e `unlock`), pois esses nomes e os seus argumentos fazem parte da ABI já
+gravada no ELF proprietário. A biblioteca de compatibilidade não chama mais
+os helpers Mali diretamente.
+
+Agora ela encaminha somente esses argumentos para a ABI privada
+`exynos990_aidl_camera_*`, exportada por
+`mapper.exynos990_compat.so`, o mapper Stable-C AIDL do projeto. O núcleo
+AIDL preserva o comportamento físico indispensável do y2s: máscara de uso
+combinada, primeira tentativa com `private_module_t` nulo, fallback controlado
+para o módulo real, `LOCK_FLEX`, três planos Y/Cb/Cr e `unlock` pareado. A
+separação é necessária porque `AIMapper::lock()` retorna um único ponteiro e
+aceita apenas usos de CPU, enquanto Camera3 exige três ponteiros e usa a
+máscara proprietária de câmera.
+
+Portanto, HIDL permanece apenas como **fachada ABI local do blob**, não como
+implementação de lock. Não há handles SGR nem blobs do S26+ no caminho. A
+auditoria `audit_camera_driver_split.sh` valida tanto os símbolos HIDL que o
+ELF legado requer quanto os símbolos AIDL internos que a fachada usa. A
+compilação confirmou o `SONAME` original da fachada. Ela abre
+explicitamente `/vendor/lib64/hw/mapper.exynos990_compat.so`, pois `hw` é um
+diretório de descoberta de HAL e não um caminho de busca genérico confiável
+para `DT_NEEDED` em todos os namespaces do linker Android. Isso ainda não
+publica o provider AIDL V4 da câmera: sessões Camera3, streams, requests,
+resultados, metadata e fences precisam ser migrados no próximo estágio antes
+que o provider HIDL possa sair.
+
+O gate técnico completo está em
+`platform/exynos990/patches/camera_aidl_port/CAMERA3_AIDL_COMPLETION_GATE.md`.
+Ele não permite ativar o provider por enumeração: exige, como uma unidade,
+módulo, device, sessão, streams, requests, callbacks, metadata/FMQ, buffers,
+fences, `flush` e encerramento. A implementação deve ser feita nessa ordem e
+testada com o provider HIDL ainda disponível para rollback; o AIDL só poderá
+ser o provider público depois de a sessão Camera3 real estar concluída.
+
+Em 30/10/2026 foi criada a primeira classe do port em
+`platform/exynos990/patches/camera_aidl_port/src/camera3_module.{h,cpp}`. Ela
+carrega o módulo físico por `hw_get_module(CAMERA_HARDWARE_MODULE_ID)`, usa o
+`camera_module_t` nativo para enumeração, metadata, estado e torch, abre
+somente dispositivos Camera3 API 3.2 ou superior e os fecha pelo
+`hardware_device_t`. Os callbacks de disponibilidade e torch também passam
+pelo módulo nativo. A classe não referencia o provider HIDL Samsung.
+
+`audit_camera3_module.sh` e a compilação arm64 do wrapper são gates locais
+antes de conectá-lo a `ICameraDevice`. Eles não autorizam a ativação da ROM:
+streams, requests, resultados, metadata e fences continuam sendo os próximos
+blocos obrigatórios da sessão AIDL.
+
+Também foi adicionada `src/camera_device.{h,cpp}`, a implementação AIDL V4 de
+`ICameraDevice`. Ela copia as características estáticas pelo tamanho real de
+`camera_metadata_t`, expõe custo e conflitos diretamente de `camera_info`, e
+encaminha torch para `camera_module_t`. Nenhuma característica foi inventada.
+As operações que exigem uma sessão — streams, templates, metadata de sessão e
+`open` — ainda retornam erro explícito até `ICameraDeviceSession` assumir
+callbacks, requests e o fechamento do `camera3_device_t`; isso impede abrir o
+FIMC-IS sem uma sessão dona. A classe e esse guard são verificados por
+`audit_camera_device.sh` e compilam como objeto arm64.
+
+`src/camera_session.{h,cpp}` passou a cobrir o caminho Camera3 básico: a classe
+possui ownership exclusivo do `camera3_device_t`, chama `initialize` com seus
+`camera3_callback_ops_t`, copia templates reais, configura streams persistentes,
+executa `flush` e fecha o HAL antes de liberar a sessão. `ICameraDevice.open`
+agora cria essa sessão; se a inicialização falhar, a factory fecha o device
+nativo e não deixa o FIMC-IS aberto sem dono.
+
+Em 30/10/2026 foi adicionado `src/camera_buffers.{h,cpp}`. Ele reconstrói um
+`native_handle_t` próprio a partir do `NativeHandle` AIDL, duplicando cada FD,
+e registra a posse por `(streamId, bufferId)`. A acquire fence é duplicada e
+entregue uma vez ao HAL; a release fence retorna uma vez no
+`ScopedFileDescriptor` do callback AIDL. O cache não apaga buffer em voo. A
+sessão valida o lote inteiro antes de chamar `process_capture_request`, pois
+uma aceitação parcial seguida de erro faria o CameraService limpar handles que
+o HAL já teria recebido.
+
+`processCaptureRequest` aceita, por enquanto, apenas metadata inline válida,
+sem FMQ, reprocessamento ou settings físicos. `processCaptureResult` converte
+metadata parcial, status e buffers; `notify` converte shutter e os quatro
+erros Camera3. `signalStreamFlush` converte IDs AIDL nos ponteiros
+`camera3_stream_t` persistentes. `audit_camera_buffers.sh`,
+`audit_camera_session.sh` e a compilação arm64 de todos os objetos próprios
+do provider passaram.
+
+O provider passou a poder ser instalado **somente** pelo modo explícito de
+validação `EXYNOS990_CAMERA_AIDL=1`; ele continua desligado pela configuração
+padrão. VINTF, init, contexto SELinux, requests/resultados inline e o ciclo
+básico de sessão já estão presentes. Ainda faltam testes completos no aparelho
+e os contratos de reprocessamento, câmera lógica/física e offline.
+
+Em 30/10/2026 o provider passou a ter uma primeira cadeia instalável para
+validação. `provider_main.cpp` agora enumera os IDs reais por
+`camera_module_t`, publica as vendor tags do módulo, cria `CameraDevice`,
+encaminha estado do aparelho e repassa eventos de disponibilidade/torch. O
+serviço ARM64 resultante está em
+`platform/exynos990/patches/camera_aidl_port/prebuilt/vendor/bin/hw/android.hardware.camera.provider-V4-service.exynos990`.
+Ele possui dependências explícitas de `libbinder_ndk`, `libhardware` e
+`libcamera_metadata`, todas presentes na system y2s.
+
+O modo `EXYNOS990_CAMERA_AIDL=1` instala esse binário, seu rc e o fragmento
+VINTF AIDL `ICameraProvider/internal/0`; remove o rc e a única declaração
+HIDL de `android.hardware.camera.provider` para que duas pilhas não disputem
+os mesmos sensores. O arquivo é rotulado como `hal_camera_default_exec`, o
+mesmo domínio SELinux do serviço Samsung original. A imagem final continua
+sendo assinada pelo fluxo AVB já existente do builder.
+
+Para a primeira abertura, FMQ devolve um descritor vazio válido e o
+CameraService usa metadata inline, comportamento previsto pelo AIDL. O
+buffer manager só é conectado nos dois sentidos
+(`request_stream_buffers` e `return_stream_buffers`) quando o backend anuncia
+Camera3 3.6. Em Camera3 3.5 seus ponteiros ficam nulos, conforme a ABI. Isso
+evita alterar o contrato do blob legado. Reprocessamento, câmera lógica/física
+e sessões offline continuam fora desta primeira validação e devem retornar
+erro explícito; a validação inicial deve cobrir enumeração, preview, foto
+simples, vídeo, frontal/traseira, torch, flush e encerramento.
+
+### Validação física do provider AIDL no y2s (30/10/2026)
+
+Para testar a cadeia sem uma build completa, a `vendor` foi extraída do aparelho
+em execução pelo `adb`/`su`, reconstruída como EROFS e gravada no extent físico
+da partição lógica `vendor` (`/dev/block/sda26`, setor inicial 13078528). O
+backup integral original permanece em
+`out/device_backups/m2s/vendor-super-extent-original.img` (989421568 bytes).
+Cada imagem de teste recebeu footer AVB `SHA256_RSA4096`, e a leitura de retorno
+após `dd` conferiu o SHA-256 inteiro da extensão.
+
+O provider instalado na validação usa o backend nativo original
+`camera.exynos990.so`/`libexynoscamera3.so`; não substitui o HAL físico nem usa
+blobs do S26+. A cadeia precisou de `android.hardware.thermal@1.0.so` e
+`android.hardware.thermal@2.0.so` da firmware F415F, pois os donors S947B
+exigiam um símbolo de `libc++` ausente na base y2s. As bibliotecas F415F não
+exigem esse símbolo e carregaram no namespace vendor.
+
+Dois detalhes de contrato foram corrigidos no adaptador AIDL:
+
+* IDs de devices AIDL usam `device@1.0/internal/<id>`. A nomenclatura
+  `device@3.x` é HIDL Camera3; com ela o `CameraProviderManager` descartava
+  todas as câmeras por major version inválida.
+* `camera_info.conflicting_devices` chega do Camera3 nativo como IDs numéricos.
+  O AIDL exige nomes completos, então o adaptador converte para
+  `device@1.0/internal/<id>` antes de devolver `CameraResourceCost`.
+
+Após essas correções, o aparelho registrou o serviço
+`android.hardware.camera.provider.ICameraProvider/internal/0`, enumerou seis
+devices no provider e cinco no `CameraService` (quatro públicos). A abertura da
+câmera 1 passou por `open()` e `camera3_device.ops->initialize()` com retorno
+zero. O app Samsung ainda encerrou com `NullPointerException` Java durante a
+inicialização, depois que a sessão nativa já havia sido criada; isso é uma falha
+do app/integração acima do HAL e deve ser auditado separadamente.
+
+O binário físico instrumentado é apenas de diagnóstico. O módulo continua
+opt-in (`EXYNOS990_CAMERA_AIDL=1`) no builder, e o rollback deve usar o backup
+AVB original enquanto preview, captura, vídeo, buffers e fences não forem
+validados no app final.
+
+### Teste rápido por módulo KernelSU: metadados de preview Camera3 (30/10/2026)
+
+O primeiro crash restante não era mais a enumeração nem a abertura do HAL. O
+log do Samsung Camera mostrava `Not supported preview size!(1440x1080)` e em
+seguida um `NullPointerException` porque o APK consultava a vendor tag
+`samsung.android.scaler.availablePreviewStreamConfigurations`, enquanto o
+provider AIDL só devolvia a lista padrão
+`ANDROID_SCALER_AVAILABLE_STREAM_CONFIGURATIONS`.
+
+O APK foi decodificado para confirmar o contrato: a tag é um vetor `int[]` em
+grupos de quatro valores `[formato, largura, altura, direção]`; o formato
+`PRIVATE` é 34 e a direção de saída é 0. O adaptador agora copia apenas as
+entradas PRIVATE de saída que já existem no HAL Exynos e publica a lista em
+`0x80040004`. Nenhuma resolução foi inventada. O processo também instala no
+`camera_metadata` a tabela de vendor tags nativa antes de adicionar a entrada,
+evitando que a biblioteca rejeite a metadata como tag desconhecida.
+
+Para iterar sem uma nova ROM foi criado o pacote
+`out/device_backups/m2s/ksu-camera-aidl-preview-metadata.zip`. Ele é um módulo
+KernelSU com `auto_mount=true` e substitui somente
+`/vendor/bin/hw/android.hardware.camera.provider-V4-service.exynos990`; init,
+VINTF, HAL físico e o backup AVB da vendor permanecem os mesmos. O pacote foi
+aceito pelo KernelSU-Next e requer reboot para o overlay ser montado antes do
+serviço. Se o módulo não aparecer como montado após o boot, desative-o pelo
+Manager/`ksud module disable exynos990_camera_aidl_preview_metadata` e use o
+backup `vendor-aidl-metadata-compact-v2.img`.
+
+Na iteração seguinte, `camera_streams.cpp` passou a enviar `nullptr` em
+`camera3_stream_t::physical_camera_id` quando o stream AIDL não pertence a uma
+câmera física. Uma string vazia viola a convenção do Camera3 e fazia o HAL
+Exynos recusar a configuração completa de streams. O provider recompilado tem
+SHA-256 `7de0560636cfee3696b151740b12ef27961e3144af1cc9e1886818600eeaaa81` e
+foi empacotado no mesmo módulo KSU. A validação final precisa ser feita com o
+usuário Android desbloqueado; com `RUNNING_LOCKED`, o PackageManager não expõe
+a atividade da Samsung Camera e não é possível exercitar `configureStreams` no
+aplicativo.
+
+Na execução de 30/10/2026 o provider morreu com `SIGPIPE` dentro de
+`SecCameraIPCtoRIL` ao abrir a câmera 1. O processo AIDL passou a instalar
+`sigaction(SIGPIPE, SIG_IGN)` e a bloquear o sinal com `pthread_sigmask`,
+reaplicando a proteção nos caminhos Camera3 de open, initialize, configure,
+captura, flush e close. Com o binário
+`a83e62f6e8cad375ae76cc1c56380bb0ab354553da3cb408d878eaf3ea97f345`,
+`open()` e `initialize()` retornaram 0 e o provider permaneceu vivo mesmo
+depois do encerramento do app.
+
+O erro seguinte ficou isolado em `configure_streams`: a Samsung Camera envia
+oito streams (preview PRIVATE, YUV, JPEG, RAW16 e auxiliares) e o HAL nativo
+retorna `-EINVAL`, que o framework registra como `Set of requested
+inputs/outputs not supported by HAL`. O adaptador agora registra esse retorno
+e faz uma segunda tentativa somente quando todos os streams não têm câmera
+física, usando a representação Camera3 legada de `physical_camera_id` como
+string vazia. Essa tentativa ainda precisa ser exercitada no aparelho antes
+de promover o provider; não foi mascarado o erro nem removido o HAL original.
+
+### Parametrização baseada no contrato AIDL V4 do Android 17 (30/10/2026)
+
+A implementação passou a validar a estrutura
+`android.hardware.camera.device.Stream` conforme a API congelada do AOSP,
+antes de encaminhá-la ao Camera3. A validação confere IDs não negativos e
+únicos, tipo/uso de entrada, associação física, dimensões, `bufferSize`, grupos
+de streams, modos de pixel, faixa dinâmica, `useCase` e `colorSpace`. O bridge
+registra cada campo recebido, incluindo os valores de 64 bits de `usage`,
+`dynamicRangeProfile` e `useCase`, sem truncá-los.
+
+O backend Samsung usado nesta plataforma não possui campos Camera3 legados para
+`groupId`, modos de pixel, faixa dinâmica ou caso de uso. Perfis de faixa
+dinâmica não padrão continuam sendo rejeitados explicitamente. Os casos de uso
+AIDL de vendor observados no framework (`0x10000`, `0x20000`, `0x2020000` e
+`0x40000`) são convertidos para a opção privada `useCase >> 16` em
+`reserved[0]`; o valor AIDL original permanece registrado. Essa é a inversa
+exata da função Samsung `convertToStreamUsecase(option) = option << 16`,
+confirmada no adaptador HIDL original. O único dado privado adicional
+preservado é o ID em `+0x68`, confirmado no `convertFromHidl` da Samsung.
+
+O binário arm64 foi recompilado pelo `build_probe.sh` usando as APIs AIDL V4
+congeladas locais, e o prebuilt atualizado está em
+`platform/exynos990/patches/camera_aidl_port/prebuilt/vendor/bin/hw/` com
+SHA-256 `671df870b515aea28e2af199bbd8d4926c2c6fc77503eb0f05e018b34ad81d58`.
+Essa mudança torna a fronteira pública conforme a documentação Android; ela não
+substitui o pré-processamento privado `sehPreProcessConfigurationLocked` que o
+wrapper HIDL Samsung executa antes do `libexynoscamera3.so`. O crash observado
+depois da configuração de oito streams continua dentro desse HAL privado e é o
+próximo contrato que precisa ser portado ou delegado de forma explícita.
+
+No teste físico seguinte, o Camera Samsung enviou os `useCase` AIDL de vendor
+`0x10000`, `0x20000`, `0x2020000` e `0x40000`. O provider novo os entregou ao
+HAL com as opções privadas `0x1`, `0x2`, `0x202` e `0x4`, confirmadas nas linhas
+`m_setStreamInfo` do `libexynoscamera3.so`. A parametrização pública AIDL e a
+conversão privada ficaram, portanto, iguais ao caminho original. O HAL avançou
+até `m_enumExtraStreamInfo` e abortou ao tentar enumerar quatro streams YUV
+quando o limite físico é três. Esse resultado separa o problema restante do
+contrato AIDL: é o pré-processamento privado de streams extras que o wrapper
+HIDL executava antes do Camera3.
+
+O wrapper HIDL Samsung também foi auditado no símbolo
+`convertFromHidl(SehStream, Camera3Stream*)`: ele cria um objeto de `0x98` bytes,
+com o ID em `+0x68`, a opção em `reserved[0]` e a área privada restante zerada.
+O `SamsungCamera3Stream` do provider AIDL foi ajustado para reproduzir esse
+tamanho e essa cauda privada, sem adicionar campos fora do contrato público
+AIDL. Isso evita que o HAL leia além do `camera3_stream_t` durante a
+configuração.
+### Correção do transporte `useCase` no provider AIDL de câmera (30/10/2026)
+
+O primeiro teste do provider AIDL copiou os valores públicos de `Stream.useCase`
+para `Camera3Stream::reserved[0]`. Embora a transformação `useCase >> 16`
+seja a inversa do helper `convertToStreamUsecase()` do wrapper HIDL Samsung,
+esse campo é uma extensão privada de `SehStream`, não parte do contrato AIDL
+direto. No aparelho, a cópia fez o `libexynoscamera3.so` enumerar os streams
+extras novamente e abortar com quatro YUV quando o limite físico é três.
+
+O provider foi ajustado para validar e registrar `useCase`, mas deixar
+`reserved[0] = nullptr` no caminho AIDL. O objeto privado continua com 0x98
+bytes, ID Samsung em `+0x68` e cauda zerada. Assim o HAL recebe somente os
+campos Camera3 que o caminho AIDL possui; a opção HIDL só deve ser preenchida
+por um wrapper que também execute `sehPreProcessConfigurationLocked`.
+
+### Queda após alguns segundos e ausência de zoom/troca no provider AIDL (31/10/2026)
+
+O sintoma foi reproduzido e separado em duas situações diferentes. Quando o
+provider era iniciado a partir do shell ou permanecia montado diretamente de
+`/data/local/tmp`, ele recebia o contexto `u:r:shell:s0` (UID 2000) ou ficava
+com o rótulo `shell_data_file`. O HAL Exynos então não conseguia abrir
+`/dev/video101`, retornava `-ENODEV`/`-38` e a Samsung Camera entrava em
+`OPEN_FAILED`; nessa condição os controles de zoom e troca não eram criados.
+O init também recusava iniciar o serviço e registrava `incorrect label`.
+
+O serviço deve ser iniciado pela declaração
+`exynos990-camera-provider-aidl` do arquivo rc, com `user cameraserver`, grupos
+de câmera e o rótulo `u:object_r:hal_camera_default_exec:s0`. O `customize.sh`
+já instala esse contexto tanto no `ADD_TO_WORK_DIR` quanto em
+`vendor_file_contexts`; um teste manual precisa aplicar o mesmo `chcon` apenas
+para a sessão de diagnóstico. Não se deve iniciar o binário por um shell
+backgroundado.
+
+Com o serviço init rotulado corretamente e uma única instância registrada, a
+abertura permaneceu estável por 20 segundos. A traseira expôs os três botões
+de zoom e o botão de troca habilitados; a troca para a frontal e o retorno para
+a traseira completaram sem `OPEN_FAILED`, `SIGABRT`, `SIGSEGV` ou watchdog. O
+log continua mostrando `Failed to get Internal Bayer Buffer, ret -38` em alguns
+frames internos, mas o HAL devolveu os frames AIDL com `result=0` e isso não
+causou a queda durante a validação. Se o provider for reiniciado enquanto uma
+instância antiga ainda estiver registrada, o CameraService remove todas as
+câmeras e o app pode cair com `No camera device with ID \"20\"`; é necessário
+parar a instância anterior e reiniciar o serviço antes de repetir o teste.
+
+O prebuilt foi atualizado para o mesmo binário usado nessa validação, com
+SHA-256 `ace52807b96785958f868c9f5c6db871203c46dd83970656eac6f9d363f45a48`.
+
+### Contrato de IDs e buffers do provider AIDL de câmera (01/11/2026)
+
+Foi auditado o provider AIDL do S26+ apenas como referência de contrato. Ele
+converte streams, buffers, requests e resultados na fronteira AIDL e importa
+o `native_handle` pelo `GraphicBufferMapper` antes de entregá-lo ao HAL. O
+binário ainda carrega compatibilidade de mapper antigo, portanto a interface
+pública AIDL não exige trocar o formato privado que o backend reconhece.
+
+O port do y2s agora mantém IDs de câmera, IDs físicos, metadata e
+`private_handle_t` Mali originários do S20+. A entrada de buffer primeiro usa
+o `HandleImporter`/`GraphicBufferMapper` disponível na vendor; a ponte
+Stable-C é somente fallback, seguida do importador ION original. Não há uso de
+IDs, handles SGR ou blobs do S26+.
+
+`streamConfigCounter` passou a ser aceito somente após
+`configure_streams()` retornar sucesso, e flush de geração anterior é
+descartado no adaptador. `MAXIMUM_RESOLUTION` e
+`multiResolutionInputImage` retornam erro explícito porque o Camera3 do S20+
+não possui campos equivalentes; nunca devem ser convertidos silenciosamente
+para o modo padrão. O mapeamento e a evidência estão em
+`platform/exynos990/patches/camera_aidl_port/S26_AIDL_CAMERA_CONTRACT_20261101.md`.
+
+As auditorias de streams, buffers, sessão e ativação passaram. A recompilação
+do provider V4 depende do checkout local congelado da API AIDL V4 que o
+`build_probe.sh` referencia. Esse checkout de fontes não está presente no
+repositório; os arquivos `.so` V4 da system continuam presentes em
+`out/target/y2s/work_dir/system/system/lib64`. O checkout AOSP público
+temporário disponível no host possui a API de câmera V3 e não deve ser usado
+para gerar um prebuilt incompatível.
+
+### Desmontagem da ABI Camera AIDL V4 (01/11/2026)
+
+As bibliotecas V4 da system foram analisadas estaticamente com
+`platform/exynos990/patches/camera_aidl_port/disassemble_camera_v4.sh`. Os
+símbolos `BnCameraDeviceSession::getInterfaceVersion()` e
+`BnCameraProvider::getInterfaceVersion()` retornam 4. O device V4 serializa
+`BufferCache`, `StreamBuffer`, `CaptureRequest`, `CaptureResult`, metadata
+física, `StreamGroupState`, FMQ, `configureStreamsV2`, flush com contador e
+offline. Os hashes encontrados são `6e6878817de92e03fd52d5f10937714862ab4922`
+para device e `6d711578fd7d8ed6b5ab3a94743c4df77f6cdeaa` para provider.
+
+O resultado completo em português está em
+`platform/exynos990/patches/camera_aidl_port/CAMERA_V4_DISASSEMBLY_20261101.md`.
+Esses arquivos definem transporte Binder e ownership; não substituem o
+backend `camera.exynos990.so`, o `private_handle_t` Mali ou as calibrações do
+S20+.
+
+### Provider AIDL V1 do Galaxy A26 5G como referência de arquitetura (01/11/2026)
+
+Foi extraída apenas a vendor do `SM-A266B/EUX A266BXXUCDZJ5` para estudo em
+`out/a26_vendor_a266b_eux/vendor`. A desmontagem estática do
+`vendor.samsung.hardware.camera.provider-service_64` está documentada em
+`platform/exynos990/patches/camera_aidl_port/A26_AIDL_V1_PROVIDER_AUDIT_20261101.md`.
+
+O A26 publica a câmera por AIDL V1, mas preserva um backend Samsung próprio e
+usa Mapper HIDL 4/3/2 para importar buffers. Isso confirma que AIDL é a
+fronteira Binder de provider/sessão; não substitui o formato do handle, o
+mapper privado, o ISP ou os blobs do aparelho.
+
+O detalhe de lifecycle aproveitado no y2s é verificável no binário do A26:
+depois de criar o backend e registrar o callback, ele executa
+`TriggerDeferredCallbacks`. Como `camera_module_t` do S20+ não exporta essa
+função, o provider V4 do Exynos 990 agora reproduz apenas seu efeito público:
+após `setCallback`, valida cada ID pelo `get_camera_info` original e anuncia
+o dispositivo como `PRESENT`. A enumeração e o callback usam a mesma lista
+validada. Isso não cria IDs, metadata, formatos, extensões `Seh`, offline ou
+buffers sintéticos.
+
+O prebuilt foi recompilado contra a API AIDL V4 do Android 17, passou pelas
+auditorias de contrato, buffers, streams, sessão e ativação, foi stripped e
+tem SHA-256 `0cb2970a2b6846b2859a0dbfc40130b2672d00185c1403c2b0d51b94fdb927dc`.
+
+### y2s: causa do loop do preview PRIVATE no Composer3 (02/11/2026)
+
+A captura controlada separou o preview em duas rotas. No estado quebrado, a
+Samsung Camera usa `mainPreview=1` e envia somente o stream PRIVATE `0x22`, que
+o HAL Exynos transforma em `0x11d`. No estado funcional, após popup ou
+transição de janela, ela usa `mainPreviewCb=1` e envia o stream YUV. O provider
+continua retornando cerca de 30 buffers por segundo na rota PRIVATE, portanto
+o loop ocorre depois do Camera3.
+
+A vendor instalada continha a revisão antiga
+`10ebbb83e93a29cdefac080393c48be6cd11b7637f21bef35b6432d3934d3a5a`
+de `libexynos990_composer3_contract.so`. Ela convertia o handle privado para
+RGBA somente quando o Composer3 enviava o handle do slot. Nos usos seguintes,
+em que o framework envia apenas o slot e uma acquire fence nova, a ponte
+reapresentava a conversão antiga. A sessão alternava treze slots, formando o
+trecho curto em loop observado.
+
+O prebuilt `78c00483060afab982f09149588ce3640970170f1a8fe3050c520e133f8e01b5`
+já reconverte o handle retido quando um slot chega sem handle e controla a
+reutilização do RGBA pelas release fences. Ele não entrou no último teste por
+`dd`: `INSTALL_RECORD.md` confirma que aquela imagem substituiu somente o
+provider AIDL da câmera. A ABI ELF antiga/nova é compatível, mas a revisão nova
+ainda deve ser validada no aparelho antes de ser considerada definitiva. O
+diagnóstico completo está em
+`platform/exynos990/patches/graphics_allocator_bridge/CAMERA_PREVIEW_LOOP_20261102.md`.
+### Diagnóstico do vídeo e do travamento do CameraService (02/11/2026)
+
+No teste do modo vídeo, 64 MP e filtros concluíram a configuração, mas o
+provedor AIDL caiu quando a câmera ativou `SWVDIS_MODE(1)` e carregou
+`VDISplugin`. O tombstone identifica o processo
+`android.hardware.camera.provider-V4-service.exynos990`, thread
+`m_gscPreviewCbT`, em
+`libexynoscamera3.so:ExynosCamera::m_sendYuvStreamResult`. Depois da queda o
+CameraService remove todas as câmeras e mantém o estado de uso até a
+reconexão; por isso a lanterna fica indisponível mesmo com o aplicativo
+fechado. O esgotamento do pool `FLITE_BUF` (8/8, retorno `-38`) aparece no
+mesmo intervalo, mas não é a instrução que causa o `SIGSEGV`.
+
+O bridge AIDL recebeu a propriedade de diagnóstico
+`vendor.camera.aidl.disable_sw_vdis`. Quando ela vale `1`, o provider troca
+somente o campo padrão `ANDROID_CONTROL_VIDEO_STABILIZATION_MODE` para
+`OFF` antes de entregar a metadata ao HAL. O APK e o backend proprietário não
+são alterados. A propriedade é deliberadamente opt-in para confirmar se a
+queda pertence ao caminho VDIS/GSC; a implementação definitiva deverá corrigir
+os buffers e parâmetros desse callback antes de reativar a estabilização.
+
+O provider recompilado está em
+`platform/exynos990/patches/camera_aidl_port/prebuilt/vendor/bin/hw/` e a
+imagem AVB usada no teste está em
+`out/target/y2s/dd-vendor-install-20261102/package/vendor-payload-camera-vdis-off-20261102-v2.img`.
+Ela preserva o UUID EROFS, os contextos SELinux e o tamanho de partição. A
+gravação pelo TWRP foi conferida por SHA-256; a validação funcional aguarda o
+ADB do sistema após o reboot.
+
+### y2s: captura JPEG, stream auxiliar e lente 0.5× (02/11/2026)
+
+O teste do provider Camera3 AIDL separou três problemas que antes apareciam
+como uma única falha de câmera:
+
+* **Captura de foto:** o JPEG de `4032x3024` é produzido corretamente pelo
+  backend Exynos. No frame 496, o `ExynosCameraPipeJpeg` concluiu a compressão
+  e entregou o stream JPEG `id=3`. A falha posterior vem do stream auxiliar
+  YUV `id=5` (`512x384`, opção Samsung `0x4`): ele não é configurado no HAL
+  nativo, mas recebia um `ERROR_BUFFER` antes de o bridge AIDL devolvê-lo ao
+  CameraService. A Samsung Camera descarta a foto inteira quando essa
+  miniatura falha, mesmo com o JPEG válido.
+* **Dono privado dos streams auxiliares:** os streams YUV de foto (`id=4`) e
+  miniatura (`id=5`) não podem receber um `camera3_stream_t::priv` fabricado.
+  Esse campo pertence ao wrapper HIDL original. Quando o bridge fabricou o
+  registro de `0x98` bytes, o backend chegou a desreferenciar um dono inválido
+  em `m_sendYuvStreamResult`, causando o crash anterior. Com
+  `vendor.camera.aidl.private_stream_priv=0`, o preview permaneceu ativo sem
+  a queda do provider.
+* **Lanterna:** a metadata real da câmera 0 expõe
+  `android.flash.torchStrengthMaxLevel=1` e
+  `android.flash.torchStrengthDefaultLevel=1`. Logo, o flash físico é binário;
+  eventos da interface para níveis 2–5 não podem produzir brilho adicional.
+  A mensagem de que a luz está em uso depois de fechar a câmera era efeito da
+  morte do provider e da remoção temporária das câmeras pelo CameraService,
+  não uma ocupação real e permanente do LED.
+
+O módulo `platform/exynos990/patches/camera_aidl_port/customize.sh` foi
+atualizado para deixar `vendor.camera.aidl.private_stream_priv=0` e tornar
+persistente `vendor.camera.aidl.suppress_framework_only_error=1`. A segunda
+propriedade impede que o erro residual do backend para um stream excluído de
+`configure_streams()` seja encaminhado antes de o bridge concluir o buffer
+auxiliar junto com o JPEG. A alteração está no código-fonte; ela entra na
+próxima vendor reconstruída e assinada com AVB.
+
+Para a lente **0.5×**, a Samsung Camera abre a câmera lógica `20`
+(`BACK_SEAMLESS_ZOOM`), e não abre diretamente outra câmera. A metadata dessa
+lógica declara as físicas `0`, `2` e `5`; a física `2` possui foco de `2.2 mm`
+contra `5.4 mm` da principal e é a candidata ultrawide. O trecho de log
+coletado ainda não contém uma troca para a física `2`, portanto não se deve
+alterar a tabela de aliases por suposição. A próxima captura deve registrar a
+requisição física/metadata de zoom para corrigir o roteamento com o ID exato.
+
+### y2s: cadeia HIDL Samsung portada para o provider AIDL (02/11/2026)
+
+O estudo completo está em
+`platform/exynos990/patches/camera_aidl_port/HIDL_SEH_CHAIN_STUDY_20261102.md`. Resumo:
+
+* **Parâmetros Samsung.** O HAL só honra opções de stream, `shootingmode` e `sw-vdis` após
+  `HAL3_camera_device_set_parameters` (`camera3_device_ops::reserved[0]`), chamado pelo
+  `sehSetParameters` do HIDL. O cameraserver Android 17 entrega a string por
+  `AIBinder_getExtension()` → `ISehCameraDeviceSession::setParameters` e registrava
+  `setParameters: Samsung interface is null.`. O provider agora anexa `ISehCameraDeviceSession` e
+  `ISehCameraProvider` (AIDL reconstruídas das libs NDK da system, sem blobs do A26/S26+) em
+  `createBinder()`.
+* **Câmera lógica 20.** `vendor.camera.aidl.native_logical_ids=1` usa o ID público em
+  `get_camera_info()`/`open()` como o `SehCameraDevice`; o HAL entra em
+  `m_isLogicalCam(1) serviceCameraId(20)`, o app cria os RAW e o 0.5× troca `masterCamId(0 => 2)`.
+* **Correções de hipóteses anteriores.** O "objeto de 0x98 bytes" era o nó da
+  `std::map<int, Camera3Stream>` do wrapper; o `priv` sintético e `private_stream_priv` foram
+  removidos do código. `sehPreProcessConfigurationLocked` não pré-processa streams extras: com o
+  `set_parameters` todos os streams vão nativos (`drop_highres_yuv=0`). `preserve_private_handle=1`
+  entregava handle cru e derrubava o vídeo em `m_sendYuvStreamResult`; fica `0`. O wrapper HIDL libera
+  o request após `process_capture_request`; a retenção ilimitada do "session lifetime" virou uma
+  janela de 32 requests concluídos.
+* **Validado** com bind mount e depois na vendor gravada: foto com 8 streams nativos (JPEG + 12 RAW),
+  vídeo MP4 com SW VDIS sem queda, troca para 0.5×.
+* **Pendente (system).** O app cai no Super Night por falta de `libAIQSolution_MPI.camera.samsung.so`.
+  `platform/exynos990/patches/camera/customize.sh` passou a importar do firmware alvo
+  `libAIQSolution_MPI` e `libLocalTM_pcc` (a versão G986B carrega o fechamento `/system/lib64` que a
+  ROM já tem). Requer nova system; ver a validação por overlay na seção seguinte.
+
+Vendor instalada por `dd` no TWRP: base extraída com o sistema ativo
+(`out/target/y2s/dd-vendor-install-20261102-seh/vendor-original.img`, SHA-256
+`fb72c8023282f90c7666bb6f9800380541f4f360508b9bef21a4fd396259d07d`, rollback) e imagem
+`vendor-payload-camera-seh-native-ids-20261102.img`, SHA-256
+`95d833b58d7bc8622793aa0ef2a7c80e0f1d20f2d951c0188087a7c84adcd598` (UUID
+`4da2c6eb-98c5-2d7c-e20b-c77c898e80da`, contextos e symlinks idênticos ao original; só mudam o provider
+`bd5c6e2e…` e a `build.prop`). O boot terminou `green` com provider, cameraserver e Composer3 ativos.
+O `avbtool add_hashtree_footer` exige `out/tools/bin` no `PATH` (binário `fec`).
+
+### y2s: Motion Photo, foto frontal, Super Night e gravação dupla (02/11/2026)
+
+Os crashes relatados em foto frontal, foto com Motion Photo e gravação dupla tinham três causas.
+
+* **Motion Photo (também na frontal).** Tombstones idênticos na thread `MP@BufferChannel`:
+  `memcpy` em endereço 0 dentro de `libsume_mediabuffer_jni` (`convertByteBuffer2HwBuffer`).
+  `GraphicBufferMapper::lockYCbCr` retornava OK com `android_ycbcr` zerado (`y=0`, `ystride=0`). O
+  buffer é o `ImageReader` `MPSurfaceReader` (`0x22`/usage `0x20933`), que o Mali aloca como o YUV
+  privado `0x11d` (`+0x50`), NV21 com Y e croma em DMA-BUFs separados. O mapper Stable-C decidia
+  pelo formato de framework: `lock()` comum (aviso `mali_gralloc_lock: ... should be locked using
+  LOCK_FLEX`) e `PLANE_LAYOUTS` com um plano `RAW`, que o Gralloc5 ignora. Agora
+  `IMPLEMENTATION_DEFINED` + alocação `0x11d`/`0x11e` usa o scratch linear de
+  `lockCameraPrivateYuv()` e publica o layout desse scratch (Y com stride `+0x5c`, depois Cr/Cb
+  intercalados com stride `+0x6c`). O lock confere esses strides com o `LOCK_FLEX` antes de
+  entregar o scratch. O `0x11d` como formato de framework (preview do HAL) não mudou.
+* **Clipe do Motion Photo verde / "0 s" na galeria.** Com o crash resolvido, o JPEG trazia um HEVC
+  de 3,2 s com quadros verdes puros (~60 bytes por quadro). O `MPRemoteService` lê o
+  `ImageReader` (`make converter: copy`) pela `libsume`, que bloqueia **sempre** com
+  `CPU_READ|CPU_WRITE` (`0x33`). O scratch só era preenchido em lock somente leitura, então quem lia
+  recebia zeros. Agora ele é preenchido sempre que o lock inclui leitura. O `rw_probe` (escrita
+  `0x30`, leitura `0x33`) passou de `0x00` para o padrão gravado. Uma foto com flash (que evita o
+  Super Night) gerou um clipe de 3,3 s, 74 quadros de 38–110 KB, com imagem real.
+* **Bug antigo no `YCbCr_420_888`.** `writeDriverFlexPlaneLayouts()` calculava os offsets a partir do
+  menor ponteiro entre as planes, mas `lock()` devolve o Y. Em alocações `0x105` o Mali pode mapear o
+  croma abaixo do Y, e o cliente escrevia fora do mapeamento (7–20% das execuções). Os offsets agora são
+  relativos ao Y (`int64`, podem ser negativos). O probe `ahb_ycbcr_probe` (`AHardwareBuffer_lockPlanes`
+  com escrita e leitura de volta) passou 160/160 com o mapper novo e falhou 2–6/30 com o anterior.
+* **Super Night.** Confirmado como `libAIQSolution_MPI.camera.samsung.so not found` (frontal e
+  traseira no escuro). Validado sem build com um overlay temporário de `/system/lib64` contendo as
+  libs do G986B: `makeSuperNight X` (12 RAW) e JPEG 4032x3024. O app as carrega **sem** entrada em
+  `public.libraries-camera.samsung.txt`; o acréscimo à lista foi retirado do `customize.sh`.
+* **Gravação dupla.** `connectHelper: Illegal argument to HAL module for camera "0"`. O provider
+  recusava a segunda sessão sem chamar o HAL: `CameraSession::active_` era um ponteiro único que
+  também roteava os callbacks do HAL. Cada sessão agora embute seu `camera3_callback_ops_t` num
+  wrapper com o ponteiro dono. Um registro com mutex mantém o descarte de callbacks após
+  `close`. O HAL entra em `setPIPMode` (`PIP_MODE (1, 1)` na câmera 0). As duas sessões
+  avançam na mesma cadência (log `sensor timing camera=N`, agora por sessão), e o MP4
+  1920x1080 de 207 quadros foi gravado sem queda.
+
+* **Brilho da lanterna.** O controle de brilho do painel não mudava nada: o provider não declarava
+  `FLASH_INFO_STRENGTH_MAXIMUM_LEVEL` (o cameraserver assumia 1 nível) e `turnOnTorchWithStrengthLevel`
+  só ligava a lanterna. No stock, `CameraModule::sehSetTorchModeStrength` (`camera.device@3.2-impl.so`)
+  chama o slot Samsung `camera_module_t::reserved[0]` (`+0x148`), que leva a
+  `control_torch_flash()`. Esse grava em `/sys/class/camera/flash/rear_flash`:
+
+  | Nível | Valor | Corrente (s2mpb02 + `torch_table` do DT) |
+  | --- | --- | --- |
+  | 1 | `1001` | 60 mA |
+  | 2 | `1002` | 100 mA |
+  | 3 | `1004` | 120 mA |
+  | 4 | `1006` | 160 mA |
+  | 5 | `1009` | 200 mA |
+
+  O `set_torch_mode` comum grava `1` (60 mA). O provider agora declara máximo 5 e padrão 1,
+  repassa o nível ao slot `+0x148` e informa o nível atual em `getTorchStrengthLevel`. A
+  `libcamera_metadata` da vendor recusa as tags do Android 13+ em `add_camera_metadata_entry`.
+  `appendUnknownInt32Entry()` grava a entrada `int32` direto no buffer v1, só depois de conferir
+  o layout contra a API, porque o pacote é apenas copiado para o cameraserver. Validado pelo
+  painel: os níveis 1 a 5 chegaram ao driver como 60/100/120/160/200 mA. Ler `rear_flash` sempre
+  devolve `15` (o máximo do driver), então o log `[LED]s2mpb02_store` é a medida certa.
+
+Binários validados no aparelho por bind mount (ainda não gravados na vendor):
+
+```text
+mapper.exynos990_compat.so                         e2b638bb947b0347602fbc76d410e9a213ec30cfaa6fe5d12ce943dec8ed206a
+android.hardware.camera.provider-V4-service.exynos990  e28de549aa56348d0a1f68352445d1bebda810c45e86e01258c765794c1b8bcb
+```
+
+Para bind mount de executável use um tmpfs próprio (`mount -t tmpfs tmpfs /dev/provexec`). Com o
+arquivo criado direto em `/dev` o init falhou com `cannot execv ... Permission denied`; a causa
+não foi isolada (`/dev` é `nosuid`, sem `noexec`, e não houve AVC registrado).
+
+### y2s: snap-service, FaceService, scanner de documentos e Quick Share (02/11/2026)
+
+* **`vendor.samsung.hardware.snap-service` (SIGSEGV a cada foto com Motion Photo).** O
+  `MotionPhoto.apk` da source abre via snap o modelo BeepRemover, que usa o op TFLite 156. O
+  snaplite do S20+ (SNAP v22.09) responde `Op builtin_code out of range: 156`, e
+  `SnapliteSession::Close()` lia `this+0x208` nulo. A `libbeep_remover.so` não tem caminho de
+  CPU, então o BeepRemover continua indisponível nessa vendor (o som do obturador fica no
+  áudio do clipe). O patch em `platform/exynos990/patches/camera/customize.sh` faz o `Close()`
+  desviar o ponteiro nulo para a limpeza existente em `0x27ec0`. Com ele, o serviço sobrevive
+  (mesmo PID, `Session Close 0.9 ms`) e o app recebe `fail to open snap session`. Hashes:
+  original `1d7b16d9…`, corrigida `9dc5a6db…`.
+* **`com.samsung.faceservice` (SIGSEGV a cada ~16 min no `FaceDetectionWorker`).** Faltava
+  `/system/saiv/imageCropper/sce_detector_cnn.tflite`; a `libImageCropper` reporta sucesso e
+  usa o interpretador nulo. `unica/patches/saiv/customize.sh` trocava o `system/saiv` inteiro
+  pelo do alvo e perdia os bundles que só a source tem (`imageCropper`, `beauty`,
+  `text_alignment`). Agora ele os restaura da source. A presença do modelo foi validada por
+  overlay; a execução completa do worker ficou adiada pela política térmica do serviço
+  (`SIOP Level 7`).
+* **Scanner de documentos (`ActivityNotFoundException` em `MULTI_SCAN_MODE`).** A Samsung
+  Camera define `SUPPORT_MULTI_SCAN` por `SCANNER_FILTER` em
+  `SEC_FLOATING_FEATURE_CAMERA_DOCUMENTSCAN_SOLUTIONS`. Sem ele, `CameraApplication.onCreate()`
+  desabilita `MultiScan`/`MultiScanActivity` e os editores, mas o atalho `DocumentScanner`
+  segue habilitado. O `legacy_docscan` apagava a feature e passou a definir
+  `SCANNER_FILTER,DEFAULT_COLOR_FILTER`, sem as operações de IA do S24+. Validado com o XML
+  montado e restart do zygote (o `SemFloatingFeature` fica em cache no zygote): a tela
+  `MultiScan` abre e a câmera 20 entrega quadros.
+* **Quick Share (não envia nem recebe).** A ShareLive verifica `com.samsung.android.mdx.kit`
+  antes da descoberta e lança `ConnectionAppNotEnabledException` quando ele falta.
+  `target/y2s/debloat.sh` removia o `MdxKitService` por causa da varredura BLE contínua; a
+  remoção foi desfeita. Com o pacote do S947B em overlay de `/system/app` e as permissões de
+  Bluetooth/Nearby concedidas, a exceção some e a descoberta inicia. A varredura BLE precisa
+  de outra mitigação que não apague o pacote.
 

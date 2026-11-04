@@ -12,7 +12,12 @@ if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
     # Do not expose S24+ AI dewarping, shadow removal, deblur, object removal
     # or color enhancement. This leaves legacy Smart Scan detection, manual
     # crop and text extraction enabled.
-    SET_FLOATING_FEATURE_CONFIG "SEC_FLOATING_FEATURE_CAMERA_DOCUMENTSCAN_SOLUTIONS" --delete
+    # A feature não pode ser apagada: a Samsung Camera deriva
+    # SUPPORT_MULTI_SCAN de "SCANNER_FILTER" nesta lista e, sem ele, desabilita
+    # MultiScan/MultiScanActivity enquanto o atalho DocumentScanner continua
+    # ativo (ActivityNotFoundException em MULTI_SCAN_MODE ao abrir o scanner).
+    SET_FLOATING_FEATURE_CONFIG "SEC_FLOATING_FEATURE_CAMERA_DOCUMENTSCAN_SOLUTIONS" \
+        "SCANNER_FILTER,DEFAULT_COLOR_FILTER"
 
     for ABI in lib lib64; do
         for LIBRARY in \

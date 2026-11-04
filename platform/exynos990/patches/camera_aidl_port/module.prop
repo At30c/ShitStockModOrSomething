@@ -1,0 +1,7 @@
+id=exynos990_camera_aidl_port
+name=Exynos 990 Camera3 AIDL provider port
+version=0.1
+versionCode=1
+priority=55
+author=At30c
+description=Constrói o provider Camera AIDL V4 sobre o Camera3 nativo do Exynos 990; habilitação isolada por EXYNOS990_CAMERA_AIDL=1 para validar sessões, requests e callbacks.
