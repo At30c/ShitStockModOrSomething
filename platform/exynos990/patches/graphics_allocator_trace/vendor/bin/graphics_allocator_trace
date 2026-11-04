@@ -1,0 +1,89 @@
+#!/system/bin/sh
+
+set -u
+
+TRACE_DIR=/data/vendor/graphics_allocator_trace
+INTERVAL=${GRAPHICS_TRACE_INTERVAL:-5}
+FINISHED=0
+LOGCAT_PID=
+
+mkdir -p "$TRACE_DIR" 2>/dev/null || exit 1
+
+STAMP="$(date '+%Y%m%d-%H%M%S')"
+TRACE_FILE="$TRACE_DIR/trace-$STAMP.log"
+
+# Keep the trace partition bounded while preserving the last five boot cycles.
+for old in $(ls -1t "$TRACE_DIR"/trace-*.log 2>/dev/null | tail -n +6); do
+    rm -f "$old"
+done
+
+exec 3>>"$TRACE_FILE" || exit 1
+
+write() {
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N%z')" "$*" >&3
+}
+
+snapshot() {
+    local reason="$1"
+    local dmabuf_total
+
+    write "event=snapshot reason=$reason uptime=$(cut -d ' ' -f1 /proc/uptime 2>/dev/null)"
+    write "bootreason=$(getprop ro.boot.bootreason) sys_boot_reason=$(getprop sys.boot.reason) boot_completed=$(getprop sys.boot_completed)"
+    awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree|Slab|SReclaimable|CmaTotal|CmaFree):/ {printf "%s=%sKB ", $1, $2} END {print ""}' /proc/meminfo >&3
+
+    if [ -r /sys/kernel/debug/mali0/gpu_memory ]; then
+        write "mali_gpu_memory_begin"
+        cat /sys/kernel/debug/mali0/gpu_memory >&3
+        write "mali_gpu_memory_end"
+    else
+        write "mali_gpu_memory=unavailable"
+    fi
+
+    if [ -r /sys/kernel/debug/dma_buf/bufinfo ]; then
+        dmabuf_total="$(cat /sys/kernel/debug/dma_buf/bufinfo | awk '/^Total [0-9]+ objects/ {last=$0} END {print last}')"
+        write "dmabuf=$dmabuf_total"
+    else
+        write "dmabuf=unavailable"
+    fi
+
+    write "graphics_processes_begin"
+    ps -A -o PID,UID,OOM_SCORE_ADJ,NAME,ARGS 2>/dev/null |
+        grep -E 'allocator|composer|mapper|surfaceflinger|android\.hardware' >&3 || true
+    write "graphics_processes_end"
+}
+
+finish() {
+    [ "$FINISHED" -eq 1 ] && return
+    FINISHED=1
+    write "event=shutdown_requested powerctl=$(getprop sys.powerctl) shutdown=$(getprop sys.shutdown.requested)"
+    snapshot shutdown
+    if [ -n "$LOGCAT_PID" ]; then
+        kill "$LOGCAT_PID" 2>/dev/null || true
+        wait "$LOGCAT_PID" 2>/dev/null || true
+    fi
+    write "event=trace_end"
+    exec 3>&-
+}
+
+trap finish TERM INT HUP EXIT
+
+write "event=trace_start pid=$$ interval=${INTERVAL}s"
+snapshot boot
+
+# Preserve only allocator/display OOM evidence from the live log buffers.
+(
+    logcat -b all -v threadtime 2>/dev/null |
+        while IFS= read -r line; do
+            case "$line" in
+                *Out\ of\ memory*|*oom-killer*|*Killed\ process*|*mali_gralloc*|*ion_*|*DmaBuf*|*SurfaceFlinger*|*allocator*|*composer*|*sec_ts*|*power\ mode*)
+                    printf '[logcat] %s\n' "$line" >&3
+                    ;;
+            esac
+        done
+) &
+LOGCAT_PID=$!
+
+while :; do
+    sleep "$INTERVAL"
+    snapshot interval
+done

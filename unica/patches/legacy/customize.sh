@@ -38,58 +38,67 @@ BACKPORT_SF_PROPS()
         fi
     fi
 
-    if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "34" ]; then
-        PATCHED=true
+    # A native Android 17 donor owns the SurfaceFlinger/HFR policy.  The
+    # target SDK may still be old (y2s is SDK 30), but backporting these
+    # legacy frame-rate properties would override the native mode negotiation
+    # exposed by the Composer3 bridge. Keep the density compatibility above;
+    # only legacy stacks receive the old SurfaceFlinger properties.
+    if ! ${SOURCE_USE_NATIVE_DISPLAY_STACK:-false}; then
+        if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "34" ]; then
+            PATCHED=true
 
-        PROP="ro.surface_flinger.enable_frame_rate_override"
-        VALUE="$(test "$TARGET_LCD_CONFIG_HFR_MODE" -gt "1" && echo "true" || echo "false")"
-
-        if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
-            LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
-            EVAL "sed -i \"/persist.sys.usb.config/i $PROP=$VALUE\" \"$FILE\""
-        fi
-    fi
-
-    if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
-        PATCHED=true
-
-        PROP="ro.surface_flinger.set_display_power_timer_ms"
-
-        if [ "$(GET_PROP "vendor" "$PROP")" ]; then
-            SET_PROP "vendor" "$PROP" --delete
-        fi
-
-        PROP="ro.surface_flinger.enable_frame_rate_override"
-        if [ "$(GET_PROP "vendor" "ro.surface_flinger.set_idle_timer_ms")" ]; then
-            PROP="ro.surface_flinger.set_idle_timer_ms"
-        fi
-        VALUE="$(GET_PROP "vendor" "ro.surface_flinger.use_content_detection_for_refresh_rate")"
-        if [ ! "$VALUE" ]; then
+            PROP="ro.surface_flinger.enable_frame_rate_override"
             VALUE="$(test "$TARGET_LCD_CONFIG_HFR_MODE" -gt "1" && echo "true" || echo "false")"
-        fi
 
-        if [[ "$(sed -n "/$PROP/{x;p;d;}; x" "$FILE")" != *"use_content_detection_for_refresh_rate"* ]]; then
-            if [ ! "$(GET_PROP "vendor" "ro.surface_flinger.use_content_detection_for_refresh_rate")" ]; then
-                LOG "- Adding \"ro.surface_flinger.use_content_detection_for_refresh_rate\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
-            else
-                EVAL "sed -i \"/use_content_detection_for_refresh_rate/d\" \"$FILE\""
+            if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
+                LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
+                EVAL "sed -i \"/persist.sys.usb.config/i $PROP=$VALUE\" \"$FILE\""
             fi
-            EVAL "sed -i \"/$PROP/i ro.surface_flinger.use_content_detection_for_refresh_rate=$VALUE\" \"$FILE\""
         fi
 
-        PROP="debug.sf.show_refresh_rate_overlay_render_rate"
-        VALUE="true"
-        if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
-            LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
-            EVAL "sed -i \"/ro.surface_flinger.use_content_detection_for_refresh_rate/i $PROP=$VALUE\" \"$FILE\""
-        fi
+        if [ "$TARGET_PLATFORM_SDK_VERSION" -lt "35" ]; then
+            PATCHED=true
 
-        PROP="ro.surface_flinger.game_default_frame_rate_override"
-        VALUE="60"
-        if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
-            LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
-            EVAL "sed -i \"/debug.sf.show_refresh_rate_overlay_render_rate/a $PROP=$VALUE\" \"$FILE\""
+            PROP="ro.surface_flinger.set_display_power_timer_ms"
+
+            if [ "$(GET_PROP "vendor" "$PROP")" ]; then
+                SET_PROP "vendor" "$PROP" --delete
+            fi
+
+            PROP="ro.surface_flinger.enable_frame_rate_override"
+            if [ "$(GET_PROP "vendor" "ro.surface_flinger.set_idle_timer_ms")" ]; then
+                PROP="ro.surface_flinger.set_idle_timer_ms"
+            fi
+            VALUE="$(GET_PROP "vendor" "ro.surface_flinger.use_content_detection_for_refresh_rate")"
+            if [ ! "$VALUE" ]; then
+                VALUE="$(test "$TARGET_LCD_CONFIG_HFR_MODE" -gt "1" && echo "true" || echo "false")"
+            fi
+
+            if [[ "$(sed -n "/$PROP/{x;p;d;}; x" "$FILE")" != *"use_content_detection_for_refresh_rate"* ]]; then
+                if [ ! "$(GET_PROP "vendor" "ro.surface_flinger.use_content_detection_for_refresh_rate")" ]; then
+                    LOG "- Adding \"ro.surface_flinger.use_content_detection_for_refresh_rate\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
+                else
+                    EVAL "sed -i \"/use_content_detection_for_refresh_rate/d\" \"$FILE\""
+                fi
+                EVAL "sed -i \"/$PROP/i ro.surface_flinger.use_content_detection_for_refresh_rate=$VALUE\" \"$FILE\""
+            fi
+
+            PROP="debug.sf.show_refresh_rate_overlay_render_rate"
+            VALUE="true"
+            if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
+                LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
+                EVAL "sed -i \"/ro.surface_flinger.use_content_detection_for_refresh_rate/i $PROP=$VALUE\" \"$FILE\""
+            fi
+
+            PROP="ro.surface_flinger.game_default_frame_rate_override"
+            VALUE="60"
+            if [ ! "$(GET_PROP "vendor" "$PROP")" ]; then
+                LOG "- Adding \"$PROP\" prop with \"$VALUE\" in ${FILE//$WORK_DIR/}"
+                EVAL "sed -i \"/debug.sf.show_refresh_rate_overlay_render_rate/a $PROP=$VALUE\" \"$FILE\""
+            fi
         fi
+    else
+        LOG "- Preserving native SurfaceFlinger/HFR properties"
     fi
 }
 

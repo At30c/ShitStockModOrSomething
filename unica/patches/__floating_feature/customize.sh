@@ -134,10 +134,10 @@ SEC_FLOATING_FEATURE_LCD_CONFIG_VIVIDNESS=0
 SEC_FLOATING_FEATURE_LCD_CONFIG_VIVIDPLUS=0
 "
 
-# Keep display-related values from a donor that already has the target
-# resolution/HFR implementation. This covers both the normal target merge and
-# the explicit target/*.sff.sh overrides, which otherwise would reintroduce
-# the y2s 48/96-Hz policy after the smali patches were disabled.
+# Preserve the source display features while an Android 17 donor is used.
+# Exynos 990 y2s/y2slte receives its target display contract below through the
+# active floating-feature module; display_policy_compat is intentionally
+# disabled and must not be required for the build.
 IS_NATIVE_DISPLAY_FEATURE()
 {
     case "$1" in
@@ -267,6 +267,50 @@ if [ -f "$SRC_DIR/target/$TARGET_CODENAME/sff.sh" ]; then
     APPLY_CUSTOM_FEATURE "$SRC_DIR/target/$TARGET_CODENAME/sff.sh"
     LOG_STEP_OUT
 fi
+
+# libfloatingfeature is consumed from both system and vendor on Exynos 990.
+# SET_FLOATING_FEATURE_CONFIG updates only the system table, so keep the vendor
+# copy in lockstep for the resolution/HFR values used by the framework.
+if [[ "$TARGET_PLATFORM" == "exynos990" ]] && \
+        [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
+    VENDOR_FLOATING_FEATURE="$WORK_DIR/vendor/etc/floating_feature.xml"
+    if [ -f "$VENDOR_FLOATING_FEATURE" ]; then
+        SYNC_VENDOR_DISPLAY_FEATURE()
+        {
+            local CONFIG="$1"
+            local VALUE="$2"
+
+            grep -q -F "<${CONFIG}>" "$VENDOR_FLOATING_FEATURE" && \
+                sed -i "/<${CONFIG}>/d" "$VENDOR_FLOATING_FEATURE"
+            grep -q -F '</SecFloatingFeatureSet>' "$VENDOR_FLOATING_FEATURE" || {
+                ABORT "Vendor floating feature table has no closing SecFloatingFeatureSet tag"
+                return 1
+            }
+            sed -i "/<\/SecFloatingFeatureSet>/i\    <${CONFIG}>${VALUE}</${CONFIG}>" \
+                "$VENDOR_FLOATING_FEATURE"
+        }
+
+        SYNC_VENDOR_DISPLAY_FEATURE "SEC_FLOATING_FEATURE_COMMON_CONFIG_DYN_RESOLUTION_CONTROL" "WQHD,FHD,HD" || return 1
+        SYNC_VENDOR_DISPLAY_FEATURE "SEC_FLOATING_FEATURE_LCD_CONFIG_DEFAULT_SCREEN_MODE" "4" || return 1
+        SYNC_VENDOR_DISPLAY_FEATURE "SEC_FLOATING_FEATURE_LCD_CONFIG_HFR_DEFAULT_REFRESH_RATE" "60" || return 1
+        SYNC_VENDOR_DISPLAY_FEATURE "SEC_FLOATING_FEATURE_LCD_CONFIG_HFR_MODE" "4" || return 1
+        SYNC_VENDOR_DISPLAY_FEATURE "SEC_FLOATING_FEATURE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE" "60,96,120" || return 1
+        SYNC_VENDOR_DISPLAY_FEATURE "SEC_FLOATING_FEATURE_LCD_CONFIG_HFR_SUPPORTED_REFRESH_RATE_NS" "60,48" || return 1
+        unset VENDOR_FLOATING_FEATURE
+        unset -f SYNC_VENDOR_DISPLAY_FEATURE
+    fi
+fi
+
+# Game Booster's performance panel is a shared One UI contract.  Some donor
+# firmware tables omit it even though the target has a compatible GOS stack;
+# make the declaration universal without overwriting a device-specific value.
+GAMEBOOSTER_PERF_FEATURE="SEC_FLOATING_FEATURE_GRAPHICS_SUPPORT_GAMEBOOSTER_PERF_MONITOR"
+ENSURE_FLOATING_FEATURE_CONFIG \
+    "$WORK_DIR/system/system/etc/floating_feature.xml" \
+    "$GAMEBOOSTER_PERF_FEATURE" TRUE || return 1
+ENSURE_FLOATING_FEATURE_CONFIG \
+    "$WORK_DIR/vendor/etc/floating_feature.xml" \
+    "$GAMEBOOSTER_PERF_FEATURE" TRUE || return 1
 
 # Never package a corrupted feature table. Duplicate tags are invalid and can
 # make SystemUI derive contradictory BasicRune values during early startup.

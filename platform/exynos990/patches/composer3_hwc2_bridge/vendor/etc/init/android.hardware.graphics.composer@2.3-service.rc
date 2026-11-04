@@ -1,0 +1,11 @@
+# Composer3 owns the Exynos 990 HWC2 module on Android 17. Starting the
+# stock HIDL transport as well opens a second HWC session and makes QHD/FHD
+# config changes time out while only the logical framebuffer is updated.
+service vendor.hwcomposer-2-3 /vendor/bin/hw/android.hardware.graphics.composer@2.3-service
+    class hal animation
+    disabled
+    user system
+    group graphics drmrpc
+    capabilities SYS_NICE SYS_RESOURCE
+    onrestart restart surfaceflinger
+    task_profiles HighPerformance GpisSfCpusetJoin

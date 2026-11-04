@@ -1,0 +1,7 @@
+id=display_policy_compat
+name=Exynos 990 display policy compatibility
+version=1.4
+versionCode=5
+priority=60
+author=At30c
+description=Aligns Android 17 display policy and Composer mode publication with the stock Exynos 990 display contract without modifying SecSettings.

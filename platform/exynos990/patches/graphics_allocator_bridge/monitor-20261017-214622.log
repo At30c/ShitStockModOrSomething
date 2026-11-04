@@ -1,0 +1,20 @@
+timestamp=2026-10-17T21:46:23-0300
+mali0                  39193
+  kctx-0x0000000000000000        129
+  kctx-0x0000000000000000      12482
+  kctx-0x0000000000000000        450
+  kctx-0x0000000000000000       1688
+  kctx-0x0000000000000000       1111
+  kctx-0x0000000000000000         65
+  kctx-0x0000000000000000      17971
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000          5
+MemAvailable:    3128432 kB
+Slab:             374576 kB
+SReclaimable:      87772 kB
+	170c0000.exynos_is
+Total 1 devices attached
+
+
+Total 150 objects, 543748096 bytes

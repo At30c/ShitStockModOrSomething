@@ -1,0 +1,22 @@
+on post-fs-data
+    mkdir /data/vendor/graphics_allocator_trace 0770 root root
+    restorecon_recursive /data/vendor/graphics_allocator_trace
+    # Diagnostic-only service: do not start automatically. The vendor_shell
+    # domain cannot write vendor_data_file on this target; starting it here
+    # would create a status-127 restart loop and add avoidable load.
+
+on property:sys.shutdown.requested=*
+    stop graphics_allocator_trace
+
+on property:sys.powerctl=*
+    stop graphics_allocator_trace
+
+# Use the vendor interpreter.  The service runs in vendor_shell and this
+# domain is allowed to execute vendor_shell_exec, while /system/bin/sh is
+# denied by SELinux on this target and causes a status-127 restart loop.
+service graphics_allocator_trace /vendor/bin/sh /vendor/bin/graphics_allocator_trace
+    class late_start
+    user root
+    group root system log
+    disabled
+    seclabel u:r:vendor_shell:s0

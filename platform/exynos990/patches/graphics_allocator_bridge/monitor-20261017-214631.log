@@ -1,0 +1,101 @@
+timestamp=2026-10-17T21:46:32-0300
+mali0                  41940
+  kctx-0x0000000000000000       1092
+  kctx-0x0000000000000000        129
+  kctx-0x0000000000000000      12485
+  kctx-0x0000000000000000        450
+  kctx-0x0000000000000000       3069
+  kctx-0x0000000000000000       1111
+  kctx-0x0000000000000000         65
+  kctx-0x0000000000000000      18242
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000          5
+MemAvailable:    2587772 kB
+Slab:             403980 kB
+SReclaimable:      86992 kB
+	170c0000.exynos_is
+Total 1 devices attached
+
+
+Total 202 objects, 558112768 bytes
+timestamp=2026-10-17T21:46:34-0300
+mali0                  40873
+  kctx-0x0000000000000000        129
+  kctx-0x0000000000000000      12517
+  kctx-0x0000000000000000        450
+  kctx-0x0000000000000000       3066
+  kctx-0x0000000000000000       1111
+  kctx-0x0000000000000000         65
+  kctx-0x0000000000000000      18238
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000          5
+MemAvailable:    2386616 kB
+Slab:             405648 kB
+SReclaimable:      86904 kB
+	170c0000.exynos_is
+Total 1 devices attached
+
+
+Total 196 objects, 550100992 bytes
+timestamp=2026-10-17T21:46:36-0300
+mali0                  40777
+  kctx-0x0000000000000000        129
+  kctx-0x0000000000000000      12517
+  kctx-0x0000000000000000        450
+  kctx-0x0000000000000000       2979
+  kctx-0x0000000000000000       1111
+  kctx-0x0000000000000000         65
+  kctx-0x0000000000000000      18229
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000          5
+MemAvailable:    2379240 kB
+Slab:             407496 kB
+SReclaimable:      86952 kB
+	170c0000.exynos_is
+Total 1 devices attached
+
+
+Total 208 objects, 550563840 bytes
+timestamp=2026-10-17T21:46:39-0300
+mali0                  35750
+  kctx-0x0000000000000000        129
+  kctx-0x0000000000000000       7387
+  kctx-0x0000000000000000        450
+  kctx-0x0000000000000000       3210
+  kctx-0x0000000000000000       1111
+  kctx-0x0000000000000000         65
+  kctx-0x0000000000000000      18101
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000          5
+MemAvailable:    2430672 kB
+Slab:             406088 kB
+SReclaimable:      88852 kB
+	170c0000.exynos_is
+Total 1 devices attached
+
+
+Total 162 objects, 549998592 bytes
+timestamp=2026-10-17T21:46:42-0300
+mali0                  34934
+  kctx-0x0000000000000000        129
+  kctx-0x0000000000000000       7321
+  kctx-0x0000000000000000        450
+  kctx-0x0000000000000000       2494
+  kctx-0x0000000000000000       1111
+  kctx-0x0000000000000000         65
+  kctx-0x0000000000000000      18067
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000       2646
+  kctx-0x0000000000000000          5
+MemAvailable:    2644196 kB
+Slab:             408528 kB
+SReclaimable:      89012 kB
+	170c0000.exynos_is
+Total 1 devices attached
+
+
+Total 170 objects, 550178816 bytes

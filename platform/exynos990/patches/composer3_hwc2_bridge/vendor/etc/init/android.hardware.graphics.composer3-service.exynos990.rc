@@ -1,0 +1,6 @@
+service vendor.graphics.composer3-exynos990 /vendor/bin/hw/android.hardware.graphics.composer3-service.exynos990
+    class hal animation
+    user system
+    group graphics drmrpc
+    interface aidl android.hardware.graphics.composer3.IComposer/default
+    onrestart restart surfaceflinger

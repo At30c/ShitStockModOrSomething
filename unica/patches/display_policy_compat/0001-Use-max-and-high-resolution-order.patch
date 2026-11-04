@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 21:00:00 -0300
+Subject: [PATCH] Keep the two-entry resolution UI ordered by pixel area
+
+The native Settings UI exposes a maximum and a high resolution entry.  Its
+source list is sorted in descending order by the compatibility customization,
+so swap the labels to keep the first entry as the maximum and the second as
+the high resolution.
+
+---
+diff --git a/res/values/arrays.xml b/res/values/arrays.xml
+index 0000000..0000000 100644
+--- a/res/values/arrays.xml
++++ b/res/values/arrays.xml
+@@ -1406,7 +1406,7 @@
+     <array name="config_satellite_apps_for_nbntn_landing_page" />
+     <string-array name="config_screen_resolution_options_strings">
+-        <item>@string/screen_resolution_option_high</item>
+         <item>@string/screen_resolution_option_full</item>
++        <item>@string/screen_resolution_option_high</item>
+     </string-array>
+     <array name="config_settableAutoRotationDeviceStatesDescriptions" />
+     <array name="config_settings_slices_accessibility_components" />
