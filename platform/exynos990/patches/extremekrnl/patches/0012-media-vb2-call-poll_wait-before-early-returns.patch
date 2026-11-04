@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ats0c <ats0c@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 06:00:00 -0300
+Subject: [PATCH] media: vb2: call poll_wait() before the early returns
+
+vb2_core_poll() returns EPOLLERR for a queue that is not streaming (or a
+capture queue still waiting for its first buffer) before it calls
+poll_wait().  An epoll item registered at that point is never added to the
+queue's done_wq, so no later vb2_buffer_done() wakes it.
+
+The Exynos Codec2 components register the MFC fd with epoll during init,
+before STREAMON, and then wait forever for decoded frames.  Register on
+done_wq right after the direction checks, as upstream does, and drop the
+later conditional poll_wait().
+---
+diff --git a/drivers/media/common/videobuf2/videobuf2-core.c b/drivers/media/common/videobuf2/videobuf2-core.c
+index 02cd927a5d2c..29ac7958de57 100644
+--- a/drivers/media/common/videobuf2/videobuf2-core.c
++++ b/drivers/media/common/videobuf2/videobuf2-core.c
+@@ -2371,6 +2371,13 @@ __poll_t vb2_core_poll(struct vb2_queue *q, struct file *file,
+ 	if (q->is_output && !(req_events & (EPOLLOUT | EPOLLWRNORM)))
+ 		return 0;
+ 
++	/*
++	 * Register on the done queue before any early return.  An epoll item
++	 * added while the queue is not streaming yet (or is still waiting for its
++	 * first buffer) would otherwise never be woken by vb2_buffer_done().
++	 */
++	poll_wait(file, &q->done_wq, wait);
++
+ 	/*
+ 	 * Start file I/O emulator only if streaming API has not been used yet.
+ 	 */
+@@ -2422,8 +2429,6 @@ __poll_t vb2_core_poll(struct vb2_queue *q, struct file *file,
+ 		 */
+ 		if (q->last_buffer_dequeued)
+ 			return EPOLLIN | EPOLLRDNORM;
+-
+-		poll_wait(file, &q->done_wq, wait);
+ 	}
+ 
+ 	/*

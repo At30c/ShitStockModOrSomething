@@ -1,0 +1,7 @@
+id=codec2_exynos_a26
+name=Exynos hardware Codec2 (A26 HAL)
+version=1.0
+versionCode=1
+priority=50
+author=At30c
+description=Runs the Galaxy A26 Exynos Codec2 HAL (H.264, HEVC incl. 10-bit HDR, VP9 decoders) on Exynos 990 as IComponentStore/exynos0 through the libc2compat26 shim.

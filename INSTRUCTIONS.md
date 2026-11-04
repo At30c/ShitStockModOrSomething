@@ -12098,3 +12098,90 @@ patch. Ele também exporta `Surface::setAutoGenerationUpdate`, então apps de
 32 bits que decodificam vídeo por OMX podem ter o mesmo problema. Isso ainda
 não foi verificado.
 
+## y2s: Codec2 de hardware (HAL Exynos do A26) sobre o MFC do 990 (03/11/2026)
+
+O 990 só tinha decoders de vídeo por hardware em OMX. Os componentes Codec2
+Exynos do A26 (A266B, Exynos 1380, VNDK 33) usam a mesma ExynosVideoApi e
+`libexynosv4l2` e encontram o MFC pelo nome do nó (`s5p-mfc-dec`). O módulo
+`platform/exynos990/patches/codec2_exynos_a26/` roda essa cadeia no vendor do
+990 (VNDK 30) por meio de um shim (`libc2compat26.so`, sem runtime C++) e de
+renomeações de símbolos in-place, sempre com o mesmo comprimento
+(`patch_dynstr.py`). O patchelf não é usado, porque reorganiza os segmentos.
+
+Contratos que o shim adapta:
+
+* ABI: `android::Fence` virtual do A12+ (`c2compa::Fence`),
+  `ExynosGraphicBufferMeta::get_cstride`, `AcrylicCanvas::setStride` (no-op,
+  porque o layout do 990 difere) e o stub de `libdmabufheap` (o kernel não tem
+  `/dev/dma_heap`; o C2 usa ION).
+* `sizeimage = 1` do A26 trocado por um CPB de 4 MiB. O buffer de EOS
+  (`LAST_FRAME|EMPTY_DATA`) é enfileirado sobre um dmabuf ION de 4 MiB.
+* `BufferUsage::VIDEO_DECODER` nas alocações YUV da Exynos, para o gralloc
+  adicionar o padding do MFC, e `length = 0` nos planos da captura.
+* epoll: o `vb2_core_poll()` do 4.19 retorna `EPOLLERR` antes do `poll_wait()`
+  quando a fila não está em streaming. O shim refaz o registro do fd após o
+  STREAMON e o primeiro QBUF da captura. A correção no kernel seria mover o
+  `poll_wait()` para o início, como no upstream.
+* 10 bits: quando o G_FMT retorna `NV12N_10B`, a captura passa para
+  `NV12M_S10B` (dois planos), que corresponde ao formato de cor `0x5` / HAL
+  `0x125` do componente.
+* `G_CTRL` de prioridade de tempo real (`0x992024`, Galeria/APlayer): o controle
+  não existe no 990 e é respondido como prioridade 0.
+* `get_video_metadata_fd` retorna -1: a `ExynosVideoMeta` do A26 tem outro
+  layout, então o HDR por quadro fica desativado.
+
+Instalação no vendor (dd, `scripts/repack_vendor_dd.sh` + `stage_vendor_changes.sh`):
+o serviço `samsung.hardware.media.c2@1.2-service` (`mediacodec_exec`) registra
+a instância `exynos0`. A instância `default` continua com o
+`samsung.software.media.c2` (codecs `c2.sec.*`). As libs vão em `/vendor/lib64`,
+e as quatro que colidem com as do 990 são renomeadas:
+`libcodec2_vn26`, `libcodec2_h26l@1.0/1.1`, `libsfplugin_ccodec_utl26`. Não é
+possível usar `LD_LIBRARY_PATH` no `.rc`, porque a transição de domínio liga o
+`AT_SECURE`. O `sec_c2_manifest_default.xml` da Samsung tem `override="true"` e
+descarta outros fragmentos do HAL c2, por isso declara `default` e `exynos0` em
+1.2. O `media_codecs_c2.xml` lista só H.264, HEVC e VP9. Encoders, secure e
+VP8 continuam no OMX; o VP8 ficou de fora para caber na partição.
+
+Validação: 150/150 quadros (HEVC 10 bits da câmera: 155), com desempenho igual
+ao OMX (H.264 720p ≈ 218 fps, HEVC 1080p ≈ 118 fps, VP9 720p ≈ 197 fps).
+Telegram, Spotify, Galeria (inclusive HEVC 10 bits HDR) e scrubbing funcionam.
+Boot `green`, sem negações do SELinux. Vendor gravado:
+`out/target/y2s/dd-vendor-install-20261103-c2a26/vendor-payload.img`
+(SHA-256 `ebdace534dbd76a4e6a98fb8f2fbda76541a8d9426415beaeaf876dbafb84cae`).
+Rollback: `dd-vendor-install-20261103-c2manifest/vendor-payload.img` ou o
+payload de 02/11. Reiniciar o `hwservicemanager` em testes derruba
+keymaster/gatekeeper (a senha passa a ser recusada até o reboot), então as
+mudanças de VINTF vão por dd.
+
+### y2s: HDR no bridge Composer3 e kernel vb2 (03/11/2026)
+
+* **HDR10, HDR10+ e HLG.** O bridge Composer3 respondia "unsupported" em
+  `getHdrCapabilities` e devolvia uma lista vazia em `getPerFrameMetadataKeys`.
+  Com isso o SurfaceFlinger tratava o painel como SDR
+  (`HWC Support: hdr10=false … metadata=0`) e convertia todo vídeo PQ/HLG por
+  shader. O decoder C2 do A26 envia o HDR pelos parâmetros C2 (framework) e
+  não pela `ExynosVideoMeta`, onde só grava crop, formato e entrelaçado; por
+  isso a meta continua desativada no shim. O `hwc2_backend_state` passou a
+  carregar `GET_HDR_CAPABILITIES`, `GET_PER_FRAME_METADATA_KEYS`,
+  `SET_LAYER_PER_FRAME_METADATA(_BLOBS)` e `GET_DISPLAY_REQUESTS`, e o contrato
+  repassa capacidades, chaves e metadados por camada. Resultado:
+  `hdr10plus=true hdr10=true hlg=true metadata=7`, luminância 400/120/0,001.
+* **Display requests.** Com HDR ativo, o HWC do 990 devolve requests
+  (`CLEAR_CLIENT_TARGET`) quando a camada HDR fica sob conteúdo composto pela
+  GPU, por exemplo no blur da animação de saída. O bridge respondia
+  `EX_UNSUPPORTED`, o SurfaceFlinger falhava em `chooseCompositionStrategy` e a
+  tela inicial voltava sem ícones e widgets até a próxima transição. Agora os
+  requests vão como `DisplayRequest`, e o `presentOrValidate` retorna
+  `Validated` quando eles existem.
+* Validado: vídeo HDR da câmera na Galeria, saída com o vídeo aberto e o
+  launcher íntegro, sem falhas de composição. A lib
+  (`libexynos990_composer3_contract.so`, SHA-256 `4b62f39f…`) está em
+  `composer3_hwc2_bridge/prebuilt` e foi gravada no vendor via dd
+  (`dd-vendor-install-20261103-composer-hdr`, SHA-256 `40f45c64…`, boot
+  `green`).
+* **Kernel.** O
+  `extremekrnl/patches/0012-media-vb2-call-poll_wait-before-early-returns.patch`
+  chama `poll_wait()` antes dos retornos antecipados do `vb2_core_poll()`, como
+  faz o upstream. Com esse kernel, o re-registro de epoll no shim do Codec2
+  vira redundante, mas é inofensivo e continua lá para o kernel atual.
+
