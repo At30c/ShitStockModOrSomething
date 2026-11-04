@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026 At30c <PabloAtsoc9993@outlook.com>
+# Copyright (c) 2026 At30c
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Samsung's imported Android 16 libgui only rewrites a GraphicBuffer's

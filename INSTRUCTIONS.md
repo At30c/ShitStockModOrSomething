@@ -2651,7 +2651,7 @@ buildada/flashada. Depois do flash, a mesma leitura deve mostrar
 Também foram corrigidos 11 cabeçalhos de patches que usavam identidades
 genéricas (`UN1CA maintainers`, `UN1CA y2slte`, `Codex`, `localhost` ou domínio
 de exemplo). Eles agora usam o crédito solicitado:
-`From: At30c <PabloAtsoc9993@outlook.com>`. Autores reais de terceiros não
+`From: At30c`. Autores reais de terceiros não
 foram alterados.
 
 ## Variante A/B para os APEX de runtime (2026-09-21)
@@ -3238,7 +3238,7 @@ Foi criado o patch do ExtremeKRNL:
 platform/exynos990/patches/extremekrnl/patches/0003-capabilities-add-android17-bounding-set-abi.patch
 ```
 
-O autor registrado no patch é `At30c <PabloAtsoc9993@outlook.com>`. O patch
+O autor registrado no patch é `At30c`. O patch
 adiciona ao kernel 4.19 os números de ABI de `CAP_PERFMON` (38), `CAP_BPF` (39)
 e `CAP_CHECKPOINT_RESTORE` (40), eleva `CAP_LAST_CAP` para 40 e acrescenta os
 três nomes em `COMMON_CAP2_PERMS` do SELinux. A numeração e os nomes seguem o
@@ -3481,8 +3481,8 @@ estavam no working tree:
 - `config.sh` e `gen_config_file.sh`: propagação de
   `EXYNOS990_RUNTIME32_APEX_MODE` para reproduzir a variante de runtime usada
   no teste do Chromium.
-- Cabeçalhos `From:` dos patches corrigidos para `At30c
-  <PabloAtsoc9993@outlook.com>`, conforme a autoria solicitada.
+- Cabeçalhos `From:` dos patches corrigidos para `At30c`, conforme a autoria
+  solicitada.
 - O patch `platform/exynos990/patches/extremekrnl/patches/0002-cgroup2-add-cgroup-kill-interface.patch`
   foi incluído no conjunto de compatibilidade do kernel.
 

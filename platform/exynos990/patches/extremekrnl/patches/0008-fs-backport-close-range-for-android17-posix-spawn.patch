@@ -1,5 +1,5 @@
 From cd95218374cf3451b0a543ca91f1ba967f1637ea Mon Sep 17 00:00:00 2001
-From: At30c <PabloAtsoc9993@outlook.com>
+From: At30c <173511395+At30c@users.noreply.github.com>
 Date: Wed, 7 Oct 2026 15:32:32 -0300
 Subject: [PATCH] fs: backport close_range for Android 17 posix_spawn
 

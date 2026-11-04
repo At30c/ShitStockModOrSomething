@@ -1,5 +1,5 @@
 From 7a5b4ac8e0d3f2a4f5e8a1c6d9b0e2f4a6c8d0e1 Mon Sep 17 00:00:00 2001
-From: At30c <PabloAtsoc9993@outlook.com>
+From: At30c <173511395+At30c@users.noreply.github.com>
 Date: Tue, 22 Sep 2026 22:15:00 -0300
 Subject: [PATCH] PowerManagerService: avoid resetting timeout on USB plug
 
@@ -16,7 +16,7 @@ the local-register window.  The normal
 wakePowerGroupLocked() path remains intact; PowerGroup.setWakefulnessLocked()
 records activity when a display that was asleep is actually woken.
 
-Signed-off-by: At30c <PabloAtsoc9993@outlook.com>
+Signed-off-by: At30c <173511395+At30c@users.noreply.github.com>
 ---
  .../com/android/server/power/PowerManagerService.smali | 5 +++++
  1 file changed, 5 insertions(+)

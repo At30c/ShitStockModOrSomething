@@ -16,7 +16,7 @@ This patch only changes framework-side request construction; it cannot reset
 the hardware-backed Knox/TEE compromise state.
 
 Original-work: ICDFix_8.5 by Devcore94
-Adapted-by: At30c <PabloAtsoc9993@outlook.com>
+Adapted-by: At30c <173511395+At30c@users.noreply.github.com>
 ---
  .../server/devicepolicy/DevicePolicyManagerService.smali | 14 --------------
  .../server/knox/dar/DarManagerService.smali              |  2 --

@@ -1,5 +1,5 @@
 From 9e2f0b48a0c0f7a4b0f1b34e48c0e3a7b9a8d2c1 Mon Sep 17 00:00:00 2001
-From: At30c <PabloAtsoc9993@outlook.com>
+From: At30c <173511395+At30c@users.noreply.github.com>
 Date: Wed, 23 Sep 2026 01:20:00 -0300
 Subject: [PATCH] SystemUI: do not wake display for charging info overlays
 

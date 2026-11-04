@@ -1,5 +1,5 @@
 From bc159fdb47fdd338f33c0f51fd56443b016f5126 Mon Sep 17 00:00:00 2001
-From: At30c <PabloAtsoc9993@outlook.com>
+From: At30c <173511395+At30c@users.noreply.github.com>
 Date: Fri, 2 Oct 2026 21:05:00 -0300
 Subject: [PATCH] Fall back to inert BPF maps on legacy kernels
 
@@ -28,7 +28,7 @@ Features backed by a map the kernel cannot open therefore degrade instead of
 fatal: local network access falls back to the default global policy, tethering
 keeps working through netd, and the device boots.
 
-Signed-off-by: At30c <PabloAtsoc9993@outlook.com>
+Signed-off-by: At30c <173511395+At30c@users.noreply.github.com>
 ---
  .../connectivity/com/android/server/BpfNetMaps.smali      |  262 ++++-
  .../module/util/BpfBoolean.smali                           |    9 +++
