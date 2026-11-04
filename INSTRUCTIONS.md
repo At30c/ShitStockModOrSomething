@@ -11774,6 +11774,29 @@ O prebuilt foi recompilado contra a API AIDL V4 do Android 17, passou pelas
 auditorias de contrato, buffers, streams, sessão e ativação, foi stripped e
 tem SHA-256 `0cb2970a2b6846b2859a0dbfc40130b2672d00185c1403c2b0d51b94fdb927dc`.
 
+### Diagnóstico do bootloop ao reconstruir a vendor EROFS (01/11/2026)
+
+As imagens r1, r2, r3 e o controle r4 foram gravadas integralmente no
+`/dev/block/mapper/vendor` e tiveram o hash de leitura conferido. O controle
+r4 usava até o provider original, mas ainda entrou em bootloop. A comparação
+com a vendor original mostrou que a reconstrução havia perdido quatro xattrs
+SELinux: o `rc` e o manifesto do provider de câmera e as bibliotecas
+`android.hardware.thermal@1.0.so` e `android.hardware.thermal@2.0.so`. Os
+arquivos existiam, porém sem os rótulos `vendor_configs_file` e
+`same_process_hal_file`, respectivamente.
+
+A imagem r5 foi reconstruída com esses contextos, UUID EROFS original
+`45a90e13-95cc-35d2-29cf-b43cbaf9156a`, e AVB SHA256_RSA4096 usando a chave
+`security/avb/testkey_rsa4096.pem`. A auditoria dos 1.911 inodes não encontrou
+diferenças de tamanho, links, permissões, UID/GID, timestamps ou xattrs; só o
+conteúdo do provider AIDL muda. O hash da imagem r5 é
+`08c6a7b91eac7c9b9d3faad0a9c7aa17fd82c3d8194029ac2720d3fc6dcbd9fd`.
+
+Depois da instalação por TWRP, `sys.boot_completed=1`, o processo
+`android.hardware.camera.provider-V4-service.exynos990` permaneceu ativo e
+não surgiram novos `SIGABRT`, panic, erro EROFS ou verity. Para futuras
+alterações de vendor, não basta reconstruir os arquivos: os xattrs SELinux e
+o UUID da EROFS precisam ser preservados.
 ### y2s: causa do loop do preview PRIVATE no Composer3 (02/11/2026)
 
 A captura controlada separou o preview em duas rotas. No estado quebrado, a
@@ -12013,4 +12036,36 @@ não foi isolada (`/dev` é `nosuid`, sem `noexec`, e não houve AVC registrado)
   remoção foi desfeita. Com o pacote do S947B em overlay de `/system/app` e as permissões de
   Bluetooth/Nearby concedidas, a exceção some e a descoberta inicia. A varredura BLE precisa
   de outra mitigação que não apague o pacote.
+
+# Procedimento DD/TWRP para vendor EROFS assinada
+
+Quando uma alteração precisar ser instalada diretamente por `dd`, o fluxo
+reutilizável é o seguinte: extrair o bloco real de `/vendor` com `dd` enquanto o
+sistema está iniciado; guardar o `vendor-original.img` e confirmar o SHA-256;
+extrair a árvore EROFS com `extract.erofs -x -s -T8`; substituir somente os
+artefatos compilados; atualizar `fs_config` e `file_contexts`; e reconstruir com
+`mkfs.erofs -z lz4hc,9 -b 4096 --mount-point vendor -T 1640995200`.
+
+O payload deve receber o mesmo footer AVB da build:
+
+```bash
+avbtool add_hashtree_footer --image vendor-payload.img \
+  --partition_size "$(stat -c '%s' vendor-original.img)" \
+  --partition_name vendor --hash_algorithm sha256 \
+  --algorithm SHA256_RSA4096 --key security/avb/testkey_rsa4096.pem
+```
+
+Não use `mkfs.erofs -x-1` (nem desative xattrs): essa opção remove os rótulos
+SELinux da imagem e provoca `Permission denied` em `/vendor/apex` e
+`/vendor/etc/ueventd.rc`, levando o `apexd-bootstrap` a reiniciar o aparelho.
+O script `scripts/dd_vendor_install.sh` apenas instala uma imagem já pronta e
+assinada; ele não adiciona nem remove essa opção de empacotamento.
+
+Depois de validar `avbtool info_image`, a instalação é feita somente no TWRP
+com `scripts/dd_vendor_install.sh vendor-payload.img [serial]`. O script espera
+o recovery pelo `adb get-state`, recusa `dm-*`, exige que o tamanho da imagem
+seja exatamente o tamanho de `by-name/vendor` ou `mapper/vendor`, desmonta
+`/vendor`, grava com `dd bs=4M conv=fsync`, executa `sync` e compara o SHA-256 do
+bloco gravado com a imagem local. O `vendor-original.img` permanece como
+rollback e não deve ser removido até o teste terminar.
 

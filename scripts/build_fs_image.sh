@@ -129,6 +129,16 @@ BUILD_IMAGE_MKFS()
             ;;
     esac
 
+    # `mkfs.erofs -x-1` disables SELinux xattrs.  A vendor image built that
+    # way boots far enough to mount EROFS, then apexd/ueventd fail with
+    # EACCES because the vendor paths have no labels.  Keep this guard close
+    # to command execution so a future refactor cannot silently reintroduce
+    # the unsafe option.
+    if [[ "$FS_TYPE" == "erofs" ]] && [[ "$BUILD_CMD" == *"-x-1"* ]]; then
+        LOGE "Refusing EROFS image build with -x-1: SELinux xattrs are required"
+        exit 1
+    fi
+
     EVAL "$BUILD_CMD" || exit 1
 
     if $MANUAL_SPARSE; then
