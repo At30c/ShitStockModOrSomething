@@ -12069,3 +12069,32 @@ seja exatamente o tamanho de `by-name/vendor` ou `mapper/vendor`, desmonta
 bloco gravado com a imagem local. O `vendor-original.img` permanece como
 rollback e não deve ser removido até o teste terminar.
 
+## Vídeo via OMX: geração do Surface no Android 17
+
+Sintomas: o Telegram (ExoPlayer) recusa vídeos com "não foi possível
+reproduzir, abra em um app externo", e o Spotify demora para começar a faixa
+seguinte quando o Canvas está visível. Os dois logs têm a mesma assinatura:
+
+```text
+BufferQueueProducer: attachBuffer: generation number mismatch [buffer 0] [queue N]
+ACodec  : failed to attach buffer ... to the new surface: Invalid argument (22)
+```
+
+Todos os decoders de vídeo por hardware do Exynos 990 são OMX
+(`OMX.Exynos.*.dec`). O `MediaCodec::connectToSurface()` chama
+`setGenerationNumber()` e depois `disconnect`/`connect`. O
+`Surface::disconnect()` do `libgui.so` do Android 17 zera a geração em cache
+(`+0x388`), mas o `BufferQueueCore` mantém a geração. No `attachBuffer()`
+seguinte, o `ACodec` carimba a geração 0. O Codec2 não usa esse caminho, por
+isso o S947B stock não é afetado.
+
+`platform/exynos990/patches/miscs/customize.sh` transforma em NOP apenas o
+`str wzr, [x19, #0x388]` do `Surface::disconnect()` (VA `0x11d19c`, padrão
+`7f8212397fa212397f8a03b968320e39`). Validado por bind mount no aparelho:
+nenhum mismatch, o Telegram reproduz, e o áudio do Spotify volta de 3 a 300 ms
+depois de parar a faixa (antes ficava preso ao shutdown do codec do Canvas).
+O `system/lib/libgui.so` de 32 bits vem de outro doador e não recebeu esse
+patch. Ele também exporta `Surface::setAutoGenerationUpdate`, então apps de
+32 bits que decodificam vídeo por OMX podem ter o mesmo problema. Isso ainda
+não foi verificado.
+

@@ -151,6 +151,34 @@ if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 37 ]]; then
         C2_GLOBAL_64_FROM C2_GLOBAL_64_TO
     LOG_STEP_OUT
 
+    LOG_STEP_IN "- Preserving Surface generation across reconnect for legacy OMX"
+
+    # MediaCodec::connectToSurface() sets the Surface generation and then
+    # disconnects/reconnects it.  The Android 17 Surface::disconnect() clears
+    # the cached generation (+0x388) while BufferQueueCore keeps it, so the
+    # next Surface::attachBuffer() stamps generation 0 and BufferQueueProducer
+    # rejects it with "generation number mismatch".  Codec2 never takes this
+    # path, but every Exynos 990 hardware video decoder is OMX: ACodec fails
+    # setOutputSurface() (Telegram/ExoPlayer "cannot play video") and the
+    # MediaCodec.release surface detach (Spotify Canvas teardown blocks the
+    # next track).  Drop only the generation reset; keep the rest of
+    # disconnect() and the auto-generation flag untouched.
+    LIBGUI_64="$WORK_DIR/system/system/lib64/libgui.so"
+    # Surface::disconnect(): [str wzr, [x19, #0x388]] -> [nop]
+    LIBGUI_GEN_FROM="7f8212397fa212397f8a03b968320e39"
+    LIBGUI_GEN_TO="7f8212397fa212391f2003d568320e39"
+
+    if [[ -f "$LIBGUI_64" ]]; then
+        if xxd -p -c 0 "$LIBGUI_64" | grep -q "$LIBGUI_GEN_FROM"; then
+            HEX_PATCH "$LIBGUI_64" "$LIBGUI_GEN_FROM" "$LIBGUI_GEN_TO" || return 1
+        elif ! xxd -p -c 0 "$LIBGUI_64" | grep -q "$LIBGUI_GEN_TO"; then
+            LOG "  - Unknown libgui.so build; skipping Surface generation fix"
+        fi
+    fi
+
+    unset LIBGUI_64 LIBGUI_GEN_FROM LIBGUI_GEN_TO
+    LOG_STEP_OUT
+
     LOG_STEP_IN "- Removing stale legacy OMX performance metadata"
 
     # Android 17's codec-list generator no longer registers the legacy OMX
