@@ -1,8 +1,0 @@
-id=graphics_allocator_bridge
-name=Exynos 990 AIDL graphics allocator and Stable-C mapper
-version=2.2
-versionCode=7
-author=At30c
-priority=40
-description=Uses the Android 17 AIDL allocator v2 and Stable-C mapper globally over native Exynos 990 Gralloc1; HIDL remains only as camera compatibility until its ABI adapter is complete.
-

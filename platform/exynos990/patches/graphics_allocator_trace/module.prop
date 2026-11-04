@@ -1,6 +1,0 @@
-id=graphics_allocator_trace
-name=Exynos 990 graphics allocator lifecycle trace
-version=1.0
-versionCode=1
-author=At30c
-description=Records graphics memory, DMA-BUF, Mali and OOM events from post-fs-data until shutdown.

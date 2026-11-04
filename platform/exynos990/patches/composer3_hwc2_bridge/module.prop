@@ -1,7 +1,0 @@
-id=composer3_hwc2_bridge
-name=Exynos 990 Composer3 AIDL to HWC2 bridge
-version=1.7
-versionCode=8
-priority=50
-author=At30c
-description=Registers the Composer3 AIDL V5 bridge over stock Exynos 990 HWC2 and publishes the native HD/FHD/QHD modes on y2s/y2slte.

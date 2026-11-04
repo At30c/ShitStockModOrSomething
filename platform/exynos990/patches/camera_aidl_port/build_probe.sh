@@ -111,7 +111,7 @@ compile_source() {
         -I "$CAMERA3_HEADERS" -I "$CAMERA_METADATA_HEADERS" \
         -I "$CAMERA_METADATA_PRIVATE_HEADERS" \
         -I "$CUTILS_HEADERS" -I "$SYSTEM_HEADERS" \
-        -I "$REPO/platform/exynos990/patches/graphics_allocator_bridge/include" \
+        -I "$REPO/platform/exynos990/patches/graphics_aidl/include" \
         -c "$source" -o "$object"
     OBJECTS+=( "$object" )
 }

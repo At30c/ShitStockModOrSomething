@@ -1,0 +1,7 @@
+id=graphics_aidl
+name=Exynos 990 AIDL graphics chain
+version=3.0
+versionCode=9
+author=At30c
+priority=40
+description=AIDL allocator v2 + Stable-C mapper over the native Exynos 990 Gralloc1, Composer3 AIDL V5 bridge over the stock HWC2 (native HD/FHD/QHD modes, HDR) and the optional allocator lifecycle trace, for y2s/y2slte.

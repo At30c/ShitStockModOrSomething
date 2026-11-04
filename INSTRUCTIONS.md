@@ -85,7 +85,7 @@ instaladas.
 
 ## Ponte Composer3: transições de configuração no Exynos 990 (2026-10-19)
 
-A ponte `platform/exynos990/patches/composer3_hwc2_bridge` não substitui o HWC
+A ponte `platform/exynos990/patches/graphics_aidl` não substitui o HWC
 proprietário do S20+. Ela chama o HWC2 stock. A implementação AIDL anterior
 expunha `getActiveConfig` e `setActiveConfig`, porém recusava
 `setActiveConfigWithConstraints`, que é usado pelo SurfaceFlinger Android 17
@@ -161,7 +161,7 @@ acompanhava o framebuffer FHD. Portanto a sessão duplicada era uma falha real,
 mas não explicava sozinha a imagem reduzida.
 
 A correção permanente está em
-`platform/exynos990/patches/composer3_hwc2_bridge`: ela sobrepõe
+`platform/exynos990/patches/graphics_aidl`: ela sobrepõe
 `vendor/etc/init/android.hardware.graphics.composer@2.3-service.rc` com a
 mesma definição stock acrescida de `disabled`. É limitada a `y2s`/`y2slte` e
 só deve existir enquanto o módulo Composer3 AIDL estiver presente. Não remover
@@ -9358,7 +9358,7 @@ LineageOS `universal9830` atual também mantém allocator HIDL 2.0 e mapper 2.1;
 ela não fornece uma implementação moderna pronta para transplantar.
 
 Foi criado o experimento
-`platform/exynos990/patches/graphics_allocator_bridge`. Ele mantém
+`platform/exynos990/patches/graphics_aidl`. Ele mantém
 `gralloc.exynos990.so` e chama seus callbacks gralloc1 para alocar, importar,
 liberar e bloquear os buffers. A fachada expõe
 `android.hardware.graphics.allocator.IAllocator/default` versão 2 e retorna o
@@ -9420,7 +9420,7 @@ enquanto a composição real não for validada novamente.
 A engenharia reversa posterior foi movida para o próprio contrato do driver.
 Os binários originais do aparelho foram preservados em
 `out/target/y2s/graphics-re`, com hashes e desmontagem documentados em
-`platform/exynos990/patches/graphics_allocator_bridge/DRIVER_RE.md`. O
+`platform/exynos990/patches/graphics_aidl/docs/DRIVER_RE.md`. O
 `gralloc.exynos990.so` clona o `native_handle` em
 `GRALLOC1_FUNCTION_IMPORT_BUFFER`, importa os handles ION no primeiro retain do
 processo e chama `mali_gralloc_reference_release(..., true)` na liberação; a
@@ -9440,7 +9440,7 @@ composição real.
 
 A pilha foi dividida em camadas para que cada contrato seja validado antes do
 seguinte. O script somente leitura
-`platform/exynos990/patches/graphics_allocator_bridge/audit_graphics_stack.sh`
+`platform/exynos990/patches/graphics_aidl/audit_graphics_stack.sh`
 confere backend Mali/Gralloc1, Allocator HIDL, Mapper HIDL, runtime AIDL,
 artefatos do bridge, VINTF e a situação do Composer3. O resultado atual do
 `work_dir` do y2s foi zero falhas: o caminho proprietário HIDL 2.3 está
@@ -9449,7 +9449,7 @@ exports esperados. Os contextos do AIDL aparecem como aviso porque o módulo
 continua desativado na árvore de trabalho.
 
 O relatório em
-`platform/exynos990/patches/graphics_allocator_bridge/STACK_AUDIT.md`
+`platform/exynos990/patches/graphics_aidl/docs/STACK_AUDIT.md`
 registra a matriz. O Composer3 AIDL ainda não foi habilitado: o system contém
 as bibliotecas de tipos V4/V5, mas a vendor só fornece o serviço HIDL 2.3. Uma
 ponte funcional precisa converter comandos, fences, hotplug, modos e
@@ -9459,11 +9459,11 @@ interface ausente até a camada ser implementada e testada separadamente; o
 SurfaceFlinger mantém o fallback HIDL atual.
 
 Como segunda etapa, foi criada a biblioteca de backend
-`platform/exynos990/patches/graphics_allocator_bridge/src/hwc2_backend.cpp`.
+`platform/exynos990/patches/graphics_aidl/src/hwc2_backend.cpp`.
 Ela abre o `hwcomposer.exynos990.so` pelo contrato HWC2 original e consulta a
 configuração ativa, resolução, período de vsync, DPI, tipo e nome do display.
 `build_composer_backend.sh` gera a biblioteca ARM64 e o
-`hwc2_backend_probe` em `prebuilts/exynos990/graphics_allocator_bridge/test/`, usando somente as bibliotecas do
+`hwc2_backend_probe` em `prebuilts/exynos990/graphics_aidl/test/`, usando somente as bibliotecas do
 system do y2s para link. Esses artefatos são de validação e não são copiados
 para a vendor; o serviço Composer3 só será criado depois que esse backend for
 validado no aparelho e receber a conversão completa de comandos e fences.
@@ -9489,7 +9489,7 @@ de qualquer nova implantação da pilha gráfica.
 ## Rastreamento do atraso de wake/display no Exynos 990
 
 Foi criado o módulo de diagnóstico
-`platform/exynos990/patches/graphics_allocator_trace`. Ele é aplicado somente
+`platform/exynos990/patches/graphics_aidl`. Ele é aplicado somente
 a `y2s` e `y2slte` e inicia no `post-fs-data`, depois que `/data` está montada.
 Cada ciclo de boot gera um arquivo em
 `/data/vendor/graphics_allocator_trace/trace-YYYYMMDD-HHMMSS.log` e registra
@@ -9512,7 +9512,7 @@ Mali do Exynos 990. O R11s e o S26+ compartilham 220 símbolos de `Mapper`,
 `gralloc.exynos990.so` não exporta esses símbolos. Os binários modernos devem
 ser usados somente como referência de contrato para o bridge, nunca como donor
 instalável no y2s. A matriz, hashes, manifests e limites estão em
-`platform/exynos990/patches/graphics_allocator_bridge/REVERSE_ENGINEERING.md`.
+`platform/exynos990/patches/graphics_aidl/docs/REVERSE_ENGINEERING.md`.
 
 A diferença de GPU também foi confirmada na comparação: o y2s/S20+ usa
 `libGLES_mali.so`, `vulkan.mali.so` e Gralloc1 Mali/AFBC, enquanto o S26+ usa
@@ -9522,7 +9522,7 @@ podem substituir o backend gráfico do Exynos 990.
 
 ## Mapper Stable-C completado no bridge do Exynos 990 (2026-10-17)
 
-O módulo `platform/exynos990/patches/graphics_allocator_bridge` recebeu a
+O módulo `platform/exynos990/patches/graphics_aidl` recebeu a
 implementação dos callbacks que ainda eram stubs. O `mapper.cpp` agora:
 
 - acompanha o estado de lock de cada importação e implementa
@@ -9546,7 +9546,7 @@ do S26+.
 Validação realizada sem build completa da ROM:
 
 ```
-platform/exynos990/patches/graphics_allocator_bridge/build.sh
+platform/exynos990/patches/graphics_aidl/build.sh
 ```
 
 O módulo foi compilado contra as bibliotecas de runtime do y2s. O teste
@@ -9559,7 +9559,7 @@ composição real.
 ## Contrato Composer3 AIDL e sessão HWC2 (2026-10-17)
 
 Foi adicionada a segunda pilha experimental em
-`platform/exynos990/patches/graphics_allocator_bridge`. Os 90 arquivos AIDL
+`platform/exynos990/patches/graphics_aidl`. Os 90 arquivos AIDL
 de Composer3, gráficos comuns e DRM são mantidos em `composer/aidl/` como
 fonte do contrato V5. O script `build_composer_aidl.sh` gera os headers e
 parcelables durante a compilação e linka o resultado contra
@@ -9572,7 +9572,7 @@ consultas de display/configuração, nome, resolução, DPI, período de vsync,
 orientação, modo de cor, power mode e habilitação de vsync. A sessão persistente
 de `src/hwc2_backend_state.cpp` mantém o dispositivo HWC2 aberto e usa os
 callbacks nativos para as operações de controle. A biblioteca e o
-`composer3_contract_probe` ficam apenas em `prebuilts/exynos990/graphics_allocator_bridge/test/`.
+`composer3_contract_probe` ficam apenas em `prebuilts/exynos990/graphics_aidl/test/`.
 
 O serviço ainda não foi registrado na matriz VINTF: `executeCommands`, camadas,
 buffers, fences, hotplug e callbacks ainda precisam de uma conversão completa
@@ -9616,7 +9616,7 @@ Não habilitar o serviço Composer3 antes dessas verificações.
 ### Módulo instalável Composer3 (2026-10-18)
 
 Foi criado o módulo separado
-`platform/exynos990/patches/composer3_hwc2_bridge`. Ele registra
+`platform/exynos990/patches/graphics_aidl`. Ele registra
 `android.hardware.graphics.composer3.IComposer/default`, instala o executável
 ARM64, a biblioteca do bridge, o `init.rc`, os contextos de arquivo e o
 fragmento VINTF V5. O `customize.sh` limita a instalação a `y2s` e `y2slte` e
@@ -9625,7 +9625,7 @@ mantém o Composer HIDL original no sistema para rollback.
 O módulo é compilado com:
 
 ```
-platform/exynos990/patches/composer3_hwc2_bridge/build.sh
+platform/exynos990/patches/graphics_aidl/build_composer_service.sh
 ```
 
 Resultado validado no host: executável e biblioteca ARM64, dependências
@@ -9739,7 +9739,7 @@ No y2s, os modos reais são fornecidos pelo kernel em
 1080x2400 podia ocorrer no SurfaceFlinger enquanto o painel continuava em
 1440x3200; essa divergência era a causa do recorte e da imagem reduzida em FHD.
 
-O módulo `platform/exynos990/patches/composer3_hwc2_bridge` foi ajustado para,
+O módulo `platform/exynos990/patches/graphics_aidl` foi ajustado para,
 depois da chamada HWC2, localizar a interface framebuffer primária no objeto
 Exynos (`display + 0x3cd0`), atualizar o DDI e chamar
 `ExynosDisplayFbInterface::setActiveConfig`. Essa é a rotina proprietária que
@@ -9800,13 +9800,13 @@ câmera. Em um stream `YUV_420_888` de `1440x1080`, o mapper compatível devolvi
 um plano com ponteiro nulo; a chamada JNI recebia capacidade não nula e
 abortava o aplicativo.
 
-`platform/exynos990/patches/graphics_allocator_bridge/customize.sh` agora
+`platform/exynos990/patches/graphics_aidl/customize.sh` agora
 instala somente `mapper.exynos990_compat.so` e seu contexto SELinux. O init rc
 do allocator AIDL e o fragmento VINTF não entram mais na vendor. O contrato
 Composer3 abre o mapper de forma privada por `dlopen`, enquanto câmera,
 `ImageReader` e os demais clientes continuam usando o allocator HIDL 2.0 e o
 mapper HIDL 2.1 originais. A auditoria correspondente foi atualizada em
-`platform/exynos990/patches/graphics_allocator_bridge/audit_graphics_stack.sh`,
+`platform/exynos990/patches/graphics_aidl/audit_graphics_stack.sh`,
 `README.md` e `STACK_AUDIT.md`.
 
 A correção foi incorporada à imagem
@@ -9845,7 +9845,7 @@ Também foi identificado um erro separado que causava aquecimento e spam de
 `UPDATABLE_CRASHING`: `graphics_allocator_trace.rc` tentava executar
 `/vendor/bin/sh` a partir do domínio `vendor_shell`, e o `init` retornava
 `Permission denied`/status 127 a cada cinco segundos. O rc e o shebang de
-`platform/exynos990/patches/graphics_allocator_trace` agora usam
+`platform/exynos990/patches/graphics_aidl` agora usam
 `/system/bin/sh`, que é permitido nesse domínio. Essa correção só terá efeito
 após a próxima imagem de vendor; ela não substitui a validação física do FOD
 com um dedo cadastrado.
@@ -10047,7 +10047,7 @@ próprio y2s. `writePlaneLayouts()` priorizava `LOCK_FLEX`; nesse driver o
 callback pode declarar 2x2 de subsampling até para a plane Y. O framework então
 calculava dimensões e offsets errados para o `GraphicBuffer::lockYCbCr()`.
 
-`platform/exynos990/patches/graphics_allocator_bridge/src/mapper.cpp` agora
+`platform/exynos990/patches/graphics_aidl/src/mapper.cpp` agora
 prioriza os campos estáveis do `private_handle_t` do Exynos 990 para NV12,
 NV21 e YV12: `format +0x50`, `ystride +0x5c`, croma `+0x68/+0x6c` e o segundo
 offset YV12 em `+0x78`. A luma é publicada como largura x altura, e os cromas
@@ -10131,7 +10131,7 @@ O crash nativo da câmera vinha de `produceFrameWithYuv420()` escrevendo um
 frame YUV contíguo em um buffer privado `0x11d` do Exynos 990. Esse handle
 possui Y e UV em DMA-BUFs separados; o primeiro mapa terminava logo depois da
 luma e a cópia de UV causava `SIGSEGV`/`SIGBUS`. O mapper
-`platform/exynos990/patches/graphics_allocator_bridge/src/mapper.cpp` agora
+`platform/exynos990/patches/graphics_aidl/src/mapper.cpp` agora
 reconhece apenas o valor `0x11d` confirmado no driver original, chama
 `LOCK_FLEX`, aloca um scratch linear com luma e croma contíguas, retorna esse
 endereço durante o lock de CPU e copia as linhas para os planos nativos no
@@ -10177,7 +10177,7 @@ geometrias nativas do painel: HD (`720x1600`), FHD (`1080x2400`) e QHD
 retornava `No support`, deixava as larguras FHD/QHD em zero e o Settings
 enviava um `Display.Mode` inválido; na prática, somente a densidade mudava e
 o scan-out permanecia em QHD. O bridge em
-`platform/exynos990/patches/graphics_allocator_bridge/src/composer3_contract.cpp`
+`platform/exynos990/patches/graphics_aidl/src/composer3_contract.cpp`
 agora publica as três geometrias e suas taxas reais retornadas pelo HWC2, sem
 criar um `Display.Mode` sintético, inverter o comparador ou aplicar patch
 Smali no Settings. A troca física continua sendo feita pelo caminho
@@ -10194,7 +10194,7 @@ diagnóstico.
 ### Teste real do Composer3 via KernelSU Meta Magic Mount (23/10/2026)
 
 O teste no y2s de bootloader `G985FXXSNHYB1` foi feito com o módulo gerado por
-`platform/exynos990/patches/composer3_hwc2_bridge/build_ksu_module.sh` e o
+`platform/exynos990/patches/graphics_aidl/build_composer_ksu_module.sh` e o
 Meta Magic Mount. O módulo é instalado na hierarquia `system/vendor`, que o
 metamódulo expõe em `/vendor`. Arquivos novos em `/vendor/lib64` não podem ser
 criados por bind mount; por isso o log do Meta Magic Mount pode listar essas
@@ -10312,7 +10312,7 @@ global para preservar o caminho da câmera, que ainda chama Gralloc1/Mali e
 `libGrallocMapperCamera.so` diretamente.
 
 Foram corrigidos quatro pontos de contrato no
-`platform/exynos990/patches/graphics_allocator_bridge/src/mapper.cpp`:
+`platform/exynos990/patches/graphics_aidl/src/mapper.cpp`:
 
 * metadados de handles cujo `GET_BACKING_STORE` retorna zero agora são
   armazenados no próprio import;
@@ -10327,7 +10327,7 @@ de metadata e região zerada. A compilação cruzada e a auditoria da pilha fora
 executadas sem falhas; a auditoria confirmou o fallback HIDL global e deixou
 apenas os avisos esperados de Composer3 ainda não registrado. O relatório
 detalhado está em
-`platform/exynos990/patches/graphics_allocator_bridge/MAPPER_AUDIT_20261024.md`.
+`platform/exynos990/patches/graphics_aidl/docs/MAPPER_AUDIT_20261024.md`.
 
 O allocator AIDL global fica reservado para a próxima build e deverá ser
 validado separadamente por formato/uso em `isSupported()`, câmera,
@@ -10339,7 +10339,7 @@ fallback HIDL.
 Foi feita uma nova comparação somente leitura entre o Gralloc1/Mali, o mapper
 HIDL, o libGrallocMapperCamera e o HWC2 originais do y2s e a vendor
 SM-S947B_EUX. O relatório completo está em
-`platform/exynos990/patches/graphics_allocator_bridge/DRIVER_CONTRACT_AUDIT_20261024.md`.
+`platform/exynos990/patches/graphics_aidl/docs/DRIVER_CONTRACT_AUDIT_20261024.md`.
 
 O driver antigo confirma um contrato de posse baseado em
 `native_handle_clone`, retenção/liberação por processo, ION, AFBC e
@@ -10393,7 +10393,7 @@ libcutils, liblog, libdl, libm e libc; o allocator acrescenta
 libbinder_ndk.so.
 
 A análise detalhada está em
-platform/exynos990/patches/graphics_allocator_bridge/UMBRELLA_SHIM_ANALYSIS_20261024.md.
+platform/exynos990/patches/graphics_aidl/docs/UMBRELLA_SHIM_ANALYSIS_20261024.md.
 A refatoração foi compilada contra as bibliotecas do system y2s e instalada
 como prebuilt do módulo. Ela ainda não é ativada globalmente: a flag
 EXYNOS990_AIDL_GRAPHICS=0 permanece como padrão para preservar o caminho HIDL
@@ -10414,7 +10414,7 @@ que `libexynoscamera3.so` referencia e não duplica o estado ION/Mali nem
 reinterpretará o `private_handle_t`.
 
 O artefato está em
-`prebuilts/exynos990/graphics_allocator_bridge/test/libGrallocMapperCamera.compat.so`.
+`prebuilts/exynos990/graphics_aidl/test/libGrallocMapperCamera.compat.so`.
 Foi instalado temporariamente no aparelho com o umbrella
 `libexynos990_graphics_compat.so` e validado com:
 
@@ -10460,7 +10460,7 @@ de 32 bits do `internal_format` validado em `private_handle_t + 0x48`. O
 símbolo exportado `mali_gralloc_get_format_internal(native_handle_t*, int*)`
 fica apenas no probe diagnóstico porque lê `frameworkFormat` em `+0x30`. A
 lógica foi isolada em
-`platform/exynos990/patches/graphics_allocator_bridge/include/exynos990/y2s_modifier.h`;
+`platform/exynos990/patches/graphics_aidl/include/exynos990/y2s_modifier.h`;
 combinações privadas ou desconhecidas retornam `AIMAPPER_ERROR_UNSUPPORTED` e
 nunca são convertidas em um modifier DRM inventado.
 
@@ -10570,7 +10570,7 @@ AIDL deixou de ser usado.
 
 Uma auditoria minuciosa dos drivers gráficos HIDL do y2s e dos equivalentes
 AIDL/HIDL do S26+ foi registrada em
-`platform/exynos990/patches/graphics_allocator_bridge/HIDL_AIDL_DRIVER_AUDIT_20261024.md`.
+`platform/exynos990/patches/graphics_aidl/docs/HIDL_AIDL_DRIVER_AUDIT_20261024.md`.
 Ela documenta dependências ELF, símbolos, processos observados pelo `lshal`,
 VINTF, init, SELinux, diferenças de handles/layouts e a ordem segura para
 desativar os serviços HIDL. O S26+ foi usado somente como referência; nenhum
@@ -10597,7 +10597,7 @@ permitir a remoção final do HIDL.
 ### Auditoria de fechamento do HIDL gráfico (24/10/2026)
 
 Foi adicionado o verificador
-`platform/exynos990/patches/graphics_allocator_bridge/audit_hidl_retirement.sh`.
+`platform/exynos990/patches/graphics_aidl/audit_hidl_retirement.sh`.
 Ele percorre os ELF de `vendor` e `system`, lista as declarações HIDL no VINTF
 e separa duas situações que não podem ser tratadas como iguais:
 
@@ -10622,7 +10622,7 @@ ABI-only para a próxima etapa de migração.
 
 O relatório reproduzível está em
 `out/target/y2s/hidl_retirement_audit_20261024.log` e a análise detalhada em
-`platform/exynos990/patches/graphics_allocator_bridge/HIDL_AIDL_DRIVER_AUDIT_20261024.md`.
+`platform/exynos990/patches/graphics_aidl/docs/HIDL_AIDL_DRIVER_AUDIT_20261024.md`.
 O `customize.sh` agora executa essa barreira quando
 `EXYNOS990_DISABLE_HIDL_ALLOCATOR=1`; enquanto houver `BLOCKER`, a build para
 antes de apagar o rc HIDL. Assim o allocator AIDL global continua ativo e o
@@ -10654,7 +10654,7 @@ A causa era a ausência do nome nativo Stable-C em
 mapper/exynos990_compat u:object_r:hal_graphics_mapper_service:s0
 ```
 
-Ela foi adicionada ao `platform/exynos990/patches/graphics_allocator_bridge/customize.sh`,
+Ela foi adicionada ao `platform/exynos990/patches/graphics_aidl/customize.sh`,
 com limpeza da linha antiga em `plat_service_contexts` para evitar duplicidade.
 Em teste controlado, com o contexto carregado antes do `servicemanager`, o log
 passou a registrar `Found mapper/exynos990_compat in device VINTF manifest` e
@@ -10669,7 +10669,7 @@ mapper/allocator AIDL local, HWC2/Composer, clientes 32/64 bits, VINTF,
 SELinux e da referência SGR do S26+. O registro detalhado, com hashes,
 offsets, símbolos, fluxos de locks/fences e níveis explícitos de evidência,
 está em
-`platform/exynos990/patches/graphics_allocator_bridge/DECODIFICACAO_CONTRATOS_GRAFICOS_20261025.md`.
+`platform/exynos990/patches/graphics_aidl/docs/DECODIFICACAO_CONTRATOS_GRAFICOS_20261025.md`.
 
 O ponto mais importante para as próximas alterações é que `0x11d` é um formato
 privado observado no preview, não uma descrição de layout. A sessão atual do
@@ -11089,7 +11089,7 @@ prebuilt está em `prebuilts/samsung/s947bxxx`; sua SHA-256 é
 ### y2s: medição do loop de preview da câmera (27/10/2026)
 
 Para separar a implementação AIDL do HAL legado, o mapper
-`platform/exynos990/patches/graphics_allocator_bridge/src/mapper.cpp` recebeu
+`platform/exynos990/patches/graphics_aidl/src/mapper.cpp` recebeu
 medição temporária de `LOCK_FLEX`, cópia YUV e `unlock`. A imagem AVB de teste
 foi escrita no `/dev/block/dm-1` pelo recovery com `dd`. O hash da imagem e do
 bloco foi `ba3435312662a2db6fa56d82716e4f2615f915aa3e3ceea829f439a9fd406517`;
@@ -11298,7 +11298,7 @@ O bridge agora mantém o último buffer RGBA e limita a conversão a 30 fps por
 camada. A property `persist.vendor.exynos990.camera_convert_fps` permite
 ajustar o limite entre 5 e 60 fps; o valor padrão é 30. O primeiro frame de
 cada camada continua sendo convertido imediatamente. A mudança está em
-`platform/exynos990/patches/graphics_allocator_bridge/src/composer3_contract.cpp`.
+`platform/exynos990/patches/graphics_aidl/src/composer3_contract.cpp`.
 
 O prebuilt foi empacotado em uma vendor AVB e instalado pelo recovery com
 `dd`. A imagem usada foi
@@ -11365,7 +11365,7 @@ O inventário completo de contratos e entregas do Camera Provider HIDL, das
 sessões Camera3, do `camera.exynos990.so`, do `libexynoscamera3.so`, do
 `libGrallocMapperCamera.so`, dos buffers `0x11d`, dos streams RAW/YUV/JPEG e
 das acquire/release fences está em
-`platform/exynos990/patches/graphics_allocator_bridge/CAMERA_HIDL_CONTRACT_AUDIT_20261029.md`.
+`platform/exynos990/patches/graphics_aidl/docs/CAMERA_HIDL_CONTRACT_AUDIT_20261029.md`.
 
 O documento separa os contratos confirmados por VINTF/ELF/runtime dos pontos
 que ainda exigem instrumentação do kernel FIMC-IS. Ele também registra que o
@@ -11821,7 +11821,7 @@ reutilização do RGBA pelas release fences. Ele não entrou no último teste po
 provider AIDL da câmera. A ABI ELF antiga/nova é compatível, mas a revisão nova
 ainda deve ser validada no aparelho antes de ser considerada definitiva. O
 diagnóstico completo está em
-`platform/exynos990/patches/graphics_allocator_bridge/CAMERA_PREVIEW_LOOP_20261102.md`.
+`platform/exynos990/patches/graphics_aidl/docs/CAMERA_PREVIEW_LOOP_20261102.md`.
 ### Diagnóstico do vídeo e do travamento do CameraService (02/11/2026)
 
 No teste do modo vídeo, 64 MP e filtros concluíram a configuração, mas o
@@ -12222,3 +12222,24 @@ que não instale exatamente o target:
 * O ZIP full (`make_rom.sh` sem `-i`) gravava boot e dtbo em `"/boot"` e
   `"/dtbo"` porque `TARGET_OS_BOOT_DEVICE_PATH` não existia na exynos990. Agora
   é `/dev/block/by-name`, como na 9611.
+
+## Cadeia gráfica AIDL unificada em `graphics_aidl` (04/11/2026)
+
+`graphics_allocator_bridge`, `composer3_hwc2_bridge` e
+`graphics_allocator_trace` viraram um único módulo,
+`platform/exynos990/patches/graphics_aidl` (prioridade 40). O `customize.sh`
+executa três funções em ordem: allocator AIDL v2 + mapper Stable-C, Composer3
+AIDL V5 (que exige o mapper da etapa anterior) e o trace do allocator, que
+continua instalado com o serviço `disabled`. As chaves
+`EXYNOS990_AIDL_GRAPHICS` e `EXYNOS990_DISABLE_HIDL_ALLOCATOR` não mudaram.
+
+Os binários ficam em `prebuilts/exynos990/graphics_aidl/`; as auditorias e os
+logs, em `docs/` do módulo. O build do Composer agora é
+`build_composer_service.sh`, e o zip de teste do KernelSU,
+`build_composer_ksu_module.sh`, que empacota só o serviço Composer3, o runtime
+dele e o mapper privado, mantendo o id `composer3_hwc2_bridge` no zip.
+
+Validação: o módulo novo e os três antigos (do commit anterior) foram aplicados
+a WORK_DIRs iguais nos modos AIDL e rollback e num alvo fora do y2s. Os
+arquivos instalados, o `fs_config`, o `file_context` e os contextos SELinux
+saíram idênticos byte a byte.
