@@ -291,3 +291,21 @@ instalada pelo TWRP e a câmera permaneceu aberta sem `SIGSEGV`, `SIGBUS`,
 `Gralloc5 lock failed` ou `Function not implemented`. O teste de captura foi
 executado com o formato `0x11d` e retornou `unlock` normal; os avisos de
 latência do pós-processamento continuam sendo apenas timeout de 10 ms.
+
+## Licença
+
+Este repositório é um fork do [UN1CA](https://github.com/salvogiangri/UN1CA).
+
+Os drivers gráficos deste módulo são criação de At30c e são distribuídos sob a
+GNU GPL v3 ou posterior (`GPL-3.0-or-later`, ver `LICENSE` na raiz do
+repositório):
+
+- mapper Stable-C (`src/mapper.cpp`);
+- gralloc/allocator AIDL (`src/allocator_service.cpp`);
+- gralloc da câmera (`src/camera_mapper_compat.cpp`);
+- o backend e os contratos que eles compartilham (`src/graphics_backend.cpp`,
+  `src/metadata.h` e `include/exynos990/`).
+
+Os arquivos copiados ou derivados do AOSP (`aidl/`, `composer/aidl/`,
+`include/android/`, `include/cutils/`, `include/hardware/` e `include/system/`)
+mantêm a licença Apache-2.0 original indicada em cada arquivo.

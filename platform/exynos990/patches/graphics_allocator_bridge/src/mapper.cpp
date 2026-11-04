@@ -1,3 +1,5 @@
+// Copyright (c) 2026 At30c
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include <android/hardware/graphics/mapper/IMapper.h>
 #include <hardware/gralloc1.h>
 #include <linux/dma-buf.h>

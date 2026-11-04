@@ -1,3 +1,5 @@
+// Copyright (c) 2026 At30c
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 // Decoder for the 32-bit packed layout value used by the Exynos 990 private

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 At30c
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "exynos990/camera_aidl_mapper.h"
 
 #include <cutils/native_handle.h>

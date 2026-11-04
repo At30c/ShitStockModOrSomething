@@ -1,3 +1,5 @@
+// Copyright (c) 2026 At30c
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include <aidl/android/hardware/common/NativeHandle.h>
 #include <aidl/android/hardware/graphics/allocator/AllocationError.h>
 #include <aidl/android/hardware/graphics/allocator/AllocationResult.h>

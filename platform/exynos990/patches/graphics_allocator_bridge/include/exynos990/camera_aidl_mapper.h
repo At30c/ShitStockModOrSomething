@@ -1,3 +1,5 @@
+// Copyright (c) 2026 At30c
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
 // Private ABI between the y2s Camera3 compatibility facade and the Stable-C
