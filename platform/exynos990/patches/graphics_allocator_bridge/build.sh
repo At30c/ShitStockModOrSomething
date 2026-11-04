@@ -25,8 +25,8 @@ else
 fi
 BUILD="$ROOT/.build"
 GEN="$BUILD/generated"
-OUTPUT="$ROOT/prebuilt/vendor"
-TEST_OUTPUT="$ROOT/prebuilt/test"
+OUTPUT="$REPO/prebuilts/exynos990/graphics_allocator_bridge/vendor"
+TEST_OUTPUT="$REPO/prebuilts/exynos990/graphics_allocator_bridge/test"
 
 for tool in "$AIDL" "$CXX"; do
     [ -x "$tool" ] || { echo "Missing tool: $tool" >&2; exit 1; }
@@ -89,7 +89,7 @@ mapfile -t GENERATED_SOURCES < <(find "$GEN/src" -name '*.cpp' -type f | LC_ALL=
     "$SYSROOT/usr/lib/aarch64-linux-android/libc++_shared.so" \
     -o "$TEST_OUTPUT/graphics_allocator_bridge_test"
 
-# Camera ABI probe.  Keep this outside prebuilt/vendor until the exact camera
+# Camera ABI probe.  Keep this outside the installed vendor prebuilts until the exact camera
 # client behavior has been validated on-device.  The SONAME is the original
 # one so the artifact can be checked against libexynoscamera3.so without
 # replacing the production mapper.

@@ -7,7 +7,7 @@ if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
     return 0
 fi
 
-BRIDGE_ROOT="$MODPATH/prebuilt/vendor"
+BRIDGE_ROOT="$SRC_DIR/prebuilts/exynos990/composer3_hwc2_bridge/vendor"
 BRIDGE_SERVICE="bin/hw/android.hardware.graphics.composer3-service.exynos990"
 BRIDGE_LIBRARY="lib64/libexynos990_composer3_contract.so"
 BRIDGE_RUNTIME_LIBS=(
@@ -49,16 +49,16 @@ SCOPED_MAPPER="$WORK_DIR/vendor/lib64/hw/mapper.exynos990_compat.so"
     return 1
 }
 
-ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$BRIDGE_SERVICE" \
+ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/composer3_hwc2_bridge" "vendor" "$BRIDGE_SERVICE" \
     0 2000 755 "u:object_r:hal_graphics_composer_default_exec:s0" || return 1
-ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$BRIDGE_LIBRARY" \
+ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/composer3_hwc2_bridge" "vendor" "$BRIDGE_LIBRARY" \
     0 0 644 "u:object_r:vendor_file:s0" || return 1
 for BRIDGE_RUNTIME_LIB in "${BRIDGE_RUNTIME_LIBS[@]}"; do
     [ -f "$BRIDGE_ROOT/$BRIDGE_RUNTIME_LIB" ] || {
         ABORT "Composer3 runtime dependency is missing: $BRIDGE_RUNTIME_LIB"
         return 1
     }
-    ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$BRIDGE_RUNTIME_LIB" \
+    ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/composer3_hwc2_bridge" "vendor" "$BRIDGE_RUNTIME_LIB" \
         0 0 644 "u:object_r:vendor_file:s0" || return 1
 done
 ADD_TO_WORK_DIR "$MODPATH" "vendor" \

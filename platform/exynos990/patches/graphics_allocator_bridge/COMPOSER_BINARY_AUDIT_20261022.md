@@ -169,7 +169,7 @@ resolução compartilham o grupo, como no Composer3 do S26+, sem inventar IDs ou
 copiar a tabela de modos de outro aparelho.
 
 O contrato foi recompilado e propagado para o módulo instalável. O artefato
-atual `composer3_hwc2_bridge/prebuilt/vendor/lib64/libexynos990_composer3_contract.so`
+atual `prebuilts/exynos990/composer3_hwc2_bridge/vendor/lib64/libexynos990_composer3_contract.so`
 tem SHA-256
 `ab027df0d035a9707daa5a5a50f6f982fb611d0fa477c6308789d216881cac45`.
 

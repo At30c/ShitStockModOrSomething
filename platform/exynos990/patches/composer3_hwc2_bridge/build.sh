@@ -14,7 +14,7 @@ PATCHELF="${PATCHELF:-$(command -v patchelf || true)}"
 SYSROOT="$TOOLCHAIN/sysroot"
 SDK_BINDER_CPP="$SDK_ROOT/platforms/android-36/optional/libbinder_ndk_cpp"
 PLATFORM_LIBS="${TARGET_SYSTEM_LIBS:-$REPO/out/target/y2s/work_dir/system/system/lib64}"
-OUTPUT="$ROOT/prebuilt/vendor"
+OUTPUT="$REPO/prebuilts/exynos990/composer3_hwc2_bridge/vendor"
 
 [ -x "$CXX" ] || { echo "Missing compiler: $CXX" >&2; exit 1; }
 [ -x "$STRIP" ] || { echo "Missing strip tool: $STRIP" >&2; exit 1; }
@@ -31,7 +31,7 @@ done
 
 "$GRAPHICS_ROOT/build_composer_aidl.sh"
 mkdir -p "$OUTPUT/bin/hw" "$OUTPUT/lib64"
-cp -f "$GRAPHICS_ROOT/prebuilt/test/libexynos990_composer3_contract.so" \
+cp -f "$REPO/prebuilts/exynos990/graphics_allocator_bridge/test/libexynos990_composer3_contract.so" \
     "$OUTPUT/lib64/libexynos990_composer3_contract.so"
 
 "$CC" --sysroot="$SYSROOT" -fPIC -shared -nostdlib -nodefaultlibs \

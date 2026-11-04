@@ -9463,7 +9463,7 @@ Como segunda etapa, foi criada a biblioteca de backend
 Ela abre o `hwcomposer.exynos990.so` pelo contrato HWC2 original e consulta a
 configuração ativa, resolução, período de vsync, DPI, tipo e nome do display.
 `build_composer_backend.sh` gera a biblioteca ARM64 e o
-`hwc2_backend_probe` em `prebuilt/test/`, usando somente as bibliotecas do
+`hwc2_backend_probe` em `prebuilts/exynos990/graphics_allocator_bridge/test/`, usando somente as bibliotecas do
 system do y2s para link. Esses artefatos são de validação e não são copiados
 para a vendor; o serviço Composer3 só será criado depois que esse backend for
 validado no aparelho e receber a conversão completa de comandos e fences.
@@ -9572,7 +9572,7 @@ consultas de display/configuração, nome, resolução, DPI, período de vsync,
 orientação, modo de cor, power mode e habilitação de vsync. A sessão persistente
 de `src/hwc2_backend_state.cpp` mantém o dispositivo HWC2 aberto e usa os
 callbacks nativos para as operações de controle. A biblioteca e o
-`composer3_contract_probe` ficam apenas em `prebuilt/test/`.
+`composer3_contract_probe` ficam apenas em `prebuilts/exynos990/graphics_allocator_bridge/test/`.
 
 O serviço ainda não foi registrado na matriz VINTF: `executeCommands`, camadas,
 buffers, fences, hotplug e callbacks ainda precisam de uma conversão completa
@@ -10414,7 +10414,7 @@ que `libexynoscamera3.so` referencia e não duplica o estado ION/Mali nem
 reinterpretará o `private_handle_t`.
 
 O artefato está em
-`platform/exynos990/patches/graphics_allocator_bridge/prebuilt/test/libGrallocMapperCamera.compat.so`.
+`prebuilts/exynos990/graphics_allocator_bridge/test/libGrallocMapperCamera.compat.so`.
 Foi instalado temporariamente no aparelho com o umbrella
 `libexynos990_graphics_compat.so` e validado com:
 
@@ -11493,7 +11493,7 @@ validação. `provider_main.cpp` agora enumera os IDs reais por
 `camera_module_t`, publica as vendor tags do módulo, cria `CameraDevice`,
 encaminha estado do aparelho e repassa eventos de disponibilidade/torch. O
 serviço ARM64 resultante está em
-`platform/exynos990/patches/camera_aidl_port/prebuilt/vendor/bin/hw/android.hardware.camera.provider-V4-service.exynos990`.
+`prebuilts/exynos990/camera_aidl_port/vendor/bin/hw/android.hardware.camera.provider-V4-service.exynos990`.
 Ele possui dependências explícitas de `libbinder_ndk`, `libhardware` e
 `libcamera_metadata`, todas presentes na system y2s.
 
@@ -11630,7 +11630,7 @@ preservado é o ID em `+0x68`, confirmado no `convertFromHidl` da Samsung.
 
 O binário arm64 foi recompilado pelo `build_probe.sh` usando as APIs AIDL V4
 congeladas locais, e o prebuilt atualizado está em
-`platform/exynos990/patches/camera_aidl_port/prebuilt/vendor/bin/hw/` com
+`prebuilts/exynos990/camera_aidl_port/vendor/bin/hw/` com
 SHA-256 `671df870b515aea28e2af199bbd8d4926c2c6fc77503eb0f05e018b34ad81d58`.
 Essa mudança torna a fronteira pública conforme a documentação Android; ela não
 substitui o pré-processamento privado `sehPreProcessConfigurationLocked` que o
@@ -11844,7 +11844,7 @@ queda pertence ao caminho VDIS/GSC; a implementação definitiva deverá corrigi
 os buffers e parâmetros desse callback antes de reativar a estabilização.
 
 O provider recompilado está em
-`platform/exynos990/patches/camera_aidl_port/prebuilt/vendor/bin/hw/` e a
+`prebuilts/exynos990/camera_aidl_port/vendor/bin/hw/` e a
 imagem AVB usada no teste está em
 `out/target/y2s/dd-vendor-install-20261102/package/vendor-payload-camera-vdis-off-20261102-v2.img`.
 Ela preserva o UUID EROFS, os contextos SELinux e o tamanho de partição. A

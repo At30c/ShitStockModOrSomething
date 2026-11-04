@@ -14,7 +14,7 @@ SDK_BINDER_CPP="$SDK_ROOT/platforms/android-36/optional/libbinder_ndk_cpp"
 PLATFORM_LIBS="${TARGET_SYSTEM_LIBS:-$REPO/out/target/y2s/work_dir/system/system/lib64}"
 BUILD="$ROOT/.composer-build"
 GEN="$BUILD/generated"
-OUTPUT="$ROOT/prebuilt/test"
+OUTPUT="$REPO/prebuilts/exynos990/graphics_allocator_bridge/test"
 
 for tool in "$AIDL" "$CXX" "$STRIP"; do
     [ -x "$tool" ] || { echo "Missing tool: $tool" >&2; exit 1; }
@@ -57,7 +57,7 @@ COMMON_FLAGS=(
 )
 COMMON_LINK=(
     -L"$PLATFORM_LIBS" -L"$SYSROOT/usr/lib/aarch64-linux-android/30"
-    -L"$ROOT/prebuilt/vendor/lib64"
+    -L"$REPO/prebuilts/exynos990/graphics_allocator_bridge/vendor/lib64"
     -Wl,--no-undefined -Wl,--build-id=sha1
     -lbinder_ndk -lhardware -llog -lcutils -ldl -lexynos990_graphics_compat
 )

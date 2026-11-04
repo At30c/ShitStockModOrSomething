@@ -90,7 +90,7 @@ O decoder foi implementado em `include/exynos990/y2s_modifier.h` e é usado
 somente depois de `mali_gralloc_get_format_internal()`. Ele aceita apenas os
 bits AFBC observados na representação de 32 bits do y2s; combinações
 desconhecidas retornam erro Stable-C em vez de serem anunciadas ao HWC.
-Também foi adicionado `prebuilt/test/y2s_modifier_probe`, que executou no
+Também foi adicionado `prebuilts/exynos990/graphics_allocator_bridge/test/y2s_modifier_probe`, que executou no
 aparelho e passou nos casos linear, AFBC básico RGB/YUV, split+wide+tiled e
 nas rejeições de bits inválidos.
 
@@ -223,7 +223,7 @@ SONAME, a classe C++ e o `private_handle_t` original. A primeira tentativa,
 que usava callbacks Gralloc1 separados, foi rejeitada no aparelho porque
 alterava o `usage` combinado e gerava `REQUEST ERROR`.
 
-O adaptador em `prebuilt/test/libGrallocMapperCamera.compat.so` agora resolve
+O adaptador em `prebuilts/exynos990/graphics_allocator_bridge/test/libGrallocMapperCamera.compat.so` agora resolve
 no módulo já carregado os símbolos `mali_gralloc_lock_async`,
 `mali_gralloc_get_num_flex_planes`, `mali_gralloc_lock_flex_async` e
 `mali_gralloc_unlock`, exatamente como o mapper stock. A auditoria ABI contra

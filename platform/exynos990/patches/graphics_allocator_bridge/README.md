@@ -42,7 +42,7 @@ platform/exynos990/patches/graphics_allocator_bridge/build.sh
 ```
 
 The script verifies the ELF machine, required exports, and unresolved runtime
-dependencies. The result is placed under `prebuilt/vendor/` inside this
+dependencies. The result is placed under `prebuilts/exynos990/graphics_allocator_bridge/vendor/` inside this
 module. Remove `disable` only for a controlled boot test.
 
 The global allocator image registers the allocator rc/VINTF and can be checked
@@ -78,7 +78,7 @@ The mapper uses the platform `libc++.so`; the bridge does not replace or add a
 vendor-wide C++ runtime.
 
 The mapper and allocator share
-`prebuilt/vendor/lib64/libexynos990_graphics_compat.so`. This umbrella owns
+`prebuilts/exynos990/graphics_allocator_bridge/vendor/lib64/libexynos990_graphics_compat.so`. This umbrella owns
 the Gralloc1 callback table and opens the original `gralloc.exynos990.so`
 through `hw_get_module`; it does not contain S26+ blobs or replacement
 implementations of `libc`, Binder or `libhardware`. The Stable-C mapper remains
@@ -88,11 +88,11 @@ uses only the normal Android platform libraries; the allocator additionally
 needs `libbinder_ndk.so` for its Binder process.
 
 The build also produces
-`prebuilt/test/libGrallocMapperCamera.compat.so`. It keeps the original
+`prebuilts/exynos990/graphics_allocator_bridge/test/libGrallocMapperCamera.compat.so`. It keeps the original
 `libGrallocMapperCamera.so` SONAME and exports the three exact C++ symbols
 requested by `libexynoscamera3.so` (`lock`, YCbCr `lock` and `unlock`). Its
 methods delegate to the same Gralloc1 backend and translate flex planes to
-the HIDL `YCbCrLayout`. It remains under `prebuilt/test/` until preview,
+the HIDL `YCbCrLayout`. It remains under `prebuilts/exynos990/graphics_allocator_bridge/test/` until preview,
 capture, video, RAW, fences and protected buffers are exercised on the phone;
 the production module continues to install the vendor mapper unchanged.
 
@@ -121,7 +121,7 @@ warning threshold.
 
 The camera SONAME shim was exercised in a clean 24/10/2026 session: preview,
 still capture and a 4.4-second H.264/AAC video were saved successfully. It
-continues to live under `prebuilt/test/`; RAW-effective capture, protected
+continues to live under `prebuilts/exynos990/graphics_allocator_bridge/test/`; RAW-effective capture, protected
 buffers and private DRM modifiers are not yet enough to promote it or the
 Stable-C mapper to the global vendor path.
 
@@ -181,7 +181,7 @@ ROM:
 platform/exynos990/patches/graphics_allocator_bridge/build_composer_backend.sh
 ```
 
-O resultado fica em `prebuilt/test/`. `libexynos990_hwc2_backend.so` apenas
+O resultado fica em `prebuilts/exynos990/graphics_allocator_bridge/test/`. `libexynos990_hwc2_backend.so` apenas
 consulta o `hwcomposer.exynos990.so` original pelo contrato HWC2; o
 `hwc2_backend_probe` permite validar display, configuração, resolução, vsync,
 DPI e nome. Esses arquivos não são instalados na vendor e não registram um
@@ -227,7 +227,7 @@ deixaria o HAL `camera.exynos990.so` sem o contrato que ele chama diretamente.
 ## Contrato Composer3 AIDL e sessão HWC2
 
 `build_composer_aidl.sh` gera os 90 AIDL do Composer3 V5 e compila
-`prebuilt/test/libexynos990_composer3_contract.so` contra o runtime do y2s. A
+`prebuilts/exynos990/graphics_allocator_bridge/test/libexynos990_composer3_contract.so` contra o runtime do y2s. A
 implementação de teste consulta o display HWC2 original e encaminha
 configuração, nome, resolução, DPI, vsync, orientação, modo de cor, power mode
 e habilitação de vsync por uma sessão persistente. O C++ é estático no
@@ -235,7 +235,7 @@ artefato, evitando introduzir outra ABI de `libc++` na vendor.
 
 O contrato ainda não é um HAL instalável. O serviço não está na VINTF e o
 arquivo `disable` deve continuar presente. O probe e a biblioteca ficam em
-`prebuilt/test/` até a conversão ser validada em composição real.
+`prebuilts/exynos990/graphics_allocator_bridge/test/` até a conversão ser validada em composição real.
 O backend HWC2 também expõe, somente para a etapa de validação, primitives de
 criação/destruição de layers, propriedades de buffer, client target,
 `validate`, aceitação de mudanças e `present`. Esses callbacks mantêm os

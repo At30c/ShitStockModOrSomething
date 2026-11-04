@@ -2,16 +2,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/../../../.." && pwd)"
 GRAPHICS_ROOT="$ROOT/../graphics_allocator_bridge"
-OUTPUT="${1:-$ROOT/prebuilt/ksu-composer3_hwc2_bridge.zip}"
+OUTPUT="${1:-$REPO/prebuilts/exynos990/composer3_hwc2_bridge/ksu-composer3_hwc2_bridge.zip}"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/composer3-ksu.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
 for file in \
     "$ROOT/module.prop" \
-    "$ROOT/prebuilt/vendor/bin/hw/android.hardware.graphics.composer3-service.exynos990" \
-    "$ROOT/prebuilt/vendor/lib64/libexynos990_composer3_contract.so" \
-    "$GRAPHICS_ROOT/prebuilt/vendor/lib64/hw/mapper.exynos990_compat.so" \
+    "$REPO/prebuilts/exynos990/composer3_hwc2_bridge/vendor/bin/hw/android.hardware.graphics.composer3-service.exynos990" \
+    "$REPO/prebuilts/exynos990/composer3_hwc2_bridge/vendor/lib64/libexynos990_composer3_contract.so" \
+    "$REPO/prebuilts/exynos990/graphics_allocator_bridge/vendor/lib64/hw/mapper.exynos990_compat.so" \
     "$ROOT/vendor/etc/init/android.hardware.graphics.composer3-service.exynos990.rc" \
     "$ROOT/vendor/etc/init/android.hardware.graphics.composer@2.3-service.rc" \
     "$ROOT/vendor/etc/vintf/manifest/android.hardware.graphics.composer3-exynos990.xml"; do
@@ -19,9 +20,9 @@ for file in \
 done
 
 mkdir -p "$STAGE/system/vendor"
-cp -a "$ROOT/prebuilt/vendor/." "$STAGE/system/vendor/"
+cp -a "$REPO/prebuilts/exynos990/composer3_hwc2_bridge/vendor/." "$STAGE/system/vendor/"
 mkdir -p "$STAGE/system/vendor/lib64/hw"
-cp -a "$GRAPHICS_ROOT/prebuilt/vendor/lib64/hw/mapper.exynos990_compat.so" \
+cp -a "$REPO/prebuilts/exynos990/graphics_allocator_bridge/vendor/lib64/hw/mapper.exynos990_compat.so" \
     "$STAGE/system/vendor/lib64/hw/mapper.exynos990_compat.so"
 cp -a "$ROOT/vendor/." "$STAGE/system/vendor/"
 

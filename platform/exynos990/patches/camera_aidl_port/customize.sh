@@ -55,14 +55,14 @@ VINTF="etc/vintf/manifest/android.hardware.camera.provider-exynos990.xml"
 OLD_RC="etc/init/vendor.samsung.hardware.camera.provider@4.0-service_64.rc"
 OLD_MANIFEST="$WORK_DIR/vendor/etc/vintf/manifest.xml"
 
-for path in "$MODPATH/prebuilt/vendor/$SERVICE" "$MODPATH/vendor/$RC" "$MODPATH/vendor/$VINTF"; do
+for path in "$SRC_DIR/prebuilts/exynos990/camera_aidl_port/vendor/$SERVICE" "$MODPATH/vendor/$RC" "$MODPATH/vendor/$VINTF"; do
     [ -f "$path" ] || {
         ABORT "Camera AIDL validation artifact is missing: ${path#$MODPATH/}"
         return 1
     }
 done
 
-ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$SERVICE" \
+ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/camera_aidl_port" "vendor" "$SERVICE" \
     0 1047 755 "u:object_r:hal_camera_default_exec:s0" || return 1
 ADD_TO_WORK_DIR "$MODPATH" "vendor" "$RC" \
     0 0 644 "u:object_r:vendor_configs_file:s0" || return 1

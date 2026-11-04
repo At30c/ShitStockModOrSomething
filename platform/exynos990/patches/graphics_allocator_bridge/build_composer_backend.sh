@@ -9,7 +9,7 @@ CXX="$TOOLCHAIN/bin/aarch64-linux-android30-clang++"
 STRIP="$TOOLCHAIN/bin/llvm-strip"
 SYSROOT="$TOOLCHAIN/sysroot"
 PLATFORM_LIBS="${TARGET_SYSTEM_LIBS:-$REPO/out/target/y2s/work_dir/system/system/lib64}"
-OUTPUT="$ROOT/prebuilt/test"
+OUTPUT="$REPO/prebuilts/exynos990/graphics_allocator_bridge/test"
 
 [ -x "$CXX" ] || { echo "Missing compiler: $CXX" >&2; exit 1; }
 for lib in libhardware.so liblog.so; do

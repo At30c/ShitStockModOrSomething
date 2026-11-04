@@ -11,7 +11,7 @@ Nenhum binário do S26+, R11s ou de outro SoC é instalado como backend do Mali.
 | Mapper HIDL 2.1 | funcional | manter como fallback |
 | Allocator AIDL v2 | registrado quando `EXYNOS990_AIDL_GRAPHICS=1` | usar como caminho global; manter HIDL para clientes legados |
 | Mapper Stable-C 5 | carregado pelo `Gralloc5` após o contexto SELinux correto | usar globalmente, preservando o handle Mali/Gralloc1 |
-| Backend HWC2 de consulta | biblioteca ARM64 compilada, somente em `prebuilt/test` | usar para validar o backend antes do adaptador Binder |
+| Backend HWC2 de consulta | biblioteca ARM64 compilada, somente em `prebuilts/exynos990/graphics_allocator_bridge/test` | usar para validar o backend antes do adaptador Binder |
 | Composer HIDL 2.3 / HWC2 | caminho atual do aparelho | preservar até existir uma ponte completa |
 | Composer3 AIDL | serviço carregado pelo SurfaceFlinger; backend físico ainda é HWC2 | manter a ponte sob teste até validar composição longa |
 
@@ -75,8 +75,8 @@ HWC2→Composer3 em um módulo separado, com uma propriedade de ativação e
 rollback simples; só depois ele poderá entrar na matriz VINTF.
 
 Como etapa intermediária, `build_composer_backend.sh` gera
-`prebuilt/test/libexynos990_hwc2_backend.so` e o executável
-`prebuilt/test/hwc2_backend_probe`. A biblioteca abre o módulo
+`prebuilts/exynos990/graphics_allocator_bridge/test/libexynos990_hwc2_backend.so` e o executável
+`prebuilts/exynos990/graphics_allocator_bridge/test/hwc2_backend_probe`. A biblioteca abre o módulo
 `hwcomposer.exynos990.so` pelo contrato HWC2 e consulta o display/configuração
 ativa, resolução, período de vsync, DPI, tipo e nome. Ela não é copiada para a
 vendor nem registra serviço; serve para confirmar que a ponte futura conversa
@@ -96,7 +96,7 @@ com o backend proprietário sem passar pelo Composer HIDL.
 ## Contrato Composer3 gerado e controles HWC2
 
 `build_composer_aidl.sh` gera os 90 AIDL do contrato Composer3 V5 e monta o
-artefato ARM64 `prebuilt/test/libexynos990_composer3_contract.so`. A biblioteca
+artefato ARM64 `prebuilts/exynos990/graphics_allocator_bridge/test/libexynos990_composer3_contract.so`. A biblioteca
 usa o runtime V5 presente no system do y2s e mantém o C++ estático para não
 misturar a ABI da `libc++` da base. A classe de teste já cobre as consultas de
 configuração, nome, resolução, DPI, vsync, orientação, modo de cor e os

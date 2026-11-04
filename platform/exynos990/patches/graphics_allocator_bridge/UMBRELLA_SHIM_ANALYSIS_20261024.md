@@ -96,10 +96,10 @@ para o `init` iniciar o processo. Ambos podem ligar contra o mesmo
 entrypoints nem transforma o backend HIDL em AIDL por renomeação.
 
 O mesmo umbrella já possui um adaptador experimental para a câmera em
-`prebuilt/test/libGrallocMapperCamera.compat.so`. Ele preserva o SONAME
+`prebuilts/exynos990/graphics_allocator_bridge/test/libGrallocMapperCamera.compat.so`. Ele preserva o SONAME
 `libGrallocMapperCamera.so` e os três símbolos que `libexynoscamera3.so`
 referencia, encaminhando lock/unlock e YCbCr para o Gralloc1 original. O
-artefato fica separado do `prebuilt/vendor` até a validação no aparelho.
+artefato fica separado do `prebuilts/exynos990/graphics_allocator_bridge/vendor` até a validação no aparelho.
 
 ## Conclusão
 

@@ -2,7 +2,7 @@
 
 SKIPUNZIP=1
 
-BRIDGE_ROOT="$MODPATH/prebuilt/vendor"
+BRIDGE_ROOT="$SRC_DIR/prebuilts/exynos990/graphics_allocator_bridge/vendor"
 BRIDGE_COMPAT="lib64/libexynos990_graphics_compat.so"
 BRIDGE_MAPPER="lib64/hw/mapper.exynos990_compat.so"
 AIDL_ALLOCATOR_SERVICE="bin/hw/android.hardware.graphics.allocator-V2-service.exynos990"
@@ -48,7 +48,7 @@ esac
 
 for BRIDGE_FILE in "$BRIDGE_COMPAT" "$BRIDGE_MAPPER"; do
     [ -f "$BRIDGE_ROOT/$BRIDGE_FILE" ] || {
-        ABORT "Graphics allocator bridge prebuilt is missing: prebuilt/vendor/$BRIDGE_FILE"
+        ABORT "Graphics allocator bridge prebuilt is missing: prebuilts/exynos990/graphics_allocator_bridge/vendor/$BRIDGE_FILE"
         return 1
     }
 done
@@ -56,17 +56,17 @@ done
 # The init fragment and VINTF declaration live at the module root because
 # ADD_TO_WORK_DIR must read them from the module's vendor/ tree.  Keep this
 # check separate from the binary prebuilts above; treating both as if they
-# were under prebuilt/vendor made a clean vendor application abort before
+# were under the vendor prebuilts made a clean vendor application abort before
 # copying anything.
-ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$BRIDGE_COMPAT" \
+ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/graphics_allocator_bridge" "vendor" "$BRIDGE_COMPAT" \
     0 0 644 "u:object_r:same_process_hal_file:s0" || return 1
-ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$BRIDGE_MAPPER" \
+ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/graphics_allocator_bridge" "vendor" "$BRIDGE_MAPPER" \
     0 0 644 "u:object_r:same_process_hal_file:s0" || return 1
 
 if [ "$AIDL_GRAPHICS_MODE" = 1 ]; then
     for BRIDGE_FILE in "$AIDL_ALLOCATOR_SERVICE"; do
         [ -f "$BRIDGE_ROOT/$BRIDGE_FILE" ] || {
-            ABORT "Graphics allocator bridge prebuilt is missing: prebuilt/vendor/$BRIDGE_FILE"
+            ABORT "Graphics allocator bridge prebuilt is missing: prebuilts/exynos990/graphics_allocator_bridge/vendor/$BRIDGE_FILE"
             return 1
         }
     done
@@ -80,7 +80,7 @@ if [ "$AIDL_GRAPHICS_MODE" = 1 ]; then
     # Stable-C suffix returned by IAllocator instead of entering the old HIDL
     # allocator/mapper path. Keep the old service available for legacy clients,
     # but do not start a second allocator service for the same instance.
-    ADD_TO_WORK_DIR "$MODPATH/prebuilt" "vendor" "$AIDL_ALLOCATOR_SERVICE" \
+    ADD_TO_WORK_DIR "$SRC_DIR/prebuilts/exynos990/graphics_allocator_bridge" "vendor" "$AIDL_ALLOCATOR_SERVICE" \
         0 2000 755 "u:object_r:hal_graphics_allocator_default_exec:s0" || return 1
     ADD_TO_WORK_DIR "$MODPATH" "vendor" "$AIDL_ALLOCATOR_RC" \
         0 0 644 "u:object_r:vendor_configs_file:s0" || return 1

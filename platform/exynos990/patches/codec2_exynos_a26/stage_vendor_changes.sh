@@ -18,8 +18,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/../../../.." && pwd)"
 OUT="${1:?changes dir}"
-PREBUILT="$ROOT/prebuilt/vendor"
+PREBUILT="$REPO/prebuilts/exynos990/codec2_exynos_a26/vendor"
 [[ -f "$PREBUILT/bin/hw/samsung.hardware.media.c2@1.2-service" ]] || {
     echo "run build.sh first" >&2; exit 1; }
 

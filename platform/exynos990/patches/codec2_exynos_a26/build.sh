@@ -14,7 +14,7 @@ STRIP="$TOOLCHAIN/bin/llvm-strip"
 A26_VENDOR="${1:-$REPO/out/a26_vendor_a266b_eux/vendor}"
 Y2S_VENDOR="${2:-$REPO/out/fw/SM-G986B_AUT/vendor}"
 BUILD="$ROOT/.build"
-OUTPUT="$ROOT/prebuilt"
+OUTPUT="$REPO/prebuilts/exynos990/codec2_exynos_a26"
 
 for tool in "$CXX" patchelf; do
     command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }

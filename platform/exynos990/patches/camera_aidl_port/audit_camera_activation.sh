@@ -2,9 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/../../../.." && pwd)"
 fail() { printf 'camera-activation: %s\n' "$*" >&2; exit 1; }
 
-SERVICE="$ROOT/prebuilt/vendor/bin/hw/android.hardware.camera.provider-V4-service.exynos990"
+SERVICE="$REPO/prebuilts/exynos990/camera_aidl_port/vendor/bin/hw/android.hardware.camera.provider-V4-service.exynos990"
 RC="$ROOT/vendor/etc/init/android.hardware.camera.provider-V4-service.exynos990.rc"
 VINTF="$ROOT/vendor/etc/vintf/manifest/android.hardware.camera.provider-exynos990.xml"
 CUSTOMIZE="$ROOT/customize.sh"

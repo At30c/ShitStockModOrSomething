@@ -95,7 +95,7 @@ versão Camera3 inferior a 3.2.
 
 `build_probe.sh` gera e liga o serviço contra as definições congeladas AIDL V4
 do Android 17 e contra as bibliotecas extraídas da system y2s. Ao terminar,
-copie o ELF produzido para `prebuilt/vendor/bin/hw/` para atualizar o artefato
+copie o ELF produzido para `prebuilts/exynos990/camera_aidl_port/vendor/bin/hw/` para atualizar o artefato
 que `customize.sh` instala durante a validação.
 
 ## Extensões Samsung (02/11/2026)

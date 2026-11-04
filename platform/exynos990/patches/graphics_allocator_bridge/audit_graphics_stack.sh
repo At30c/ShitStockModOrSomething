@@ -11,10 +11,10 @@ COMPOSER3_MODULE_DIR="$ROOT/platform/exynos990/patches/composer3_hwc2_bridge"
 VENDOR="$WORK_DIR/vendor"
 SYSTEM="$WORK_DIR/system/system"
 MANIFEST="$VENDOR/etc/vintf/manifest.xml"
-MODULE_MAPPER="$MODULE_DIR/prebuilt/vendor/lib64/hw/mapper.exynos990_compat.so"
-MODULE_COMPAT="$MODULE_DIR/prebuilt/vendor/lib64/libexynos990_graphics_compat.so"
-MODULE_CAMERA_SHIM="$MODULE_DIR/prebuilt/test/libGrallocMapperCamera.compat.so"
-MODULE_ALLOCATOR="$MODULE_DIR/prebuilt/vendor/bin/hw/android.hardware.graphics.allocator-V2-service.exynos990"
+MODULE_MAPPER="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/vendor/lib64/hw/mapper.exynos990_compat.so"
+MODULE_COMPAT="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/vendor/lib64/libexynos990_graphics_compat.so"
+MODULE_CAMERA_SHIM="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/test/libGrallocMapperCamera.compat.so"
+MODULE_ALLOCATOR="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/vendor/bin/hw/android.hardware.graphics.allocator-V2-service.exynos990"
 
 errors=0
 warnings=0
@@ -121,8 +121,8 @@ else
 fi
 
 printf '%s\n' '' '[4/7] Backend HWC2 para a futura ponte Composer3'
-MODULE_HWC2="$MODULE_DIR/prebuilt/test/libexynos990_hwc2_backend.so"
-MODULE_HWC2_PROBE="$MODULE_DIR/prebuilt/test/hwc2_backend_probe"
+MODULE_HWC2="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/test/libexynos990_hwc2_backend.so"
+MODULE_HWC2_PROBE="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/test/hwc2_backend_probe"
 require_file "$MODULE_HWC2" 'biblioteca de consulta HWC2'
 require_file "$MODULE_HWC2_PROBE" 'probe HWC2'
 if [ -f "$MODULE_HWC2" ]; then
@@ -134,8 +134,8 @@ if [ -f "$MODULE_HWC2_PROBE" ]; then
 fi
 
 printf '%s\n' '' '[5/7] Contrato Composer3 AIDL e adaptador HWC2'
-MODULE_COMPOSER="$MODULE_DIR/prebuilt/test/libexynos990_composer3_contract.so"
-MODULE_COMPOSER_PROBE="$MODULE_DIR/prebuilt/test/composer3_contract_probe"
+MODULE_COMPOSER="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/test/libexynos990_composer3_contract.so"
+MODULE_COMPOSER_PROBE="$ROOT/prebuilts/exynos990/graphics_allocator_bridge/test/composer3_contract_probe"
 COMPOSER_AIDL_COUNT="$(find "$MODULE_DIR/composer/aidl" -name '*.aidl' -type f | wc -l)"
 if [ "$COMPOSER_AIDL_COUNT" -eq 90 ]; then
     pass 'fonte do contrato Composer3 contém os 90 AIDL esperados'
@@ -253,8 +253,8 @@ fi
 warn 'AIDL Composer continua desabilitado: faltam validação no aparelho, lifecycle CREATE/DESTROY em lote e os comandos avançados antes do registro VINTF'
 
 printf '%s\n' '' '[8/8] Módulo instalável Composer3 HWC2'
-COMPOSER3_SERVICE="$COMPOSER3_MODULE_DIR/prebuilt/vendor/bin/hw/android.hardware.graphics.composer3-service.exynos990"
-COMPOSER3_LIBRARY="$COMPOSER3_MODULE_DIR/prebuilt/vendor/lib64/libexynos990_composer3_contract.so"
+COMPOSER3_SERVICE="$ROOT/prebuilts/exynos990/composer3_hwc2_bridge/vendor/bin/hw/android.hardware.graphics.composer3-service.exynos990"
+COMPOSER3_LIBRARY="$ROOT/prebuilts/exynos990/composer3_hwc2_bridge/vendor/lib64/libexynos990_composer3_contract.so"
 require_file "$COMPOSER3_MODULE_DIR/module.prop" 'module.prop do Composer3'
 require_file "$COMPOSER3_MODULE_DIR/customize.sh" 'customize do Composer3'
 require_file "$COMPOSER3_SERVICE" 'serviço Composer3 instalável'

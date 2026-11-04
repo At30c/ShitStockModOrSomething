@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$ROOT/../../../.." && pwd)"
 ITERATIONS="${1:-10000}"
 INTERVAL="${MONITOR_INTERVAL:-2}"
 REMOTE_TEST="/data/local/tmp/graphics_allocator_bridge_test"
@@ -21,7 +22,7 @@ adb shell service check android.hardware.graphics.allocator.IAllocator/default |
     exit 1
 }
 
-adb push "$ROOT/prebuilt/test/graphics_allocator_bridge_test" "$REMOTE_TEST" >/dev/null
+adb push "$REPO/prebuilts/exynos990/graphics_allocator_bridge/test/graphics_allocator_bridge_test" "$REMOTE_TEST" >/dev/null
 adb shell chmod 0755 "$REMOTE_TEST"
 
 adb shell "$REMOTE_TEST" "$REMOTE_MAPPER" "$ITERATIONS" &

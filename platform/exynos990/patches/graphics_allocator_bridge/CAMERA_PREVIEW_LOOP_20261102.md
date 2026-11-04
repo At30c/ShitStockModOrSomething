@@ -71,7 +71,7 @@ O prebuilt mais novo já contém a atualização do slot sem handle:
 
 ```text
 78c00483060afab982f09149588ce3640970170f1a8fe3050c520e133f8e01b5
-platform/exynos990/patches/composer3_hwc2_bridge/prebuilt/vendor/lib64/
+prebuilts/exynos990/composer3_hwc2_bridge/vendor/lib64/
 libexynos990_composer3_contract.so
 ```
 

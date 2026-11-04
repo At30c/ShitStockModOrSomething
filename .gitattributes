@@ -19,8 +19,6 @@
 *.zip binary
 
 # ROM-specific prebuilt blobs
-# Module prebuilts include ELF executables without an extension.
-platform/*/patches/*/prebuilt/** binary
 prebuilts/bootable/deprecated-ota/updater binary
 prebuilts/*/*/*/** binary
 unica/mods/paradigm/system/** binary
