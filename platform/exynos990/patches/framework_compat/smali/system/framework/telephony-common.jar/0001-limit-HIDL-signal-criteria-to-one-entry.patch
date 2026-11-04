@@ -1,0 +1,84 @@
+From 1799c9621798c5e372e624b9938fb2181608fe27 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 14:00:00 -0300
+Subject: [PATCH] RadioNetworkProxy: send one signal criterion to legacy HIDL
+
+The AIDL API accepts an array of signal reporting criteria, while the HIDL
+1.4 and 1.5 APIs accept one criterion per transaction. The framework reuses
+the same request serial while iterating the array, causing the legacy Samsung
+RIL to emit several responses for one tracked request. RadioResponse then
+reports every response after the first as unexpected and repeatedly wakes the
+modem path.
+
+Match Android's AIDL-to-HIDL compatibility behavior and forward the first
+criterion only on HIDL. Keep the complete array for native AIDL radios.
+---
+ .../internal/telephony/RadioNetworkProxy.smali     | 30 +++++++-------------
+ 1 file changed, 11 insertions(+), 19 deletions(-)
+
+diff --git a/smali/com/android/internal/telephony/RadioNetworkProxy.smali b/smali/com/android/internal/telephony/RadioNetworkProxy.smali
+--- a/smali/com/android/internal/telephony/RadioNetworkProxy.smali
++++ b/smali/com/android/internal/telephony/RadioNetworkProxy.smali
+@@ -2104,18 +2104,15 @@
+ 
+     if-eqz v0, :cond_3
+ 
+-    invoke-interface {p2}, Ljava/util/List;->iterator()Ljava/util/Iterator;
+-
+-    move-result-object p2
+-
+-    :goto_1
+-    invoke-interface {p2}, Ljava/util/Iterator;->hasNext()Z
++    invoke-interface {p2}, Ljava/util/List;->isEmpty()Z
+ 
+     move-result v0
+ 
+-    if-eqz v0, :cond_4
++    if-nez v0, :cond_4
+ 
+-    invoke-interface {p2}, Ljava/util/Iterator;->next()Ljava/lang/Object;
++    const/4 v0, 0x0
++
++    invoke-interface {p2, v0}, Ljava/util/List;->get(I)Ljava/lang/Object;
+ 
+     move-result-object v0
+ 
+@@ -2139,21 +2136,18 @@
+ 
+     invoke-interface {v1, p1, v2, v0}, Landroid/hardware/radio/V1_5/IRadio;->setSignalStrengthReportingCriteria_1_5(ILandroid/hardware/radio/V1_5/SignalThresholdInfo;I)V
+ 
+-    goto :goto_1
++    goto :goto_3
+ 
+     :cond_3
+-    invoke-interface {p2}, Ljava/util/List;->iterator()Ljava/util/Iterator;
+-
+-    move-result-object p2
+-
+-    :goto_2
+-    invoke-interface {p2}, Ljava/util/Iterator;->hasNext()Z
++    invoke-interface {p2}, Ljava/util/List;->isEmpty()Z
+ 
+     move-result v0
+ 
+-    if-eqz v0, :cond_4
++    if-nez v0, :cond_4
+ 
+-    invoke-interface {p2}, Ljava/util/Iterator;->next()Ljava/lang/Object;
++    const/4 v0, 0x0
++
++    invoke-interface {p2, v0}, Ljava/util/List;->get(I)Ljava/lang/Object;
+ 
+     move-result-object v0
+ 
+@@ -2189,8 +2183,6 @@
+ 
+     invoke-interface/range {v1 .. v6}, Landroid/hardware/radio/V1_4/IRadio;->setSignalStrengthReportingCriteria(IIILjava/util/ArrayList;I)V
+ 
+-    goto :goto_2
+-
+     :cond_4
+     :goto_3
+     return-void
+-- 
+2.43.0

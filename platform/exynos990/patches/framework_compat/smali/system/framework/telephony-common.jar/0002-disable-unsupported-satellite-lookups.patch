@@ -1,0 +1,185 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 05:20:00 -0300
+Subject: [PATCH] Disable unsupported satellite carrier lookups on Exynos 990
+
+Legacy Exynos 990 devices have no satellite radio. Android 17 nevertheless
+queries carrier NTN configuration after ordinary cellular updates, repeatedly
+parsing a configuration that can never exist and flooding telephony logs.
+Return the terrestrial defaults before those configuration lookups.
+---
+--- a/smali/com/android/internal/telephony/satellite/SatelliteController.smali
++++ b/smali/com/android/internal/telephony/satellite/SatelliteController.smali
+@@ -14055,28 +14055,15 @@
+ .end method
+ 
+ .method private blacklist isSatelliteAttachSupportedViaConfigupdater(I)Ljava/lang/Boolean;
+-    .locals 0
+-
+-    invoke-virtual {p0}, Lcom/android/internal/telephony/satellite/SatelliteController;->getSatelliteConfig()Lcom/android/internal/telephony/satellite/SatelliteConfig;
+-
+-    move-result-object p0
+-
+-    if-nez p0, :cond_0
+-
+-    const-string p0, "isSatelliteAttachSupportedViaConfigupdater: return null (satelliteConfig is null)"
+-
+-    invoke-static {p0}, Lcom/android/internal/telephony/satellite/SatelliteController;->logd(Ljava/lang/String;)V
+-
+-    const/4 p0, 0x0
+-
+-    return-object p0
+-
+-    :cond_0
+-    invoke-virtual {p0, p1}, Lcom/android/internal/telephony/satellite/SatelliteConfig;->isSatelliteAttachSupportedBySubId(I)Ljava/lang/Boolean;
+-
+-    move-result-object p0
+-
+-    return-object p0
++    .locals 1
++
++    const/4 v0, 0x0
++
++    invoke-static {v0}, Ljava/lang/Boolean;->valueOf(Z)Ljava/lang/Boolean;
++
++    move-result-object v0
++
++    return-object v0
+ .end method
+ 
+ .method private blacklist isSatelliteDataServicesAllowed(ILjava/lang/String;)Z
+@@ -23743,127 +23730,11 @@
+ .end method
+ 
+ .method public blacklist getCarrierRoamingNtnConnectType(I)I
+-    .locals 3
+-
+-    new-instance v0, Ljava/lang/StringBuilder;
+-
+-    const-string v1, "getCarrierRoamingNtnConnectType: Checking connect type from PLMN config for subId: "
+-
+-    invoke-direct {v0, v1}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+-
+-    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+-
+-    move-result-object v0
+-
+-    invoke-direct {p0, v0}, Lcom/android/internal/telephony/satellite/SatelliteController;->plogd(Ljava/lang/String;)V
+-
+-    invoke-virtual {p0, p1}, Lcom/android/internal/telephony/satellite/SatelliteController;->getSatellitePerPlmnConfiguration(I)Lcom/android/internal/telephony/satellite/SatelliteController$SatellitePerPlmnConfiguration;
+-
+-    move-result-object v0
+-
+-    new-instance v1, Ljava/lang/StringBuilder;
+-
+-    const-string v2, "getCarrierRoamingNtnConnectType: config: "
+-
+-    invoke-direct {v1, v2}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+-
+-    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/Object;)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+-
+-    move-result-object v1
+-
+-    invoke-direct {p0, v1}, Lcom/android/internal/telephony/satellite/SatelliteController;->plogd(Ljava/lang/String;)V
+-
+-    if-eqz v0, :cond_0
+-
+-    iget v1, v0, Lcom/android/internal/telephony/satellite/SatelliteController$SatellitePerPlmnConfiguration;->connectType:I
+-
+-    const/4 v2, -0x1
+-
+-    if-eq v1, v2, :cond_0
+-
+-    new-instance p1, Ljava/lang/StringBuilder;
+-
+-    const-string v1, "getCarrierRoamingNtnConnectType: Connect type from config: "
+-
+-    invoke-direct {p1, v1}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+-
+-    iget v1, v0, Lcom/android/internal/telephony/satellite/SatelliteController$SatellitePerPlmnConfiguration;->connectType:I
+-
+-    invoke-virtual {p1, v1}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {p1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+-
+-    move-result-object p1
+-
+-    invoke-direct {p0, p1}, Lcom/android/internal/telephony/satellite/SatelliteController;->plogd(Ljava/lang/String;)V
+-
+-    iget p0, v0, Lcom/android/internal/telephony/satellite/SatelliteController$SatellitePerPlmnConfiguration;->connectType:I
+-
+-    return p0
+-
+-    :cond_0
+-    invoke-direct {p0, p1}, Lcom/android/internal/telephony/satellite/SatelliteController;->getCarrierRoamingNtnConnectTypeViaConfigUpdater(I)Ljava/lang/Integer;
+-
+-    move-result-object v0
+-
+-    if-eqz v0, :cond_1
+-
+-    new-instance v1, Ljava/lang/StringBuilder;
+-
+-    const-string v2, "getCarrierRoamingNtnConnectType: using SatelliteConfig for subId="
+-
+-    invoke-direct {v1, v2}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+-
+-    invoke-virtual {v1, p1}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+-
+-    const-string p1, ", ntnConnectType="
+-
+-    invoke-virtual {v1, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/Object;)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+-
+-    move-result-object p1
+-
+-    invoke-direct {p0, p1}, Lcom/android/internal/telephony/satellite/SatelliteController;->plogd(Ljava/lang/String;)V
+-
+-    invoke-virtual {v0}, Ljava/lang/Integer;->intValue()I
+-
+-    move-result p0
+-
+-    return p0
+-
+-    :cond_1
+-    invoke-direct {p0, p1}, Lcom/android/internal/telephony/satellite/SatelliteController;->getConfigForSubId(I)Landroid/os/PersistableBundle;
+-
+-    move-result-object p1
+-
+-    const-string v0, "carrier_roaming_ntn_connect_type_int"
+-
+-    invoke-virtual {p1, v0}, Landroid/os/PersistableBundle;->getInt(Ljava/lang/String;)I
+-
+-    move-result p1
+-
+-    new-instance v0, Ljava/lang/StringBuilder;
+-
+-    const-string v1, "getCarrierRoamingNtnConnectType: Falling back to global carrier config connect type: "
+-
+-    invoke-direct {v0, v1}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
+-
+-    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+-
+-    move-result-object v0
+-
+-    invoke-direct {p0, v0}, Lcom/android/internal/telephony/satellite/SatelliteController;->plogd(Ljava/lang/String;)V
+-
+-    return p1
++    .locals 1
++
++    const/4 v0, 0x0
++
++    return v0
+ .end method
+ 
+ .method protected blacklist getCarrierRoamingNtnEmergencyCallToSatelliteHandoverType(I)I
+-- 
+2.51.0

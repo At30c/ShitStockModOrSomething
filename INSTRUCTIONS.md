@@ -8709,6 +8709,46 @@ script foi validado com `bash -n` e os caminhos presentes/ausentes foram
 checados contra os diretórios extraídos em `out/fw` e `prebuilts/samsung`;
 nenhuma build foi iniciada nesta auditoria.
 
+### Exynos 990: atividade ociosa do modem e BLE (2026-10-11)
+
+No y2s executando a base S947B, uma captura de 30 segundos com Wi-Fi,
+Bluetooth visível e dados móveis desligados ainda registrou 14 ciclos completos
+de `s5100_poweron_pcie`/`s5100_poweroff_pcie`. O Bluetooth permaneceu em
+`BLE_ON`, com `BeaconManager` e `MCFServer` registrados. Em modo avião ambos
+os grupos de eventos cessaram. Desativar apenas `ble_scan_always_enabled` não
+interrompeu os ciclos do modem, portanto os dois comportamentos foram tratados
+separadamente.
+
+O framework Android 17 enviava cada elemento de
+`setSignalStrengthReportingCriteria()` ao HAL HIDL 1.4/1.5 reutilizando o mesmo
+serial. O RIL Samsung respondia a cada chamada, e todas as respostas depois da
+primeira apareciam como `processResponse: Unexpected response!`. O módulo
+`platform/exynos990/patches/framework_compat` agora encaminha somente o
+primeiro critério nas rotas HIDL, seguindo o comportamento da ponte de
+compatibilidade AIDL/HIDL do AOSP, e preserva a lista completa na rota AIDL. O
+patch passou em `git apply --check` contra o `telephony-common.jar` decodificado
+do y2s e o JAR modificado recompilou com Apktool 3.0.3.
+
+Os perfis y2s e y2slte deixaram de declarar `satellite_carrier`, recurso que
+não existe no framework original G986B. O teste da build instalada confirmou
+que as respostas RIL duplicadas desapareceram, mas o `SatelliteController`
+continua consultando a configuração NTN quando recebe atualizações da rede;
+os próprios logs confirmam `satellite is disabled`. Essas consultas são uma
+consequência das notificações do modem, não a origem das ativações PCIe.
+
+Uma nova captura de 30 segundos com Wi-Fi, dados e Bluetooth desligados
+registrou 15 ciclos PCIe e revelou o gatilho restante: o APK persistente
+`com.sec.intc` da S947B solicita `IPC_MISC_CP_METRIC` a cada três segundos. O
+RIL Exynos 990 devolve `error: 6`, o iNTC repete imediatamente e as duas
+tentativas acordam o enlace do modem. Esse APK não existe nas firmwares
+originais G985F/G986B disponíveis em `out/fw`. O debloat específico
+`target/y2s/debloat.sh` remove o iNTC e seu XML de permissões, mas mantém
+`AutoHotspotMDE` e seus três XMLs de configuração para preservar o Quick Share.
+Os pacotes de hotspot comum
+(`SmartTethering`, `TetheringAutomation` e `UnifiedTetheringProvision`)
+permanecem presentes. Os logs dos testes estão em
+`out/target/y2s/idle-patch-validation-2026-10-11_2052`.
+
 ### HMA: ComputerEngine da FW S947B (2026-10-10)
 
 O patch `unica/mods/hma/smali/system/framework/services.jar/0001-Introduce-HideAppListUtils.patch`
@@ -8744,4 +8784,214 @@ dinâmicos de Knox, Monotype, Outdoor, PIN, PIF, Settings e Setup Wizard tiveram
 seus métodos e literais encontrados e aplicados na cópia de auditoria. O
 fallback de `libui.so` ainda encontra as duas sequências originais; o patch de
 `libgui.so` é corretamente ignorado no SDK 37 pela própria condição do módulo.
+
+### Exynos 990: aquecimento causado pelo hotword do Google (2026-10-12)
+
+Após instalar a build atualizada no y2s, o iNTC estava ausente como esperado.
+O AutoHotspotMDE deve permanecer instalado para o Quick Share e não é o mesmo
+componente que causava a atividade em repouso. A
+temperatura não estava em faixa de throttling, mas o `AudioIn` permanecia com
+wakelock contínuo. O responsável era o processo isolado
+`GsaHotwordDetectionService` do Google: `dumpsys voiceinteraction` mostrava
+`DetectorType=trusted_hotword_software`, nenhum `Enrolled KeyphraseSoundModel`
+e `mPerformingSoftwareHotwordDetection=true`. O processo consumia entre 7% e
+14% de CPU, enquanto `audioserver` e o serviço de áudio consumiam mais alguns
+pontos percentuais.
+
+O HAL SoundTrigger Samsung SLSI estava registrado, mas nenhum modelo havia sido
+carregado nele. A tela `HOTWORD_DETECTION_SETTINGS` ainda aguardava a escolha
+inicial entre `Não` e `Começar`; mesmo assim, o Google mantinha captura PCM a
+16 kHz em `/dev/snd/pcmC0D18c`. Selecionar `Não` interrompeu imediatamente a
+captura: `Wake Locks: size=0`, `mPerformingSoftwareHotwordDetection=false` e os
+processos de Google e áudio ficaram em 0% nas três amostras seguintes. Pesquisa
+e Assistente acionados manualmente continuam disponíveis.
+
+O módulo `platform/exynos990/patches/stock_blobs` agora remove todas as pastas
+`HotwordEnrollment*` herdadas da source antes de importar o par do firmware
+alvo. A source S947B traz Ex6 Wideband para Android 17 e o G986B traz Ex3 para
+Cortex-M4; anteriormente os Ex6 permaneciam na imagem e o Package Manager os
+rejeitava como pacotes duplicados. Os modelos Ex6 não foram instalados no y2s,
+pois foram produzidos para outra geração de DSP. Os registros da investigação
+estão em `out/target/y2s/warm-diagnostics-2026-10-12`.
+### Exynos 990: aquecimento e drenagem por reinício contínuo do `traced`
+
+No port Android 17 para `y2s`/`y2slte`, o `traced` do Perfetto encerrava a
+cada aproximadamente 15 segundos com
+`Failed to create vsock://-1:2010 (errno: 97, Address family not supported by protocol)`.
+O init reiniciava o processo e acionava `flags_health_check` como processo
+atualizável em falha. O kernel instalado confirmou `# CONFIG_VSOCKETS is not set`.
+
+O primeiro teste ativou somente `CONFIG_VSOCKETS=y`, mas a imagem instalada em
+14/10/2026 demonstrou que isso apenas compilava o código comum: não havia uma
+entrada VSOCK em `/proc/net/protocols` e o erro `EAFNOSUPPORT` permaneceu. Neste
+kernel 4.19, `sock_register(AF_VSOCK)` só é chamado por
+`vsock_core_init()` quando um transporte é inicializado. O patch
+`platform/exynos990/patches/extremekrnl/patches/0010-enable-vsock-for-android-perfetto.patch`
+agora ativa `CONFIG_VIRTUALIZATION=y`, `CONFIG_VSOCKETS=y` e
+`CONFIG_VHOST_VSOCK=y`; `VIRTUALIZATION` torna o menu vhost visível e o último
+seleciona o transporte comum que registra a família de sockets usada pelo
+listener host do `traced`. A primeira compilação com apenas as duas opções
+VSOCK demonstrou a dependência: o Kconfig descartou silenciosamente
+`VHOST_VSOCK` enquanto `VIRTUALIZATION` estava desativado. `CONFIG_EVENTFD=y`,
+outra dependência do vhost, já existe no `exynos9830_defconfig`. A alteração do
+patchset invalida a chave do cache do kernel automaticamente.
+
+Para validar uma instalação ainda sem esse kernel, pode-se interromper o loop
+temporariamente com `adb shell setprop persist.traced.enable 0`. Após instalar
+o kernel com VSOCKETS, restaurar com `adb shell setprop persist.traced.enable 1`
+e confirmar que `getprop init.svc.traced` permanece `running`, sem novos eventos
+`sys.init.updatable_crashing_process_name=traced`.
+
+No mesmo diagnóstico, `com.samsung.cmh` disparava indexação de faces e o
+`com.samsung.ipservice` chegava a consumir dezenas de por cento de CPU. A
+varredura BLE de `com.samsung.android.mdx.kit` também permanecia ativa por
+horas. Para o teste reversível foram usados `pm disable-user --user 0
+com.samsung.cmh`, `pm disable-user --user 0 com.samsung.android.mdx.kit`,
+`settings put system nearby_scanning_enabled 0` e
+`settings put global ble_scan_always_enabled 0`. O cliente do Galaxy Fit,
+`com.samsung.accessory`, não foi desativado. Em uma janela limpa de 45 segundos,
+a varredura Bluetooth caiu para 0 ms e não houve nova execução do NPU/CMH.
+Como o Link to Windows já é reduzido a stub nesta ROM, o debloat específico
+`target/y2s/debloat.sh` também remove `MdxKitService` e seus XMLs; isso não
+remove o cliente do relógio. Com o CMH suspenso, a Samsung Camera ainda abriu
+normalmente e permaneceu ativa sem exceção fatal. A remoção definitiva do CMH
+deve aguardar um teste mais longo das funções de busca e histórias da Galeria.
+
+Na build instalada em 14/10/2026, a varredura contínua restante foi atribuída
+pelas estatísticas do Bluetooth a `com.samsung.android.mcfds` (UID 10106) e ao
+Google Play Services (UID 10298). O MCFDeviceSync manteve o scan pelo tempo
+inteiro de atividade e ligou o serviço `com.samsung.android.mcfserver`; após
+`pm disable-user --user 0 com.samsung.android.mcfds`, o cliente e o scan do
+MCFServer desapareceram. Restou apenas `nearby_presence` do Google em modo
+oportunista, com duty cycle de 0%. Em uma janela comparável de 45 segundos, o
+AP caiu de 41,8 para 38,7 graus Celsius e a carga agregada caiu. O
+`SamsungMultiConnectivity` e o cliente `com.samsung.accessory` permaneceram
+instalados. Esse resultado identifica o gatilho, mas não justifica remover o
+MCFDeviceSync: o pacote também fornece continuidade, handoff e Auto Switch. A
+correção definitiva deve desativar somente a condição que solicita o scan
+contínuo; `target/y2s/debloat.sh` mantém o pacote e seus XMLs enquanto essa
+condição é investigada.
+
+O APK MCFDeviceSync original do G986B (`1.2.10.24`, SDK 30) foi comparado com
+o da source S947B (`4.6.12.12`, SDK 31), mas o Package Manager recusou o teste
+como downgrade e o KernelSU da boot anterior não executou a sobreposição de
+teste. A conclusão acima se baseia apenas na desativação reversível do cliente
+moderno. O módulo temporário `mcfds_g986b_test_v2` foi deixado marcado com
+`disable` no aparelho para nunca ser aplicado por engano.
+
+Uma captura posterior, feita com os dados do `MCFDeviceSync` limpos e o pacote
+habilitado por somente 25 segundos, localizou a condição exata. O app iniciou
+dois scanners BLE de duty cycle baixo (5%): `Account`, necessário para a
+continuidade da conta Samsung, e `Nearby`. A inicialização registrou
+`nearbyscanning=false`, mas ainda criou o `NearbyHandler` porque
+`SettingsHelper.isSupportTvSignin()` retornou `true`. Esse método lê o metadata
+`com.samsung.android.mcfds.support_remote_signin=true` do
+`/system/priv-app/SamsungAccount/SamsungAccount.apk`; em seguida o handler abre
+uma requisição `NearbyScanRequest{appId=8, type=0}`. O mesmo metadata e a mesma
+decisão existem nos APKs originais do G986B, portanto o recurso de login remoto
+em TVs não foi inventado pelo port nem depende do `AmbientDetect` acrescentado
+na versão moderna.
+
+No aparelho, o scanner `Nearby` encontrou uma Samsung TV, publicou o contexto
+de TV e iniciou tentativas BLE CoC/GATT para ela e para endereços rotativos. É
+essa sequência que torna o MCF ativo mesmo quando sua máquina de estados aparece
+como `IDLE`; o estado indica ausência de uma sessão de usuário, não ausência de
+descoberta em segundo plano. A captura também descartou `AmbientDetect` como
+gatilho desse caso. Desabilitar novamente `com.samsung.android.mcfds` encerrou
+os dois scans, e o pacote foi deixado desabilitado após o teste. As evidências
+estão em
+`out/target/y2s/runtime-diagnostics-20261014/mcf-clean-enable-20261014`.
+
+A política de descoberta não regrediu por causa da versão nova do APK: tanto o
+MCFDeviceSync antigo quanto o moderno usam o modo Samsung customizado `100`,
+intervalo `0xc30` e janela `0xa0` para a política `mode=0`, equivalente ao duty
+cycle de aproximadamente 5% mostrado pelo Bluetooth Manager. Portar o scanner
+antigo manteria a mesma busca persistente. O custo adicional observado aparece
+quando os anúncios da TV geram tentativas de conexão, não por uma diferença no
+intervalo básico do scan.
+
+A correção seletiva foi implementada fora dos dois APKs atualizáveis em
+`platform/exynos990/patches/framework_compat/smali/system/framework/framework.jar/0001-disable-tv-signin-mcf-scan.patch`.
+No `ApplicationPackageManager`, toda consulta ao `ApplicationInfo` de
+`com.osp.app.signin` clona o objeto e seu `Bundle` e substitui somente
+`com.samsung.android.mcfds.support_remote_signin` por `false` quando
+`ro.unica.device=y2s`. O target y2slte também publica esse codename. Como a
+alteração está no framework da ROM, atualizações do Samsung Account e do
+MCFDeviceSync não restauram a flag. O cache original do PackageManager não é
+modificado.
+
+Isso impede somente a criação do handler de appId 8 e preserva o scanner
+`Account`, Auto Switch, handoff, clipboard e as demais funções de continuidade.
+Remover todo o MCFDeviceSync continua inadequado. O patch passou em
+`git apply --check`, e uma cópia do `framework.jar` com ele aplicado foi
+recompilada com Apktool 3.0.3 sem erro. Nenhuma build completa foi iniciada.
+
+A validação final do kernel recompilado confirmou na configuração em execução
+`CONFIG_VIRTUALIZATION=y`, `CONFIG_VSOCKETS=y`, `CONFIG_VHOST_VSOCK=y`,
+`CONFIG_VHOST=y` e `CONFIG_VIRTIO_VSOCKETS_COMMON=y`. `AF_VSOCK` passou a
+aparecer em `/proc/net/protocols`. Depois de definir
+`persist.traced.enable=1`, `traced` e `traced_probes` conservaram os mesmos PIDs
+por 31 segundos; o log registrou o listener em
+`/dev/socket/traced_producer` e `/dev/socket/traced_consumer`, sem
+`EAFNOSUPPORT`, saída do serviço ou sinalização de processo atualizável em
+crash. A boot validada tem SHA-256
+`72c78e10d0b9b4a4d0418a457c5deb8c9153bd105ff9a03e214077d343883b66` e foi
+copiada para `out/target/y2s/work_dir/kernel/boot.img`.
+
+Durante esse teste, `statsd` abriu automaticamente a sessão Perfetto
+`java_heap_profile_oom`, com buffers configurados para até 510128 KiB, enquanto
+o usuário ainda estava bloqueado e os aplicativos processavam o pós-boot. Para
+evitar prolongar essa carga térmica de diagnóstico, o teste terminou com
+`persist.traced.enable=0`; isso é somente o estado runtime do aparelho e não
+remove a correção do kernel. As evidências estão em
+`out/target/y2s/runtime-diagnostics-20261014/traced-vhost-start.txt` e
+`traced-vhost-after-30s.txt`.
+
+A mesma instalação atualizou `system`, mas manteve `product` antigo: a
+propriedade `persist.bluetooth.a2dp_offload.disabled=true` existe no
+`work_dir/product/etc/build.prop`, porém `dumpsys bluetooth_manager` ainda
+mostra `A2dpOffloadEnabled: true` no aparelho. O valor inserido por `resetprop`
+ficou visível apenas na área lida pelo root e não alterou o serviço Bluetooth.
+Portanto, o teste da central automotiva continua pendente até que a imagem
+`product` da build seja realmente instalada; atualizar somente `system` e
+`boot` não aplica essa correção.
+
+### y2s: auditoria de consumo ocioso e consultas NTN (2026-10-16)
+
+Uma nova captura do aparelho `SM-G985F`/`y2s`, preservada em
+`out/target/y2s/runtime-diagnostics-20261016`, mostrou o sistema com mais de um
+dia de uptime, sem throttling térmico e com CPU total próxima de 6% durante a
+primeira amostra. A load average próxima de 15 não representava quinze CPUs
+ocupadas: havia exatamente quinze threads permanentes do kernel em estado `D`
+(`tz_worker_thread`, `ree_time`, `tz_iwlog_thread`, `tz_iwsock`,
+`exynos_gmc_thread` e `ksu_selinux_pol`), que entram no cálculo de load mesmo
+sem consumir CPU continuamente.
+
+O `MCFDeviceSync` havia ficado desabilitado após o diagnóstico anterior. Nesse
+estado, o `system_server` tentava abrir `McfDeviceSyncService` a cada três
+segundos e produziu 6.181 falhas no buffer acumulado. O pacote foi reabilitado
+no aparelho; as tentativas e os erros `bindMcf - failed with reason: 4`
+cessaram. A build instalada ainda não contém o patch de metadata do framework,
+portanto voltou a apresentar os dois scans de duty cycle 5% (`Account` e
+`Nearby`) e o scan do `MCFServer`. A próxima build aplica
+`0001-disable-tv-signin-mcf-scan.patch`, preserva o pacote habilitado e elimina
+somente o handler `Nearby` acionado pelo login remoto de TVs.
+
+Uma janela limpa de 25 segundos revelou a atividade restante mais repetitiva:
+203 mensagens do `SatelliteController`, incluindo 46 tentativas de obter o
+parser `satellite`, embora o RIL confirme que NTN está desabilitado. Foram
+registradas somente duas notificações físicas do canal celular nessa janela;
+as 13 chamadas `getAllCellInfo()` vieram da thread `SLocationService` e não
+formaram o ciclo intenso sugerido pelo buffer histórico. O módulo
+`platform/exynos990/patches/framework_compat` agora aplica
+`0002-disable-unsupported-satellite-lookups.patch` ao `telephony-common.jar`.
+Nos Exynos 990, que não possuem rádio satélite, o patch devolve os valores
+terrestres antes das consultas de configuração NTN. A aplicação do patch e a
+recompilação isolada do JAR com Apktool 3.0.3 foram validadas.
+
+Também foram observadas rajadas de leitura do ADC pelo serviço térmico e erros
+de I2C do controlador MFC de carregamento sem fio. Elas serão avaliadas em uma
+janela desconectada do USB antes de qualquer alteração na vendor; a captura
+atual foi feita a 100% e alimentada por USB, portanto não permite medir a
+corrente real de repouso. Não houve `FATAL EXCEPTION` nem ANR novo.
 

@@ -187,8 +187,15 @@ unset GPU_TARGET_FIRMWARE_PATH GPU_TARGET_FIRMWARE
 LOG_STEP_OUT
 
 LOG_STEP_IN "- Replacing Hotword"
-DELETE_FROM_WORK_DIR "product" "priv-app/HotwordEnrollmentOKGoogleEx4CORTEXM55"
-DELETE_FROM_WORK_DIR "product" "priv-app/HotwordEnrollmentXGoogleEx4CORTEXM55"
+# Hotword package generations vary with the source firmware. Remove the
+# complete source set before importing the models built for the target DSP;
+# otherwise PackageManager sees duplicate package names and the selected
+# enrollment application depends on scan order.
+for HOTWORD_ENROLLMENT_PATH in "$WORK_DIR/product/priv-app"/HotwordEnrollment*; do
+    [[ -e "$HOTWORD_ENROLLMENT_PATH" ]] || continue
+    DELETE_FROM_WORK_DIR "product" "priv-app/$(basename "$HOTWORD_ENROLLMENT_PATH")"
+done
+unset HOTWORD_ENROLLMENT_PATH
 if [[ "$TARGET_CODENAME" != "r8s" ]]; then
     ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "product" "priv-app/HotwordEnrollmentOKGoogleEx3CORTEXM4/HotwordEnrollmentOKGoogleEx3CORTEXM4.apk" 0 0 644 "u:object_r:system_file:s0"
     ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "product" "priv-app/HotwordEnrollmentXGoogleEx3CORTEXM4/HotwordEnrollmentXGoogleEx3CORTEXM4.apk" 0 0 644 "u:object_r:system_file:s0"

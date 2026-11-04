@@ -1,0 +1,41 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: UN1CA Build System <noreply@localhost>
+Date: Wed, 14 Oct 2026 05:22:00 -0300
+Subject: [PATCH] arm64: exynos9830: enable vhost VSOCK for Android Perfetto
+
+Android 17's traced service opens a vsock listener for its host endpoint.
+Without AF_VSOCK support, socket creation fails with EAFNOSUPPORT and init
+restarts traced continuously, repeatedly invoking the updatable-process
+health check.  The VSOCKETS option only builds the common code: this 4.19
+tree registers AF_VSOCK from a transport's vsock_core_init() callback. Build
+the vhost transport in as well so the host listener used by traced can create
+the socket on physical devices.
+---
+ arch/arm64/configs/exynos9830_defconfig | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/configs/exynos9830_defconfig b/arch/arm64/configs/exynos9830_defconfig
+index 7bf7fdcd8741..f02e5bc7028 100644
+--- a/arch/arm64/configs/exynos9830_defconfig
++++ b/arch/arm64/configs/exynos9830_defconfig
+@@ -595,7 +595,7 @@ CONFIG_HAVE_ARM_SMCCC=y
+ #
+ # Tegra firmware driver
+ #
+-# CONFIG_VIRTUALIZATION is not set
++CONFIG_VIRTUALIZATION=y
+ CONFIG_ARM64_CRYPTO=y
+ CONFIG_CRYPTO_SHA256_ARM64=y
+ # CONFIG_CRYPTO_SHA512_ARM64 is not set
+@@ -1291,7 +1291,8 @@ CONFIG_NET_ACT_TUNNEL_KEY=y
+ CONFIG_NET_SCH_FIFO=y
+ # CONFIG_DCB is not set
+ # CONFIG_DNS_RESOLVER is not set
+ # CONFIG_BATMAN_ADV is not set
+ # CONFIG_OPENVSWITCH is not set
+-# CONFIG_VSOCKETS is not set
++CONFIG_VSOCKETS=y
++CONFIG_VHOST_VSOCK=y
+ # CONFIG_NETLINK_DIAG is not set
+-- 
+2.51.0
