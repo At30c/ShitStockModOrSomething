@@ -1,0 +1,4 @@
+# KG30 is not available on the Exynos 990 vendor/kernel.  Keep the checker
+# available for an eventual full KG30 port, but do not turn that known
+# incompatibility into a global build blocker before the later deknox module
+# applies the ROM's existing framework compatibility changes.

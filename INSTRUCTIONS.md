@@ -1,5 +1,32 @@
 # Current One UI 9 Port Handoff Instructions
 
+## KnoxGuard no Exynos 990 (2026-10-19)
+
+O `y2s`/`y2slte` usa o kernel e a vendor do G985F/G986B. O framework Android
+17 do S947B possui a interface KG30 AIDL, mas essa interface não existe na
+vendor do S20+ e o kernel do alvo não possui `kg_drv`. Misturar essas camadas
+faz o `system_server` receber `ServiceManager returned null service`, define
+`knox.kg.state=Error` e coloca o Keyguard em `KNOXGUARD`.
+
+`unica/patches/knoxguard_compat` contém a auditoria dessa combinação, mas está
+desativado por padrão: como a vendor/kernel do Exynos 990 não possui KG30, um
+abort incondicional impediria qualquer build S947B antes de os módulos normais
+da ROM serem aplicados. O módulo não altera o estado do KnoxGuard,
+VaultKeeper, Keymaster, TEE ou AVB.
+
+No Android 17 há dois serviços de framework: o legado `KnoxGuardSeService` e
+o novo `KnoxGuard30Service`. O `unica/mods/deknox` já neutralizava somente o
+primeiro. Ele agora também mantém o Binder do segundo publicável, mas remove
+do construtor a inicialização do controlador KG30, que chama
+`ISehKg30/default` e não pode funcionar no kernel/vendor Exynos 990. Isso é
+uma compatibilidade da base portável: não adiciona driver, não falsifica props
+e não altera TEE, Keymaster, AVB ou o estado persistente do Knox.
+
+Não confundir esse guard com `unica/mods/deknox`: o segundo remove o cliente
+KnoxGuard de `/system` e altera `services.jar`; ele também não remove drivers
+da vendor. As remoções de binários em `platform/exynos990/patches/vendor`
+referem-se ao HAL de vibração, não ao KnoxGuard.
+
 
 ## M21s camera `camera-feature.xml`: authoritative baseline and state (2026-10-05)
 

@@ -8,8 +8,70 @@ if [ "$SOURCE_PLATFORM_SDK_VERSION" -ge "36" ]; then
     LOG "- Using non-destructive Android 16 Knox compatibility mode"
     SET_PROP_IF_DIFF "vendor" "ro.security.fips.ux" "Disabled"
 
+    # KnoxGuard is disabled in services.jar below.  Leaving its privileged
+    # client installed makes zygote repeatedly abort while assigning the
+    # legacy fixed UID 5959 because the Android 17 seapp policy has no matching
+    # domain.  Remove only this now-orphaned client and its registrations.
+    DELETE_FROM_WORK_DIR "system" "system/etc/permissions/privapp-permissions-com.samsung.android.kgclient.xml"
+    DELETE_FROM_WORK_DIR "system" "system/etc/permissions/signature-permissions-com.samsung.android.kgclient.xml"
+    DELETE_FROM_WORK_DIR "system" "system/etc/sysconfig/preinstalled-packages-com.samsung.android.kgclient.xml"
+    DELETE_FROM_WORK_DIR "system" "system/priv-app/KnoxGuard"
+
     APPLY_PATCH "system" "system/framework/services.jar" \
         "$MODPATH/knoxguard/services.jar/0001-Disable-KnoxGuard.patch"
+
+    # Android 17 additionally registers KnoxGuard 3.0.  The legacy patch
+    # above only covers KnoxGuardSeService; leaving the new constructor intact
+    # makes it query ISehKg30 and initialise a controller which the Exynos 990
+    # vendor/kernel cannot provide.  Keep the Binder service publishable for
+    # framework clients, but omit that unavailable vendor initialisation.
+    DECODE_APK "system" "system/framework/services.jar"
+    KG30_SERVICE_SMALI="$(find "$APKTOOL_DIR/system/framework/services.jar" -type f \
+        -path '*/com/samsung/android/knoxguard30/service/KnoxGuard30Service.smali' \
+        -printf '%P\n' -quit)"
+    if [ "$KG30_SERVICE_SMALI" ]; then
+        KG30_SERVICE_FILE="$APKTOOL_DIR/system/framework/services.jar/$KG30_SERVICE_SMALI"
+        KG30_CONSTRUCTOR="$(sed -n '/^\.method public constructor <init>(Landroid\/content\/Context;)V$/,/^\.end method$/p' \
+            "$KG30_SERVICE_FILE")"
+        if grep -Fq 'getStateAndSetToKGSystemProperty' <<< "$KG30_CONSTRUCTOR"; then
+            LOG "- Disabling unavailable KnoxGuard 3.0 vendor initialisation"
+            awk '
+                /^\.method public constructor <init>\(Landroid\/content\/Context;\)V$/ {
+                    print
+                    print "    .locals 0"
+                    print ""
+                    print "    invoke-direct {p0}, Lcom/samsung/android/knoxguard/IKnoxGuardManager$Stub;-><init>()V"
+                    print ""
+                    print "    return-void"
+                    in_constructor = 1
+                    next
+                }
+                in_constructor && /^\.end method$/ {
+                    print
+                    in_constructor = 0
+                    next
+                }
+                in_constructor { next }
+                { print }
+            ' "$KG30_SERVICE_FILE" > "$KG30_SERVICE_FILE.tmp" && \
+                mv "$KG30_SERVICE_FILE.tmp" "$KG30_SERVICE_FILE" || return 1
+        elif ! grep -Fq 'invoke-direct {p0}, Lcom/samsung/android/knoxguard/IKnoxGuardManager$Stub;-><init>()V' \
+                <<< "$KG30_CONSTRUCTOR"; then
+            ABORT "Unsupported KnoxGuard 3.0 constructor layout"
+            return 1
+        fi
+        KG30_CONSTRUCTOR="$(sed -n '/^\.method public constructor <init>(Landroid\/content\/Context;)V$/,/^\.end method$/p' \
+            "$KG30_SERVICE_FILE")"
+        if grep -Fq 'getStateAndSetToKGSystemProperty' <<< "$KG30_CONSTRUCTOR" || \
+                ! grep -Fq 'invoke-direct {p0}, Lcom/samsung/android/knoxguard/IKnoxGuardManager$Stub;-><init>()V' \
+                    <<< "$KG30_CONSTRUCTOR"; then
+            ABORT "Failed to neutralize KnoxGuard 3.0 vendor initialisation"
+            return 1
+        fi
+    else
+        LOG "- KnoxGuard 3.0 service is absent; legacy KnoxGuard patch is sufficient"
+    fi
+    unset KG30_SERVICE_SMALI KG30_SERVICE_FILE KG30_CONSTRUCTOR
 
     SET_FLOATING_FEATURE_CONFIG \
         "SEC_FLOATING_FEATURE_FRAMEWORK_SUPPORT_BLOCKCHAIN_SERVICE" --delete
@@ -17,10 +79,16 @@ if [ "$SOURCE_PLATFORM_SDK_VERSION" -ge "36" ]; then
     PRODUCT_PACKAGES_RUNE="$(find "$APKTOOL_DIR/system/framework/framework.jar" \
         -type f -path '*/com/samsung/android/ProductPackagesRune.smali' -printf '%P\n' -quit)"
     if [ "$PRODUCT_PACKAGES_RUNE" ]; then
-        SMALI_PATCH "system" "system/framework/framework.jar" \
-            "$PRODUCT_PACKAGES_RUNE" "replaceall" \
-            "SERVICE_SAMSUNG_BLOCKCHAIN:Z = true" \
-            "SERVICE_SAMSUNG_BLOCKCHAIN:Z = false"
+        PRODUCT_PACKAGES_RUNE_FILE="$APKTOOL_DIR/system/framework/framework.jar/$PRODUCT_PACKAGES_RUNE"
+        if grep -Fq 'SERVICE_SAMSUNG_BLOCKCHAIN:Z = true' "$PRODUCT_PACKAGES_RUNE_FILE"; then
+            SMALI_PATCH "system" "system/framework/framework.jar" \
+                "$PRODUCT_PACKAGES_RUNE" "replaceall" \
+                "SERVICE_SAMSUNG_BLOCKCHAIN:Z = true" \
+                "SERVICE_SAMSUNG_BLOCKCHAIN:Z = false"
+        else
+            LOG "ProductPackagesRune blockchain service is already disabled; skipping duplicate patch"
+        fi
+        unset PRODUCT_PACKAGES_RUNE_FILE
     fi
     unset PRODUCT_PACKAGES_RUNE
     return 0

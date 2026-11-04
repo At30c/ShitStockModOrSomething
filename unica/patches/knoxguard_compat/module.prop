@@ -1,0 +1,6 @@
+id=knoxguard_compat
+name=KnoxGuard stack compatibility audit (disabled)
+version=1.0
+versionCode=1
+author=At30c
+description=Manual audit for the S947B KG30 and Exynos 990 vendor/kernel mismatch; disabled so it cannot block normal builds.
