@@ -362,6 +362,14 @@ if $BUILD_ROM; then
     echo -n "$(GET_WORK_DIR_HASH)" > "$WORK_DIR/.completed"
 fi
 
+# Runs on every build, also when the work dir is reused: the source commit
+# can change without changing the contents GET_WORK_DIR_HASH looks at.
+if [ -d "$WORK_DIR" ]; then
+    LOG_STEP_IN true "Stamping build commit"
+    "$SRC_DIR/scripts/internal/stamp_build_info.sh" || exit 1
+    LOG_STEP_OUT
+fi
+
 if $BUILD_ZIP; then
     if $BUILD_INCREMENTAL; then
         mkdir -p "$INCREMENTAL_DIR"

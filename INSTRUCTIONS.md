@@ -12243,3 +12243,26 @@ Validação: o módulo novo e os três antigos (do commit anterior) foram aplica
 a WORK_DIRs iguais nos modos AIDL e rollback e num alvo fora do y2s. Os
 arquivos instalados, o `fs_config`, o `file_context` e os contextos SELinux
 saíram idênticos byte a byte.
+
+## Commit da build na ROM e nas configurações UN1CA (04/11/2026)
+
+`scripts/internal/stamp_build_info.sh` roda em toda build, logo depois de o
+`make_rom.sh` criar ou reaproveitar o WORK_DIR. Ele precisa rodar mesmo quando
+o WORK_DIR é reaproveitado, porque o `GET_WORK_DIR_HASH` só olha o conteúdo dos
+arquivos, e o commit pode mudar sem que o conteúdo mude. O script grava:
+
+* `ro.unica.commit`: commit de 8 dígitos, com `-dirty` quando a árvore tinha
+  mudanças não commitadas (arquivos ignorados, como `out/`, não contam);
+* `ro.unica.fingerprint`: agora com o commit real como build ID. Antes ele
+  saía com a versão no lugar do commit, porque este fork gera `ROM_VERSION`
+  sem o sufixo `-<commit>` do UN1CA;
+* `/system/etc/unica_build_info.txt`: commit completo, branch, data e assunto
+  do commit, data da build e, se a árvore estava suja, a lista de arquivos
+  diferentes do commit e o `git diff --stat`. É o primeiro arquivo a olhar num
+  relato de bug: `adb shell cat /system/etc/unica_build_info.txt`.
+
+A tela "UN1CA" das configurações mostra `2.0.1 (Zonks) - 165c4be0` (ou
+`... - 165c4be0-dirty`). O `getSummary()` do `ROMVersionPreferenceController`
+omite a parte do commit quando a propriedade não existe. O commit também
+aparece como `commit=` no `build_info.txt` do target-files e dos zips, e numa
+linha `Commit:` no cabeçalho mostrado pelo recovery.

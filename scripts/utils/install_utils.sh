@@ -130,6 +130,9 @@ PRINT_BUILD_INFO()
     grep "^device" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s
     echo -n "version="
     grep "^version" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s
+    if grep -q "^commit=." <<< "$TARGET_BUILD_INFO"; then
+        grep "^commit=" <<< "$TARGET_BUILD_INFO"
+    fi
     echo -n "timestamp="
     grep "^timestamp" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s
     echo -n "security_patch_version="
@@ -184,6 +187,11 @@ PRINT_HEADER()
     echo -n 'ui_print("'
     echo -n "One UI version: $ONEUI_VERSION"
     echo    '");'
+    if grep -q "^commit=." <<< "$BUILD_INFO"; then
+        echo -n 'ui_print("'
+        echo -n "Commit: $(grep "^commit=" <<< "$BUILD_INFO" | cut -d "=" -f 2 -s)"
+        echo    '");'
+    fi
     echo -n 'ui_print("'
     echo -n "Source: $SOURCE_FINGERPRINT"
     echo    '");'

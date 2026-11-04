@@ -76,6 +76,7 @@ GENERATE_BUILD_INFO()
         [ "$(GET_PROP "system" "ro.unica.version")" ] && GET_PROP "system" "ro.unica.version" || echo "$ROM_VERSION"
         echo -n "timestamp="
         [ "$(GET_PROP "system" "ro.unica.timestamp")" ] && GET_PROP "system" "ro.unica.timestamp" || echo "$ROM_BUILD_TIMESTAMP"
+        echo "commit=$(GET_PROP "system" "ro.unica.commit")"
         echo "os_version=$(GET_PROP "system" "ro.build.version.release")"
         echo "oneui_version=$(GET_PROP "system" "ro.build.version.oneui")"
         echo "build_incremental=$(GET_PROP "system" "ro.build.version.incremental")"

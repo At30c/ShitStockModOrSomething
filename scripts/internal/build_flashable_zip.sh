@@ -96,6 +96,7 @@ GENERATE_BUILD_INFO()
     {
         echo "device=$TARGET_CODENAME"
         echo "version=$ROM_VERSION"
+        echo "commit=$(GET_PROP "system" "ro.unica.commit")"
         echo "timestamp=$ROM_BUILD_TIMESTAMP"
         echo "security_patch_version=$(GET_PROP "system" "ro.build.version.security_patch")"
         # TODO
@@ -494,6 +495,11 @@ PRINT_HEADER()
     echo -n 'ui_print("'
     echo -n "Welcome to UN1CA $ROM_CODENAME $ROM_VERSION for $TARGET_NAME!"
     echo    '");'
+    if [ "$(GET_PROP "system" "ro.unica.commit")" ]; then
+        echo -n 'ui_print("'
+        echo -n "Commit: $(GET_PROP "system" "ro.unica.commit")"
+        echo    '");'
+    fi
     echo    'ui_print("UN1CA developed by the UN1CA maintainers");'
     echo    'ui_print("UN1CA build system coded by salvo_giangri @XDAforums");'
     echo    'ui_print("Special thanks to all UN1CA maintainers, contributors and testers");'
