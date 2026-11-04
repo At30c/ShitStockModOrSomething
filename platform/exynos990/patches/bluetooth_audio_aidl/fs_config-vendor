@@ -1,0 +1,5 @@
+vendor/etc 0 2000 755 capabilities=0x0
+vendor/etc/vintf 0 2000 755 capabilities=0x0
+vendor/etc/vintf/manifest 0 2000 755 capabilities=0x0
+vendor/etc/vintf/manifest/bluetooth_audio.xml 0 0 644 capabilities=0x0
+vendor/etc/bluetooth_audio_policy_configuration.xml 0 0 644 capabilities=0x0

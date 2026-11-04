@@ -1,0 +1,7 @@
+id=bluetooth_audio_aidl
+name=Exynos 990 Bluetooth Audio AIDL provider
+version=1.0
+versionCode=1
+author=At30c
+priority=60
+description=Adds the Android 17 Bluetooth Audio AIDL/FMQ provider while keeping the Exynos 990 Broadcom HCI and Samsung HIDL compatibility path.

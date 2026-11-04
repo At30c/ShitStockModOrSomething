@@ -8824,6 +8824,67 @@ continuava mostrando `RE Vulkan (Ganesh)`. O patch Exynos 990 agora define
 compositor. Isso mantém o RenderEngine moderno e encadeado, troca somente a
 composição do sistema para Skia OpenGL ES e preserva Vulkan para aplicativos.
 
+### Exynos 990: A2DP SBC em centrais automotivas (2026-10-11)
+
+No y2s, o fone H02D Pro ANC reproduz áudio normalmente porque negocia AAC a
+44,1 kHz pelo encoder de software. A central `Volkswalgem de Ats0c` não anuncia
+codecs opcionais e negocia somente SBC. Durante a reprodução do Spotify, o
+`AudioPolicyManager` criou e removeu repetidamente os patches da saída Bluetooth
+SBC, sem entregar áudio à central. O `dumpsys bluetooth_manager` confirmou que
+o offload A2DP estava ativo e incluía SBC, aptX e SSC.
+
+A vendor original G986B fornece o HAL Samsung/Exynos de offload A2DP 3.0, mas a
+base Android 17 S947B usa um APEX Bluetooth mais novo e mantém internamente o
+perfil de offload `sbc-aptx-ssc-hifi`. A primeira correção usada no teste
+definia `persist.bluetooth.a2dp_offload.disabled=true`, a mesma propriedade do
+controle privilegiado `BluetoothA2dpHwOffloadPreferenceController` das Opções
+do desenvolvedor. Ela comprovou que a falha estava no caminho de offload SBC,
+mas transferia toda a codificação A2DP ao caminho de software após reiniciar.
+
+Em 2026-10-16, a desativação global foi substituída por uma seleção granular.
+O APEX Bluetooth do r11s já contém o encoder SBC atualizado e consulta
+`persist.bluetooth.samsung.a2dp_offload.cap` tanto ao montar a lista de codecs
+quanto ao decidir o caminho de uma conexão. O valor padrão da Samsung era
+`sbc-aptx-ssc-hifi`; no Exynos 990 ele agora é `aptx-ssc-hifi`, retirando
+somente SBC do offload. Assim, centrais que aceitam apenas SBC usam o encoder
+de software atual, enquanto aptX/SSC continuam no DSP e o offload A2DP global
+permanece habilitado. O `a2dpcom.bin` mais novo do S947B não foi importado:
+apesar de também conter encoders SBC/AAC, ele pertence ao DSP de outro SoC e
+ao HAL Bluetooth Audio AIDL v5, enquanto o y2s usa o HAL Samsung/Exynos HIDL
+3.0. A firmware final G986B usada pelo port, `G986BXXSNHYB1`, é o conjunto
+compatível adotado pelo projeto para o Exynos 990.
+
+### Exynos 990: provider AIDL do áudio Bluetooth (2026-10-27)
+
+O S26+ foi auditado como referência de transporte, sem copiar o seu serviço
+Qualcomm nem o firmware HCI. A vendor dele anuncia
+`android.hardware.bluetooth.audio/IBluetoothAudioProviderFactory/default` em
+AIDL v5 e usa `android.hardware.bluetooth.audio-impl.so` junto de
+`libbluetooth_audio_session_aidl.so`; o áudio PCM passa por FMQ. A vendor
+G986B do y2s só anunciava o provider Samsung HIDL 2.1, embora o APEX Bluetooth
+do Android 17 já procurasse o provider AIDL. Essa diferença explica a sessão
+SBC que chegava ao `audio.primary` como `BT A2DP Off/suspended` e fazia o
+`libaudioproxy_9830` descartar buffers.
+
+Foi criado o módulo
+`platform/exynos990/patches/bluetooth_audio_aidl`. Ele importa da vendor
+S947B somente o provider AIDL genérico e a cadeia ELF necessária: NDK de áudio
+Bluetooth v5, áudio comum v4, tipos de áudio v4, FMQ, FlatBuffers, aconfig e
+flags. O módulo também registra o fragmento VINTF AIDL e atualiza o XML de
+política Bluetooth para o perfil PCM da implementação Android 17.
+
+O HCI Broadcom, os arquivos de firmware, `android.hardware.bluetooth@1.0` e o
+HAL HIDL Samsung de áudio permanecem no y2s. O `libbluetooth_audio_session_aidl`
+continua usando as interfaces HIDL 2.0/2.1 existentes apenas como ponte para
+o backend proprietário; ele não exige o HCI QTI do S26+.
+
+No primeiro teste a propriedade
+`persist.bluetooth.a2dp_offload.disabled=true` permanece ativa para selecionar
+SBC por software pelo provider AIDL/FMQ, evitando o estado de suspensão do
+offload Exynos enquanto Buds 3 Pro e a central do carro são validados. Depois
+da validação, o offload deve ser reativado por codec, começando por SBC, sem
+voltar ao desligamento global.
+
 ### Exynos 990: aquecimento causado pelo hotword do Google (2026-10-12)
 
 Após instalar a build atualizada no y2s, o iNTC estava ausente como esperado.

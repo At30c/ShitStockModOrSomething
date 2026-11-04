@@ -1,0 +1,10 @@
+<!-- Android 17 Bluetooth Audio provider factory. The physical y2s HCI stays
+     on the Broadcom HIDL service; this fragment only supplies the audio
+     session transport used by the Bluetooth apex. -->
+<manifest version="9.0" type="device">
+    <hal format="aidl">
+        <name>android.hardware.bluetooth.audio</name>
+        <version>5</version>
+        <fqname>IBluetoothAudioProviderFactory/default</fqname>
+    </hal>
+</manifest>

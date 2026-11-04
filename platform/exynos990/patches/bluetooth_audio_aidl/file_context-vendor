@@ -1,0 +1,5 @@
+/vendor/etc u:object_r:vendor_configs_file:s0
+/vendor/etc/vintf u:object_r:vendor_configs_file:s0
+/vendor/etc/vintf/manifest u:object_r:vendor_configs_file:s0
+/vendor/etc/vintf/manifest/bluetooth_audio\.xml u:object_r:vendor_configs_file:s0
+/vendor/etc/bluetooth_audio_policy_configuration\.xml u:object_r:vendor_configs_file:s0
