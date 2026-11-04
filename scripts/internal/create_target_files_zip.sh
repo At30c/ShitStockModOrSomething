@@ -140,10 +140,10 @@ if $TARGET_USE_DYNAMIC_PARTITIONS; then
 fi
 
 if [ -d "$WORK_DIR/kernel" ]; then
-    KERNEL_BINS="boot.img dt.img dtbo.img init_boot.img vendor_boot.img"
-
-    for f in $KERNEL_BINS; do
-        [ ! -f "$WORK_DIR/kernel/$f" ] && continue
+    # Copy every kernel image, like the full ZIP does: target installers flash
+    # extra ones themselves (dtbo_lte.img on y2s).
+    while IFS= read -r f; do
+        f="$(basename "$f")"
 
         LOG_STEP_IN "- Copying $f"
         EVAL "cp -a \"$WORK_DIR/kernel/$f\" \"$TMP_DIR/$f\"" || exit 1
@@ -151,7 +151,7 @@ if [ -d "$WORK_DIR/kernel" ]; then
             SIGN_IMAGE_WITH_AVB "$TMP_DIR/$f" || exit 1
         fi
         LOG_STEP_OUT
-    done
+    done < <(find "$WORK_DIR/kernel" -maxdepth 1 -type f -name "*.img" | sort)
 fi
 
 if [[ "${TARGET_BUILD_PHYSICAL_PARTITIONS:-false}" == "true" ]]; then

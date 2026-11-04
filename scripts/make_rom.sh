@@ -383,6 +383,12 @@ if $BUILD_ZIP; then
 
         # Promote the target only after the ZIP was generated successfully. A
         # failed build must never destroy the last known installable baseline.
+        # The previous baseline is kept: if the ZIP just built is never
+        # installed, the next one can be rebuilt against it with
+        # build_flashable_zip.sh -i.
+        if [ -f "$INCREMENTAL_BASE" ]; then
+            mv -f "$INCREMENTAL_BASE" "$INCREMENTAL_DIR/base-target-files.prev.zip"
+        fi
         mv -f "$INCREMENTAL_TARGET" "$INCREMENTAL_BASE"
         LOG "- Updated incremental baseline: ${INCREMENTAL_BASE//$SRC_DIR\//}"
     else

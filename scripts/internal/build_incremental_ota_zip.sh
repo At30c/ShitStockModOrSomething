@@ -19,7 +19,228 @@ fi
 PRIVATE_KEY_PATH+=".pk8"
 PUBLIC_KEY_PATH+=".x509.pem"
 
-trap 'rm -rf "$TMP_DIR"' EXIT INT
+# Host-side verification results (target care ranges and hashes) used by the
+# updater-script; never packaged.
+VERIFY_DIR="$TMP_DIR/.verify"
+# Extra free space kept on the build disk; a full disk once truncated files
+# silently.
+SPACE_MARGIN=$((1024 * 1024 * 1024))
+
+trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+CHECK_HOST_TOOLS()
+{
+    local TOOLS="7z brotli bspatch img2sdat python3 unzip"
+    if ! $DEBUG || $ROM_IS_OFFICIAL; then
+        TOOLS+=" signapk"
+    fi
+
+    for t in $TOOLS; do
+        if ! command -v "$t" &> /dev/null; then
+            LOGE "Required tool not found: $t"
+            exit 1
+        fi
+    done
+}
+
+CHECK_INPUT_ZIP()
+{
+    local FILE="$1"
+
+    if ! unzip -tq "$FILE" &> /dev/null; then
+        LOGE "File is corrupted: ${FILE//$SRC_DIR\//}"
+        exit 1
+    fi
+    if ! unzip -Z1 "$FILE" | grep -qx "build_info.txt" || unzip -Z1 "$FILE" | grep -q "^META-INF/"; then
+        LOGE "File not valid: ${FILE//$SRC_DIR\//}"
+        exit 1
+    fi
+}
+
+# CHECK_FREE_SPACE <bytes> <purpose>
+CHECK_FREE_SPACE()
+{
+    local NEEDED="$1"
+    local PURPOSE="$2"
+
+    local AVAILABLE
+    AVAILABLE="$(df --output=avail -B1 "$TMP_DIR" | tail -n 1 | tr -d " ")"
+
+    if [ "$AVAILABLE" -lt "$((NEEDED + SPACE_MARGIN))" ]; then
+        LOGE "Not enough free space for $PURPOSE: $((NEEDED / 1048576)) MiB + $((SPACE_MARGIN / 1048576)) MiB margin needed, $((AVAILABLE / 1048576)) MiB available"
+        exit 1
+    fi
+}
+
+# VERIFY_BLOCK_UPDATE <partition> [source image]
+# Replays the generated transfer list on the source image and checks the result
+# against the target image, before the payload is compressed.
+VERIFY_BLOCK_UPDATE()
+{
+    local PARTITION="$1"
+    local SOURCE_IMAGE="$2"
+    local TARGET_IMAGE="$TMP_DIR/target/$PARTITION.img"
+
+    # The verifier only stores the blocks the update writes, at most the
+    # target size.
+    CHECK_FREE_SPACE "$(GET_IMAGE_SIZE "$TARGET_IMAGE")" "verifying $PARTITION"
+
+    local CMD
+    CMD="python3 -I \"$SRC_DIR/scripts/internal/verify_block_ota.py\""
+    CMD+=" --lib-dir \"$(dirname "$(command -v img2sdat)")\""
+    CMD+=" --work-dir \"$VERIFY_DIR\""
+    CMD+=" --target \"$TARGET_IMAGE\""
+    [ "$SOURCE_IMAGE" ] && CMD+=" --source \"$SOURCE_IMAGE\""
+    CMD+=" --prefix \"$TMP_DIR/$PARTITION\""
+
+    LOG "- Verifying $PARTITION.img block update"
+    EVAL "$CMD" || exit 1
+
+    local f
+    for f in tgt_ranges tgt_sha1 ext_ranges ext_sha1; do
+        if [ -f "$TMP_DIR/$PARTITION.$f" ]; then
+            mv -f "$TMP_DIR/$PARTITION.$f" "$VERIFY_DIR/$PARTITION.$f"
+        fi
+    done
+}
+
+# CHECK_RAW_IMAGE <file>
+# Raw images are flashed with package_extract_file and read back with
+# range_sha1, so they must fit their partition and be block aligned.
+CHECK_RAW_IMAGE()
+{
+    local FILE="$1"
+
+    local NAME
+    local SIZE
+    local PARTITION_SIZE
+    NAME="$(basename "$FILE" | sed "s/\.img$//; s/\.bin$//")"
+    SIZE="$(stat -c "%s" "$FILE")"
+    PARTITION_SIZE="TARGET_$(tr "[:lower:]" "[:upper:]" <<< "$NAME")_PARTITION_SIZE"
+    PARTITION_SIZE="${!PARTITION_SIZE//none/}"
+
+    if [ "$SIZE" -eq 0 ]; then
+        LOGE "$(basename "$FILE") is empty"
+        exit 1
+    fi
+    if [ "$PARTITION_SIZE" ] && [ "$SIZE" -gt "$PARTITION_SIZE" ]; then
+        LOGE "$(basename "$FILE") ($SIZE) is bigger than its partition ($PARTITION_SIZE)"
+        exit 1
+    fi
+}
+
+# PRINT_RAW_IMAGE_INSTALL <file> <mountpoint> <label>
+PRINT_RAW_IMAGE_INSTALL()
+{
+    local IMG="$1"
+    local MOUNTPOINT="$2"
+    local LABEL="$3"
+
+    local SIZE
+    SIZE="$(stat -c "%s" "$TMP_DIR/$IMG")"
+
+    echo -n 'ui_print("'
+    echo -n "$LABEL"
+    echo    '");'
+    echo -n "package_extract_file(\"$IMG\", "
+    GET_DEVICE_FROM_MOUNTPOINT "$MOUNTPOINT"
+    echo    ") ||"
+    echo    "  abort(\"E2001: Failed to flash $IMG.\");"
+    if [ "$((SIZE % 4096))" -eq 0 ]; then
+        echo -n "range_sha1("
+        GET_DEVICE_FROM_MOUNTPOINT "$MOUNTPOINT"
+        echo -n ", \"2,0,$((SIZE / 4096))\") == \""
+        echo -n "$(sha1sum "$TMP_DIR/$IMG" | cut -d " " -f 1)"
+        echo    '" ||'
+        echo    "  abort(\"E2002: ${MOUNTPOINT#/} partition has unexpected contents after flashing $IMG.\");"
+    fi
+}
+
+# PRINT_PARTITION_UPDATE <partition>
+PRINT_PARTITION_UPDATE()
+{
+    local p="$1"
+
+    local CODE=2
+    [[ "$p" == "system" ]] && CODE=1
+
+    $TARGET_USE_DYNAMIC_PARTITIONS && echo -e "\n# Patch partition $p\n"
+    echo -n 'ui_print("Patching '
+    echo -n "$p"
+    if [ -s "$TMP_DIR/$p.patch.dat" ]; then
+        echo -n " image after verification."
+    else
+        echo -n " image unconditionally..."
+    fi
+    echo    '");'
+    if [[ "$p" == "system" ]]; then
+        echo -n 'show_progress(0.'
+        echo -n "$(bc -l <<< "9 - $PARTITION_COUNT")"
+        echo    '00000, 0);'
+    else
+        echo    'show_progress(0.100000, 0);'
+    fi
+    echo -n "block_image_update("
+    GET_DEVICE_FROM_MOUNTPOINT "/$p"
+    echo -n ', package_extract_file("'
+    echo -n "$p.transfer.list"
+    echo -n '"), "'
+    echo -n "$p.new.dat"
+    [ -f "$TMP_DIR/$p.new.dat.br" ] && echo -n ".br"
+    echo -n '", "'
+    echo -n "$p.patch.dat"
+    echo    '") ||'
+    echo    "  abort(\"E${CODE}001: Failed to update $p image.\");"
+
+    # https://android.googlesource.com/platform/build/+/refs/tags/android-16.0.0_r4/tools/releasetools/common.py#3557
+    echo -n "if range_sha1("
+    GET_DEVICE_FROM_MOUNTPOINT "/$p"
+    echo -n ", \"$(cat "$VERIFY_DIR/$p.tgt_ranges")\") == \""
+    echo -n "$(cat "$VERIFY_DIR/$p.tgt_sha1")"
+    echo    '" then'
+    echo    "ui_print(\"Verified the updated $p image.\");"
+    echo    "else"
+    echo    "  abort(\"E${CODE}002: $p partition has unexpected contents after OTA update\");"
+    echo    "endif;"
+    if [ -f "$VERIFY_DIR/$p.ext_ranges" ]; then
+        echo -n "if range_sha1("
+        GET_DEVICE_FROM_MOUNTPOINT "/$p"
+        echo -n ", \"$(cat "$VERIFY_DIR/$p.ext_ranges")\") != \""
+        echo -n "$(cat "$VERIFY_DIR/$p.ext_sha1")"
+        echo    '" then'
+        echo    "  abort(\"E${CODE}003: $p partition has unexpected non-zero contents after OTA update\");"
+        echo    "endif;"
+    fi
+}
+
+# Lists the package files the updater-script extracts.
+LIST_PACKAGE_REFERENCES()
+{
+    local SCRIPT_FILE="$TMP_DIR/META-INF/com/google/android/updater-script"
+
+    {
+        grep -oE 'package_extract_file\("[^"]+"' "$SCRIPT_FILE" | cut -d '"' -f 2
+        grep -oE '"[^"/ ]+\.(new\.dat(\.br)?|patch\.dat)"' "$SCRIPT_FILE" | tr -d '"'
+    } | sort -u
+}
+
+CHECK_PACKAGE_REFERENCES()
+{
+    local LISTING="$1"
+
+    local MISSING=false
+    while IFS= read -r f; do
+        if [ "$LISTING" ]; then
+            grep -qxF "$f" <<< "$LISTING" && continue
+        else
+            [ -f "$TMP_DIR/$f" ] && continue
+        fi
+        LOGE "updater-script references a file missing from the package: $f"
+        MISSING=true
+    done < <(LIST_PACKAGE_REFERENCES)
+
+    ! $MISSING
+}
 
 CALCULATE_MIN_CACHE_SIZE()
 {
@@ -298,36 +519,7 @@ GENERATE_UPDATER_SCRIPT()
                     continue
                 fi
                 if grep -q "Shrink partition $p " "$TMP_DIR/dynamic_partitions_op_list"; then
-                    echo -e "\n# Patch partition $p\n"
-                    echo -n 'ui_print("Patching '
-                    echo -n "$p"
-                    if [ -s "$TMP_DIR/$p.patch.dat" ]; then
-                        echo -n " image after verification."
-                    else
-                        echo -n " image unconditionally..."
-                    fi
-                    echo    '");'
-                    if [[ "$p" == "system" ]]; then
-                        echo -n 'show_progress(0.'
-                        echo -n "$(bc -l <<< "9 - $PARTITION_COUNT")"
-                        echo    '00000, 0);'
-                    else
-                        echo    'show_progress(0.100000, 0);'
-                    fi
-                    echo -n "block_image_update("
-                    GET_DEVICE_FROM_MOUNTPOINT "/$p"
-                    echo -n ', package_extract_file("'
-                    echo -n "$p.transfer.list"
-                    echo -n '"), "'
-                    echo -n "$p.new.dat"
-                    [ -f "$TMP_DIR/$p.new.dat.br" ] && echo -n ".br"
-                    echo -n '", "'
-                    echo -n "$p.patch.dat"
-                    echo    '") ||'
-                    echo -n '  abort("'
-                    [[ "$p" == "system" ]] && echo -n "E1001" || echo -n "E2001"
-                    echo -n ": Failed to update $p image."
-                    echo    '");'
+                    PRINT_PARTITION_UPDATE "$p"
                 fi
             done
             if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify" ]; then
@@ -347,57 +539,18 @@ GENERATE_UPDATER_SCRIPT()
                 continue
             fi
             if ! $TARGET_USE_DYNAMIC_PARTITIONS || ! grep -q "Shrink partition $p " "$TMP_DIR/dynamic_partitions_op_list"; then
-                $TARGET_USE_DYNAMIC_PARTITIONS && echo -e "\n# Patch partition $p\n"
-                echo -n 'ui_print("Patching '
-                echo -n "$p"
-                if [ -s "$TMP_DIR/$p.patch.dat" ]; then
-                    echo -n " image after verification."
-                else
-                    echo -n " image unconditionally..."
-                fi
-                echo    '");'
-                if [[ "$p" == "system" ]]; then
-                    echo -n 'show_progress(0.'
-                    echo -n "$(bc -l <<< "9 - $PARTITION_COUNT")"
-                    echo    '00000, 0);'
-                else
-                    echo    'show_progress(0.100000, 0);'
-                fi
-                echo -n "block_image_update("
-                GET_DEVICE_FROM_MOUNTPOINT "/$p"
-                echo -n ', package_extract_file("'
-                echo -n "$p.transfer.list"
-                echo -n '"), "'
-                echo -n "$p.new.dat"
-                [ -f "$TMP_DIR/$p.new.dat.br" ] && echo -n ".br"
-                echo -n '", "'
-                echo -n "$p.patch.dat"
-                echo    '") ||'
-                echo -n '  abort("'
-                [[ "$p" == "system" ]] && echo -n "E1001" || echo -n "E2001"
-                echo -n ": Failed to update $p image."
-                echo    '");'
+                PRINT_PARTITION_UPDATE "$p"
             fi
         done
         $TARGET_USE_DYNAMIC_PARTITIONS && echo -e "\n# --- End patching dynamic partitions ---\n"
 
         for b in $KERNEL_BINS; do
             if [ -f "$TMP_DIR/$b.img" ]; then
-                echo -n 'ui_print("Full Patching '
-                echo -n "$b.img img..."
-                echo    '");'
-                echo -n 'package_extract_file("'
-                echo -n "$b.img"
-                echo -n '", '
-                GET_DEVICE_FROM_MOUNTPOINT "/$b"
-                echo    ");"
+                PRINT_RAW_IMAGE_INSTALL "$b.img" "/$b" "Full Patching $b.img img..."
             fi
         done
         if [ -f "$TMP_DIR/boot.img" ]; then
-            echo    'ui_print("Installing boot image...");'
-            echo -n 'package_extract_file("boot.img", '
-            GET_DEVICE_FROM_MOUNTPOINT "/boot"
-            echo    ");"
+            PRINT_RAW_IMAGE_INSTALL "boot.img" "/boot" "Installing boot image..."
         fi
 
         if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/install-end.edify" ]; then
@@ -415,16 +568,37 @@ VERIFY_SOURCE_COMPATIBILITY()
 {
     local SOURCE_DEVICE
     local SOURCE_SPL
+    local SOURCE_TIMESTAMP
     local TARGET_DEVICE
     local TARGET_SPL
+    local TARGET_TIMESTAMP
 
     SOURCE_DEVICE="$(grep "^device" <<< "$SOURCE_BUILD_INFO" | cut -d "=" -f 2 -s)"
     SOURCE_SPL="$(grep "^security_patch" <<< "$SOURCE_BUILD_INFO" | cut -d "=" -f 2 -s)"
+    SOURCE_TIMESTAMP="$(grep "^timestamp" <<< "$SOURCE_BUILD_INFO" | cut -d "=" -f 2 -s)"
     TARGET_DEVICE="$(grep "^device" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s)"
     TARGET_SPL="$(grep "^security_patch" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s)"
+    TARGET_TIMESTAMP="$(grep "^timestamp" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s)"
 
     if [[ "$SOURCE_DEVICE" != "$TARGET_DEVICE" ]]; then
         LOGE "Source device ($SOURCE_DEVICE) does not match target device ($TARGET_DEVICE)"
+        exit 1
+    fi
+
+    # The package is built for one partition layout and one set of models.
+    local KEY
+    for KEY in model use_dynamic_partitions super_partition_size; do
+        if [[ "$(grep "^$KEY=" <<< "$SOURCE_BUILD_INFO")" != "$(grep "^$KEY=" <<< "$TARGET_BUILD_INFO")" ]]; then
+            LOGE "Source and target differ in \"$KEY\"; build a full ZIP instead"
+            exit 1
+        fi
+    done
+
+    if ! [[ "$SOURCE_TIMESTAMP" =~ ^[0-9]+$ && "$TARGET_TIMESTAMP" =~ ^[0-9]+$ ]]; then
+        LOGE "Source or target build_info.txt has no valid timestamp"
+        exit 1
+    elif [ "$SOURCE_TIMESTAMP" -ge "$TARGET_TIMESTAMP" ]; then
+        LOGE "Target build ($TARGET_TIMESTAMP) is not newer than the source build ($SOURCE_TIMESTAMP)"
         exit 1
     fi
 
@@ -444,19 +618,26 @@ SOURCE_ZIP="$1"
 TARGET_ZIP="$2"
 OUTPUT_FILE="$3"
 
-if ! unzip -l "$SOURCE_ZIP" | grep -q "build_info.txt" || unzip -l "$SOURCE_ZIP" | grep -q "META-INF"; then
-    LOGE "File not valid: ${SOURCE_ZIP//$SRC_DIR\//}"
-    exit 1
-fi
+CHECK_HOST_TOOLS
 
-if ! unzip -l "$TARGET_ZIP" | grep -q "build_info.txt" || unzip -l "$TARGET_ZIP" | grep -q "META-INF"; then
-    LOGE "File not valid: ${TARGET_ZIP//$SRC_DIR\//}"
+LOG "- Checking source and target files"
+CHECK_INPUT_ZIP "$SOURCE_ZIP"
+CHECK_INPUT_ZIP "$TARGET_ZIP"
+if cmp -s "$SOURCE_ZIP" "$TARGET_ZIP"; then
+    LOGE "Source and target are the same file"
     exit 1
 fi
 
 [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
-mkdir -p "$TMP_DIR/META-INF/com/google/android"
+mkdir -p "$TMP_DIR/META-INF/com/google/android" "$VERIFY_DIR"
 cp -a "$SRC_DIR/prebuilts/bootable/deprecated-ota/updater" "$TMP_DIR/META-INF/com/google/android/update-binary"
+
+# Both trees plus the generated payload, which is at most the target size.
+NEEDED_SPACE=0
+for z in "$SOURCE_ZIP" "$TARGET_ZIP" "$TARGET_ZIP"; do
+    NEEDED_SPACE=$((NEEDED_SPACE + $(unzip -Zt "$z" | awk '{print $3}')))
+done
+CHECK_FREE_SPACE "$NEEDED_SPACE" "extracting the source and target files"
 
 LOG "- Extracting source files"
 EVAL "unzip -o \"$SOURCE_ZIP\" -d \"$TMP_DIR/source\"" || exit 1
@@ -474,8 +655,21 @@ if [ ! -d "$SRC_DIR/target/$TARGET_CODENAME" ]; then
 fi
 
 TARGET_USE_DYNAMIC_PARTITIONS="$(grep "^use_dynamic_partitions" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s)"
+if [[ "$TARGET_USE_DYNAMIC_PARTITIONS" != "true" && "$TARGET_USE_DYNAMIC_PARTITIONS" != "false" ]]; then
+    LOGE "Target build_info.txt has no valid use_dynamic_partitions value"
+    exit 1
+fi
 
 VERIFY_SOURCE_COMPATIBILITY
+
+for p in $PARTITIONS_LIST; do
+    for d in source target; do
+        if [ -f "$TMP_DIR/$d/$p.img" ] && [ ! -f "$TMP_DIR/$d/$p.map" ]; then
+            LOGE "$d files have $p.img without its block map"
+            exit 1
+        fi
+    done
+done
 
 if $TARGET_USE_DYNAMIC_PARTITIONS; then
     LOG "- Generating dynamic_partitions_op_list"
@@ -488,53 +682,69 @@ for p in $PARTITIONS_LIST; do
     fi
 
     if [ -f "$TMP_DIR/source/$p.img" ]; then
-        if [[ "$(sha1sum "$TMP_DIR/source/$p.img" | cut -d " " -f 1)" != "$(sha1sum "$TMP_DIR/target/$p.img" | cut -d " " -f 1)" ]]; then
+        if ! cmp -s "$TMP_DIR/source/$p.img" "$TMP_DIR/target/$p.img"; then
             _CHECK_NON_EMPTY_PARAM "TARGET_CACHE_PARTITION_SIZE" "${TARGET_CACHE_PARTITION_SIZE//none/}" || exit 1
             LOG "- Generating $p.img block diff"
             EVAL "img2sdat -o \"$TMP_DIR\" -c \"$TARGET_CACHE_PARTITION_SIZE\" --src-image \"$TMP_DIR/source/$p.img\" --src-block-map \"$TMP_DIR/source/$p.map\" --tgt-block-map \"$TMP_DIR/target/$p.map\" \"$TMP_DIR/target/$p.img\"" || exit 1
+            VERIFY_BLOCK_UPDATE "$p" "$TMP_DIR/source/$p.img"
         fi
         rm -f "$TMP_DIR/source/$p.img" "$TMP_DIR/source/$p.map" \
             "$TMP_DIR/target/$p.img" "$TMP_DIR/target/$p.map"
     else
         LOG "- Converting $p.img to $p.new.dat"
         EVAL "img2sdat -o \"$TMP_DIR\" --tgt-block-map \"$TMP_DIR/target/$p.map\" \"$TMP_DIR/target/$p.img\"" || exit 1
+        VERIFY_BLOCK_UPDATE "$p"
         rm -f "$TMP_DIR/target/$p.img" "$TMP_DIR/target/$p.map"
 
         if ! $DEBUG; then
             LOG "- Compressing $p.new.dat"
             # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#3585
             EVAL "brotli --quality=6 --output=\"$TMP_DIR/$p.new.dat.br\" \"$TMP_DIR/$p.new.dat\"" || exit 1
+            EVAL "brotli -t \"$TMP_DIR/$p.new.dat.br\"" || exit 1
             rm -f "$TMP_DIR/$p.new.dat"
         fi
     fi
 done
 
+# Images the target installer flashes itself (install-start/end.edify) must
+# always be in the package, changed or not: dtbo_lte.img on y2s, prism.img and
+# optics.img on m21s.  Without it package_extract_file fails and, for
+# dtbo_lte.img, an SM-G985F keeps the 5G dtbo just written by this package.
+INSTALLER_IMAGES="$(cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-start.edify" \
+    "$SRC_DIR/target/$TARGET_CODENAME/installer/install-end.edify" 2> /dev/null | \
+    grep -oE 'package_extract_file\("[^"/]+"' | cut -d '"' -f 2 | sort -u)"
+
+INSTALLED_IMAGES="boot.img unsparse_super_empty.img"
+for b in $KERNEL_BINS; do
+    INSTALLED_IMAGES+=" $b.img"
+done
+
 while IFS= read -r f; do
     IMG="$(basename "$f")"
-    if [ -f "$TMP_DIR/source/$IMG" ] && \
-            cmp -s "$TMP_DIR/source/$IMG" "$f"; then
-        if [[ "$IMG" == "prism.img" || "$IMG" == "optics.img" ]]; then
-            # The target installer flashes these physical partitions directly.
-            # Keep a payload even when the target image is byte-identical to the
-            # source image; otherwise install-end.edify would reference a file
-            # that was removed as an unchanged top-level image.
-            LOG "- Keeping unchanged physical image $IMG"
-            cp -a "$f" "$TMP_DIR/$IMG" || exit 1
-        else
-            LOG "- Skipping unchanged $IMG"
-        fi
+    if ! grep -qxF "$IMG" <<< "$INSTALLER_IMAGES" && [[ " $INSTALLED_IMAGES " != *" $IMG "* ]]; then
+        LOG "- Skipping $IMG, not installed by this package"
+        rm -f "$f"
+    elif grep -qxF "$IMG" <<< "$INSTALLER_IMAGES"; then
+        LOG "- Keeping $IMG for the target installer"
+        mv -f "$f" "$TMP_DIR/$IMG"
+    elif [ -f "$TMP_DIR/source/$IMG" ] && cmp -s "$TMP_DIR/source/$IMG" "$f"; then
+        LOG "- Skipping unchanged $IMG"
         rm -f "$f"
     else
         LOG "- Copying changed $IMG from target files"
         mv -f "$f" "$TMP_DIR/$IMG"
     fi
+    if [ -f "$TMP_DIR/$IMG" ] && [[ "$IMG" != "unsparse_super_empty.img" ]]; then
+        CHECK_RAW_IMAGE "$TMP_DIR/$IMG"
+    fi
 done < <(find "$TMP_DIR/target" -maxdepth 1 -type f -name "*.img")
 
-while IFS= read -r f; do
-    rm -f "$f"
-done < <(find "$TMP_DIR/source" -maxdepth 1 -type f -name "*.img")
-
 rm -rf "$TMP_DIR/source" "$TMP_DIR/target"
+
+if ! find "$TMP_DIR" -maxdepth 1 -type f \( -name "*.transfer.list" -o -name "*.img" ! -name "unsparse_super_empty.img" \) | grep -q .; then
+    LOGE "Source and target have no differences; nothing to update"
+    exit 1
+fi
 
 LOG "- Generating updater-script"
 GENERATE_UPDATER_SCRIPT
@@ -558,6 +768,11 @@ if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/customize.sh" ]; then
     LOG_STEP_OUT
 fi
 
+LOG "- Checking package contents"
+rm -rf "$VERIFY_DIR"
+find "$TMP_DIR" -maxdepth 1 -type f \( -name "*.touched_src_*" -o -name "*.max_stashed_size" \) -delete
+CHECK_PACKAGE_REFERENCES "" || exit 1
+
 LOG "- Creating zip"
 EVAL "rm -f \"$TMP_DIR/rom.zip\"" || exit 1
 # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#3601
@@ -567,12 +782,32 @@ EVAL "rm -f \"$TMP_DIR/rom.zip\"" || exit 1
 EVAL "cd \"$TMP_DIR\" && 7z a -tzip -mx=0 -mmt=$(nproc) $TMP_DIR/rom.zip -r *.patch.dat -ir!META-INF/com/android/* -i!*.new.dat.br" || exit 1
 EVAL "cd \"$TMP_DIR\" && 7z a -tzip -mx=3 -mmt=$(nproc) $TMP_DIR/rom.zip -r * -xr!META-INF/com/android/* -x!*.new.dat.br -x!*.patch.dat -x!rom.zip" || exit 1
 
+# Write next to the output and move into place only once the package is
+# complete, so a failed run never leaves a truncated ZIP behind.
+PACKAGE="$OUTPUT_FILE.partial"
+rm -f "$PACKAGE"
 if ! $DEBUG || $ROM_IS_OFFICIAL; then
     LOG "- Signing zip"
-    EVAL "signapk -w \"$PUBLIC_KEY_PATH\" \"$PRIVATE_KEY_PATH\" \"$TMP_DIR/rom.zip\" \"$OUTPUT_FILE\"" || exit 1
+    EVAL "signapk -w \"$PUBLIC_KEY_PATH\" \"$PRIVATE_KEY_PATH\" \"$TMP_DIR/rom.zip\" \"$PACKAGE\"" || exit 1
     rm -f "$TMP_DIR/rom.zip"
 else
-    mv -f "$TMP_DIR/rom.zip" "$OUTPUT_FILE"
+    mv -f "$TMP_DIR/rom.zip" "$PACKAGE"
 fi
+
+LOG "- Verifying zip"
+if ! unzip -tq "$PACKAGE" &> /dev/null; then
+    rm -f "$PACKAGE"
+    LOGE "Generated zip failed the integrity test"
+    exit 1
+fi
+CHECK_PACKAGE_REFERENCES "$(unzip -Z1 "$PACKAGE")" || { rm -f "$PACKAGE"; exit 1; }
+for f in META-INF/com/google/android/update-binary META-INF/com/google/android/updater-script; do
+    if ! unzip -Z1 "$PACKAGE" | grep -qxF "$f"; then
+        rm -f "$PACKAGE"
+        LOGE "Generated zip has no $f"
+        exit 1
+    fi
+done
+mv -f "$PACKAGE" "$OUTPUT_FILE"
 
 exit 0

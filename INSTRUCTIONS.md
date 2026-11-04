@@ -12185,3 +12185,40 @@ mudanças de VINTF vão por dd.
   faz o upstream. Com esse kernel, o re-registro de epoll no shim do Codec2
   vira redundante, mas é inofensivo e continua lá para o kernel atual.
 
+## ZIP incremental: verificação no build e na instalação (03/11/2026)
+
+`scripts/internal/build_incremental_ota_zip.sh` agora recusa gerar um pacote
+que não instale exatamente o target:
+
+* **Antes de começar.** Ferramentas presentes; os dois target-files passam no
+  `unzip -t`; origem e destino não são o mesmo arquivo; destino mais novo que a
+  origem; `model`, `use_dynamic_partitions` e `super_partition_size` iguais
+  (se mudarem, é preciso ZIP full); espaço livre para as duas árvores e o
+  pacote, com 1 GiB de margem.
+* **No host.** `scripts/internal/verify_block_ota.py` reaplica cada
+  `transfer.list` (versão 4) sobre a imagem de origem, do jeito que o
+  `block_image_update` do recovery faz: confere o hash de cada stash/move/bsdiff,
+  aplica os patches com `bspatch` e compara o resultado com a imagem de destino
+  no care map. A origem é só lida e os blocos escritos vão para um arquivo
+  esparso, então o disco usado acompanha o tamanho do update, não o da partição.
+  Blocos que no aparelho podem ter qualquer conteúdo (don't care, espaço novo e
+  blocos apagados) são lidos como um padrão, para que um diff que dependa deles
+  falhe no build. O `.new.dat.br` passa por `brotli -t`.
+* **No aparelho.** Toda partição gravada é relida com `range_sha1` (care map e,
+  quando houver, os blocos estendidos zerados). boot, dtbo e as outras imagens
+  de kernel abortam se a gravação falhar e são relidas depois. A verificação da
+  origem antes de qualquer mudança continua igual.
+* **Pacote.** Toda imagem que o `install-start/end.edify` do target grava fica
+  no ZIP, mesmo sem mudança. Antes o `dtbo_lte.img` nunca entrava: o
+  target-files só copiava boot/dt/dtbo/init_boot/vendor_boot, e um SM-G985F
+  ficava com o dtbo do 5G quando o dtbo mudava. O target-files agora copia todas
+  as imagens de `kernel/`. Imagens que o pacote não grava (`recovery.img`) ficam
+  de fora. Todo arquivo citado no updater-script precisa existir no ZIP. O ZIP é
+  testado depois de assinado e só então vai para o caminho final.
+* `make_rom.sh -i` guarda a baseline anterior em
+  `incremental/base-target-files.prev.zip`. Se o último ZIP não chegou a ser
+  instalado, gere o próximo contra ela com
+  `build_flashable_zip.sh -i <prev> <target-files>`.
+* O ZIP full (`make_rom.sh` sem `-i`) gravava boot e dtbo em `"/boot"` e
+  `"/dtbo"` porque `TARGET_OS_BOOT_DEVICE_PATH` não existia na exynos990. Agora
+  é `/dev/block/by-name`, como na 9611.

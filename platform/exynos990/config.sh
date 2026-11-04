@@ -25,6 +25,10 @@ TARGET_USE_DYNAMIC_PARTITIONS=true
 TARGET_SUPER_GROUP_NAME="group_basic"
 
 # OS
+# package_extract_file() writes to a path; without this the full ZIP writes
+# boot.img/dtbo.img to "/boot" and "/dtbo" in the recovery ramdisk instead of
+# the partitions.
+TARGET_OS_BOOT_DEVICE_PATH="/dev/block/by-name"
 TARGET_OS_SINGLE_SYSTEM_IMAGE="essi"
 TARGET_OS_BUILD_SYSTEM_EXT_PARTITION=false
 
