@@ -184,6 +184,33 @@ terminou em cerca de 85 ms (`setChangingPreferredMode true` às 19:54:55.599 e
 `Composer3Bridge`. Ao terminar o teste automatizado o aparelho ficou em
 1080×2400 a 60 Hz para inspeção visual.
 
+## Digital, AOT e AOD no y2s com sysinput 1.3 (2026-10-20)
+
+O HAL `vendor.samsung.hardware.sysinput@1.3-service` da base nova escreve em
+`/sys/class/sec/tsp/enabled`, mas o driver `sec_ts/y79a` do kernel Exynos 990
+expunha somente `/sys/class/sec/tsp/input/enabled`. A ausência do nó fazia
+`setTspEnable` retornar `ENOENT` durante a preparação da digital sob a tela.
+
+O patch
+`platform/exynos990/patches/extremekrnl/patches/0011-sec-ts-expose-legacy-enabled-node.patch`
+adiciona o nó esperado ao dispositivo `tsp`. A interface não é booleana: o HAL
+escreve pares `estado,fase`. O driver interpreta `1,0` como OFF/entrada em LPM,
+`2,0` como ON/saída de LPM e aceita `1,1`/`2,1` como conclusão da transição sem
+repetir os callbacks. Mapear `1` como booleano ligava a digital, mas impedia o
+ciclo correto de AOT/AOD; essa implementação foi descartada.
+
+Validação no aparelho:
+
+- os quatro comandos do HAL retornam zero, sem `ENOENT` ou `EINVAL`;
+- `1,0` chama `sec_ts_input_close()` e `sec_ts_set_lowpowermode: ENTER(3C)`;
+- `2,0` chama `sec_ts_input_open()` e `sec_ts_set_lowpowermode: EXIT(3C)`;
+- a digital voltou a autenticar e o AOD voltou a iniciar com a política
+  `tap to show` habilitada.
+
+O patch foi verificado contra uma árvore limpa com `git apply --check`, e o
+kernel y2s compilou e iniciou. O boot anterior para rollback está em
+`out/target/y2s/boot-before-sec-ts-enabled-20261020-191908.img`, SHA-256
+`b53aa059f86f453e5d128ad11f63254885ae63a9ecf46df1818ddc1ccb444fb5`.
 
 ## M21s camera `camera-feature.xml`: authoritative baseline and state (2026-10-05)
 
@@ -10712,6 +10739,65 @@ aparelho desbloqueado para confirmar que as amostras deixam de ser nulas no
 preview. Se a câmera continuar verde, o próximo log deve capturar `Camera
 usage probe`, `Camera LOCK_FLEX planes` e `Camera YUV probe`; esses registros
 distinguem fence/cache de um layout privado que não é legível pela CPU.
+
+### Crash loop do SystemUI no y2s após boot (26/10/2026)
+
+O piscar contínuo da tela não era falha do GOS nem do Composer: cada piscada
+correspondia a um novo processo `com.android.systemui`. Foram confirmados dois
+crashes independentes no log:
+
+- `KeyguardViewMediatorHelperImpl` chama `SystemProperties.set("sys.locksecured", "true")`.
+  Como a propriedade só correspondia ao prefixo genérico `sys.`, ela era
+  rotulada `system_prop`; o domínio `platform_app_36` do SystemUI não pode
+  gravar esse tipo e encerrava o processo.
+- `StorageNotification` abre `UEventObserver`, mas a política da fonte não
+  concedia ao mesmo domínio os acessos mínimos ao
+  `netlink_kobject_uevent_socket`, produzindo `Unable to open socket for
+  UEventObserver` e um segundo crash loop.
+
+A correção permanente foi adicionada, somente para `y2s`/`y2slte`, em
+`unica/patches/selinux/customize.sh`: declara `sys.locksecured` como
+`aod_prop` exato (tipo Samsung que o SystemUI já pode gravar) e inclui apenas
+`read`, `create`, `bind` e `setopt` para o socket de uevent. A validação
+temporária em aparelho confirmou a causa: com SELinux permissivo, o PID do
+SystemUI permaneceu estável e os crashes cessaram. Essa permissividade é apenas
+uma medida de recuperação da sessão atual; a próxima imagem deve permanecer em
+Enforcing e conter o patch de política acima.
+
+### y2s: segunda propriedade que reiniciava o SystemUI (26/10/2026)
+
+Após o primeiro ajuste de `sys.locksecured`, o SystemUI ainda podia cair ao
+executar `TileServices`: `sys.tile.lazy_booted` permanecia rotulada como
+`system_prop`, e `platform_app_36` não podia gravá-la em Enforcing. O patch de
+SELinux agora também declara essa propriedade booleana exata como `aod_prop`,
+tipo que já é permitido ao SystemUI. O crash observado às 20:21:57 foi essa
+falha; a mudança da posição do Now Brief ocorreu durante a reconstrução do
+Keyguard após o restart, não por uma alteração do pacote do Now Brief.
+
+### y2s: posição do Now Bar e posição física da digital (26/10/2026)
+
+O AODService e a SystemUI compartilham o domínio `platform_app_36`. O
+AODService lê `/sys/class/fingerprint/fingerprint/position` para calcular a
+margem inferior do Now Bar. A vendor original do y2s autorizava essa leitura
+para `platform_app_30_0`, incluindo a travessia do link sysfs rotulado
+`sysfs_ss_writable`; a política Android 17 não transportava a permissão para
+`platform_app_36`.
+
+Isso foi reproduzido com SELinux Enforcing: o acesso como
+`u:r:platform_app_36:s0:c512,c768` retornou `Permission denied` no link, e o
+log do AODService registrou `readFingerprintSensor : No file for sensor pos`.
+O serviço então usou os valores de fallback do donor (`13.77`, `4.00` e
+`10.80` mm), que produzem aproximadamente 518 px de margem e coincidem com a
+margem de 517 px observada no Now Bar. O arquivo do y2s existe e contém a
+posição real: `32.41,0.00,9.00,4.00,14.80,14.80,13.00,13.00,5.00`.
+
+`unica/patches/selinux/customize.sh` acrescenta, apenas em y2s/y2slte, as
+permissões mínimas `getattr/search` no diretório, `getattr/open/read` no
+arquivo e `getattr/read` no link para `platform_app_36` sobre
+`sysfs_ss_writable`. Não concede escrita. Após instalar a próxima build,
+reinicie a SystemUI ou o aparelho e confirme que o log deixou de registrar
+`readFingerprintSensor : No file for sensor pos`; a margem do Now Bar deve
+passar a ser calculada a partir da posição física do painel.
 
 ### Contenção do custo do preview no Composer3 (29/10/2026)
 

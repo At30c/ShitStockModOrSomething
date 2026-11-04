@@ -71,6 +71,63 @@ GET_SYSTEM_EXT()
 CIL_NAME="$(head -n 1 "$WORK_DIR/vendor/etc/selinux/plat_sepolicy_vers.txt")"
 PATCHED=false
 SYSTEM_EXT_SELINUX="$WORK_DIR/$(GET_SYSTEM_EXT)/etc/selinux"
+VENDOR_SEPOLICY="$WORK_DIR/vendor/etc/selinux/vendor_sepolicy.cil"
+
+# The One UI 9 SystemUI used by the Exynos 990 targets updates
+# sys.locksecured when Keyguard changes state.  The generic `sys.` entry from
+# the platform labels it as system_prop, which platform_app_36 cannot set and
+# makes SystemUI crash in a loop.  Use the existing Samsung aod_prop instead:
+# it is already explicitly writable by the SystemUI domain and gives this one
+# exact boolean property its intended, narrow label.
+#
+# StorageNotification also opens the kernel uevent socket.  This SystemUI is
+# labelled platform_app_36 on these targets, while its source policy omitted
+# the matching socket grant.  Add only the four operations used by
+# UEventObserver; do not grant write, connect or send permissions.
+if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
+    LOCKSECURED_PROPERTY_CONTEXT="sys.locksecured u:object_r:aod_prop:s0 exact bool"
+    if ! grep -qE '^sys\.locksecured[[:space:]]' "$SYSTEM_EXT_SELINUX/system_ext_property_contexts"; then
+        printf '%s\n' "$LOCKSECURED_PROPERTY_CONTEXT" >> "$SYSTEM_EXT_SELINUX/system_ext_property_contexts"
+        PATCHED=true
+    fi
+
+    # TileServices also records its lazy-boot state from SystemUI.  On this
+    # mixed Android 17 framework the generic sys.* fallback labels it as
+    # system_prop, which platform_app_36 cannot set.  Keep the exact boolean
+    # beside sys.locksecured in the existing SystemUI-writable aod_prop type.
+    TILE_LAZY_BOOTED_PROPERTY_CONTEXT="sys.tile.lazy_booted u:object_r:aod_prop:s0 exact bool"
+    if ! grep -qE '^sys\.tile\.lazy_booted[[:space:]]' "$SYSTEM_EXT_SELINUX/system_ext_property_contexts"; then
+        printf '%s\n' "$TILE_LAZY_BOOTED_PROPERTY_CONTEXT" >> "$SYSTEM_EXT_SELINUX/system_ext_property_contexts"
+        PATCHED=true
+    fi
+
+    SYSTEMUI_UEVENT_RULE="(allow platform_app_36 self (netlink_kobject_uevent_socket (read create bind setopt)))"
+    if ! grep -qF "$SYSTEMUI_UEVENT_RULE" "$SYSTEM_EXT_SELINUX/system_ext_sepolicy.cil"; then
+        printf '%s\n' "$SYSTEMUI_UEVENT_RULE" >> "$SYSTEM_EXT_SELINUX/system_ext_sepolicy.cil"
+        PATCHED=true
+    fi
+
+    # AODService runs in the same platform_app_36 domain as SystemUI.  It
+    # reads the physical UDFPS position from
+    # /sys/class/fingerprint/fingerprint/position.  The legacy y2s policy
+    # granted the old platform_app_30_0 domain access to the target's
+    # sysfs_ss_writable nodes, but Android 17 does not carry that grant to
+    # platform_app_36.  Without the read-only traversal and file access the
+    # service falls back to the donor's hard-coded sensor dimensions, placing
+    # Now Bar with the wrong bottom margin.  Keep this to the three operations
+    # used by File.exists(), File.length(), and FileInputStream.
+    SYSTEMUI_FOD_POSITION_RULES=(
+        "(allow platform_app_36 sysfs_ss_writable (dir (getattr search)))"
+        "(allow platform_app_36 sysfs_ss_writable (file (getattr open read)))"
+        "(allow platform_app_36 sysfs_ss_writable (lnk_file (getattr read)))"
+    )
+    for SYSTEMUI_FOD_POSITION_RULE in "${SYSTEMUI_FOD_POSITION_RULES[@]}"; do
+        if ! grep -qF "$SYSTEMUI_FOD_POSITION_RULE" "$VENDOR_SEPOLICY"; then
+            printf '%s\n' "$SYSTEMUI_FOD_POSITION_RULE" >> "$VENDOR_SEPOLICY"
+            PATCHED=true
+        fi
+    done
+fi
 
 # Android 17 no longer labels the legacy ION node because current devices use
 # DMA-BUF heaps. Exynos 990's gralloc 2.0 allocator still opens /dev/ion; when
@@ -89,7 +146,6 @@ fi
 # its allocations through ION, so restore the corresponding Android 11 rule in
 # the target vendor policy. Keep this scoped to the allocator HAL instead of
 # granting generic access to every process or to the generic device type.
-VENDOR_SEPOLICY="$WORK_DIR/vendor/etc/selinux/vendor_sepolicy.cil"
 ION_ALLOCATOR_TYPE="ion_device_${CIL_NAME//./_}"
 ION_ALLOCATOR_RULE="(allow hal_graphics_allocator $ION_ALLOCATOR_TYPE (chr_file (ioctl read write getattr lock append map open watch watch_reads)))"
 if ! grep -qF "$ION_ALLOCATOR_RULE" "$VENDOR_SEPOLICY"; then
@@ -227,4 +283,5 @@ fi
 unset ENTRIES DUPLICATES CIL_NAME CIL_FILE PATCHED SYSTEM_EXT_SELINUX VENDOR_FILE_CONTEXTS VENDOR_SEPOLICY
 unset ION_ALLOCATOR_TYPE ION_ALLOCATOR_RULE SUSPEND_REQUIRED_RULES SUSPEND_PLATFORM_POLICY \
     SUSPEND_PLATFORM_RULES SUSPEND_VENDOR_RULES SUSPEND_RULE VENDOR_API_LIST LEGACY_MAPPING
+unset SYSTEMUI_FOD_POSITION_RULES SYSTEMUI_FOD_POSITION_RULE
 unset -f GET_SYSTEM_EXT

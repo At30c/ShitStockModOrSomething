@@ -1,0 +1,113 @@
+From 3d52fc6cf0210cbcc443aa59637b58e6b38b8fab Mon Sep 17 00:00:00 2001
+From: ats0c <ats0c@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 20:00:00 -0300
+Subject: [PATCH] input: sec_ts: expose legacy enabled node
+
+Samsung's Exynos 990 sysinput 1.3 HAL controls the touchscreen through
+/sys/class/sec/tsp/enabled.  The y79a driver only exposes the generic input
+device node at /sys/class/sec/tsp/input/enabled, which leaves the HAL failing
+with ENOENT and prevents the fingerprint-on-display enable sequence.
+
+Expose the expected factory-device attribute and keep its state transitions
+identical to the input core implementation.
+---
+ .../touchscreen/sec_ts/y79a/sec_ts_fn.c       | 77 +++++++++++++++++++
+ 1 file changed, 77 insertions(+)
+
+diff --git a/drivers/input/touchscreen/sec_ts/y79a/sec_ts_fn.c b/drivers/input/touchscreen/sec_ts/y79a/sec_ts_fn.c
+index d74b30a18..0f4a11a61 100644
+--- a/drivers/input/touchscreen/sec_ts/y79a/sec_ts_fn.c
++++ b/drivers/input/touchscreen/sec_ts/y79a/sec_ts_fn.c
+@@ -1660,6 +1660,82 @@ static ssize_t aod_active_area(struct device *dev,
+ 	return snprintf(buf, SEC_CMD_BUF_SIZE, "%d,%d,%d", ts->aod_active_area[0], ts->aod_active_area[1], ts->aod_active_area[2]);
+ }
+ 
++static ssize_t sec_ts_enabled_show(struct device *dev,
++		struct device_attribute *attr, char *buf)
++{
++	struct sec_cmd_data *sec = dev_get_drvdata(dev);
++	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
++
++	return snprintf(buf, PAGE_SIZE, "%d\n", !ts->input_dev->disabled);
++}
++
++static ssize_t sec_ts_enabled_store(struct device *dev,
++		struct device_attribute *attr, const char *buf, size_t size)
++{
++	struct sec_cmd_data *sec = dev_get_drvdata(dev);
++	struct sec_ts_data *ts = container_of(sec, struct sec_ts_data, sec);
++	struct input_dev *input_dev = ts->input_dev;
++	bool enable;
++	unsigned int display_state;
++	unsigned int transition_phase = 0;
++	int ret;
++
++	ret = sscanf(buf, "%u,%u", &display_state, &transition_phase);
++	if (ret < 1)
++		return -EINVAL;
++
++	/* The second write only completes the framework transition. */
++	if (transition_phase != 0)
++		return size;
++
++	/* Samsung sysinput uses 1 for OFF/LPM and 2 for ON. */
++	if (display_state == 1)
++		enable = false;
++	else if (display_state == 2)
++		enable = true;
++	else
++		return -EINVAL;
++
++	ret = mutex_lock_interruptible(&input_dev->mutex);
++	if (ret)
++		return ret;
++
++	if (enable) {
++		if (!input_dev->disabled)
++			goto out;
++
++		if (input_dev->users_private && input_dev->open) {
++			ret = input_dev->open(input_dev);
++			if (ret)
++				goto out;
++		}
++		input_dev->users = input_dev->users_private;
++		input_dev->disabled = false;
++	} else if (!input_dev->disabled) {
++		input_dev->disabled = true;
++		if (input_dev->users && input_dev->close)
++			input_dev->close(input_dev);
++		input_dev->users = 0;
++	}
++
++out:
++	mutex_unlock(&input_dev->mutex);
++	if (ret)
++		return ret;
++
++	input_info(true, &ts->client->dev, "%s: state %u,%u, %s\n", __func__,
++			display_state, transition_phase,
++			enable ? "enabled" : "disabled");
++	return size;
++}
++
++/*
++ * Compatibility alias for Samsung's stock sysinput HAL.  The same control
++ * remains available through the generic input symlink as tsp/input/enabled.
++ */
++static DEVICE_ATTR(enabled, S_IRUGO | S_IWUSR,
++		sec_ts_enabled_show, sec_ts_enabled_store);
++
+ static DEVICE_ATTR(ito_check, 0444, read_ito_check_show, NULL);
+ static DEVICE_ATTR(raw_check, 0444, read_raw_check_show, NULL);
+ static DEVICE_ATTR(multi_count, 0664, read_multi_count_show, clear_multi_count_store);
+@@ -1683,6 +1759,7 @@ static DEVICE_ATTR(aod_active_area, 0444, aod_active_area, NULL);
+ 
+ static struct attribute *cmd_attributes[] = {
+ 	&dev_attr_scrub_pos.attr,
++	&dev_attr_enabled.attr,
+ 	&dev_attr_ito_check.attr,
+ 	&dev_attr_raw_check.attr,
+ 	&dev_attr_multi_count.attr,
+-- 
+2.43.0
