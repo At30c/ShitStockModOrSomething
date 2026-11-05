@@ -711,6 +711,12 @@ not alter any StockMod module outside `unica/mods/settings`.
 
 ## OMCAgent recommended-app fallback (2026-09-27)
 
+> **Substituído em 04/11/2026:** o mod `setupwizard` voltou ao comportamento do
+> UN1CA e remove a etapa "Apps recomendados" (entradas `omcagent` do
+> `arrays.xml` do SecSetupWizard). O catálogo
+> `/system/etc/omcagent/unica_appres.json` e o patch do `OMCAgent5` descritos
+> abaixo foram removidos; ficam no histórico do git.
+
 The legacy target's OMC catalogue is read from the separate `/prism`
 partition and can remain empty because StockMod does not rebuild that
 partition. The Setup Wizard module now keeps its Recommended apps step and
@@ -12291,3 +12297,17 @@ Correção: `platform/exynos990/debloat.sh` remove os dois overlays do S947B, e 
 6 GHz, 5 GHz em `config_wifiSoftap5gChannelList=149`). Validar no aparelho:
 `dumpsys wifi` deve mostrar `mDriverCountryCode: BR`, e a `SoftApCapability` do
 `dumpsys sem_wifi` deve manter `SupportedChannelListIn5g` preenchida.
+
+## Setup Wizard: etapa do OMCAgent e ícones do UN1CA restaurados (04/11/2026)
+
+O `unica/mods/setupwizard` voltou a fazer o que o UN1CA faz: remove a etapa
+"Apps recomendados" (OMCAgent) apagando as linhas `omcagent` do
+`res/values/arrays.xml` do SecSetupWizard. No SecSetupWizard do S947B são sete
+entradas `sequenceitem_omcagent_setup*`, cada uma numa linha `<item>`. O
+catálogo de fallback e o patch do `OMCAgent5` que mantinham essa etapa foram
+removidos.
+
+`suw_ic_unica.webp` (ícone da página de aviso) e `suw_img_tips.webp` eram do
+ArtisanROM (um "A" e o texto "ARTISANROM"). Foram trocados pelos arquivos do
+UN1CA, idênticos aos do branch `sixteen` de `salvogiangri/UN1CA`
+(blobs `ca7108b` e `04278f4`).
