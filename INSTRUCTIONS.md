@@ -12311,3 +12311,23 @@ removidos.
 ArtisanROM (um "A" e o texto "ARTISANROM"). Foram trocados pelos arquivos do
 UN1CA, idênticos aos do branch `sixteen` de `salvogiangri/UN1CA`
 (blobs `ca7108b` e `04278f4`).
+
+## Restos do ArtisanROM removidos do mod `settings` (04/11/2026)
+
+* **Som de inicialização:** o `BootSoundPreferenceController` gravava
+  `persist.sys.artisanrom.bootsound`, mas o `unica/mods/bootsound/powersnd.rc`
+  só reage a `persist.sys.unica.bootsound`. O interruptor das configurações
+  UN1CA não tinha efeito. Agora usa a propriedade do UN1CA (arquivo igual ao do
+  branch `sixteen` oficial).
+* **Atalho de atualizações:** o `UnicaSettingsFragment` abria
+  `com.artisan.updater`. Voltou ao app do UN1CA (`io.mesalabs.choidujour`,
+  `HomeActivity`), também igual ao oficial. O atalho só aparece se o app
+  estiver instalado; nenhum dos dois vem na ROM.
+* **Código morto removido:** `Settings$AboutArtisanROMActivity`,
+  `ArtisanROMVersionPreferenceController`, `AboutArtisanROMFragment`,
+  `AboutArtisanROMPreferenceController` e `MaintainerPreference`. Nenhum era
+  referenciado pelo manifest, pelos XMLs ou por outro código, e o UN1CA
+  oficial não tem a pasta `about/`.
+* **CI:** o `build.yml` publicava a release manual em
+  `ArtisanROM/rom_resources`; agora publica no próprio repositório
+  (`${{ github.repository }}`).

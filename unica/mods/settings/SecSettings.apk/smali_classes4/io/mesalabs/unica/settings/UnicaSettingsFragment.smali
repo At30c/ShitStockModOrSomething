@@ -265,7 +265,7 @@
 
     move-result-object v0
 
-    const-string v1, "com.artisan.updater"
+    const-string v1, "io.mesalabs.choidujour"
 
     invoke-static {v0, v1}, Lcom/samsung/android/settings/PkgUtils;->isPackageEnabled(Landroid/content/Context;Ljava/lang/String;)Z
 
@@ -293,9 +293,9 @@
 
     new-instance v2, Landroid/content/ComponentName;
 
-    const-string v3, "com.artisan.updater"
+    const-string v3, "io.mesalabs.choidujour"
 
-    const-string v4, "com.artisan.updater.MainActivity"
+    const-string v4, "io.mesalabs.choidujour.activity.HomeActivity"
 
     invoke-direct {v2, v3, v4}, Landroid/content/ComponentName;-><init>(Ljava/lang/String;Ljava/lang/String;)V
 

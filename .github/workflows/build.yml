@@ -131,7 +131,7 @@ jobs:
         env:
           PIXELDRAIN_API_KEY: ${{ secrets.PD_API }}
           GH_TOKEN: ${{ secrets.PAT }}
-          RELEASE_REPO: "ArtisanROM/rom_resources"
+          RELEASE_REPO: ${{ github.repository }}
           BUILD_TYPE: ${{ github.event.inputs.build_type }}
         run: |
           mkdir -p split_tmp
