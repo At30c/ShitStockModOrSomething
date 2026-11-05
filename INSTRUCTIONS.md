@@ -12266,3 +12266,28 @@ A tela "UN1CA" das configurações mostra `2.0.1 (Zonks) - 165c4be0` (ou
 omite a parte do commit quando a propriedade não existe. O commit também
 aparece como `commit=` no `build_info.txt` do target-files e dos zips, e numa
 linha `Commit:` no cabeçalho mostrado pelo recovery.
+
+## Hotspot do y2s sem 5 GHz: overlays de SoftAP do S947B (04/11/2026)
+
+A tela do roteador Wi-Fi só oferecia 2,4 GHz. No `dumpsys sem_wifi`, a
+`SoftApCapability` tinha os canais certos no boot (5 GHz 36–48 e 149–165) e,
+segundos depois, passava a ter todas as listas vazias, com
+`mCountryCodeFromDriver99`. O `dumpsys wifi` mostrava `mDriverCountryCode: null`,
+`isDriverSupportedRegChangedEvent: true` e `isAllCmmReady: false`.
+
+Causa: o `product/overlay/SoftapOverlayQC` do S947B, feito para Wi-Fi Qualcomm,
+liga `config_wifiDriverSupportedNl80211RegChangedEvent`. O framework passa a
+esperar que o driver confirme cada troca de país com um evento nl80211. O
+Broadcom do 990 não emite esse evento, então o país `BR` nunca é dado como
+aplicado, o driver continua no `99` e o recálculo dos canais do SoftAP
+(`CountryCodeTracker.onDriverCountryCodeChanged`) sai vazio. O HAL de Wi-Fi é
+HIDL 1.4 (sem `getUsableChannels`), e o `wificond` informa os canais
+normalmente. O `product/overlay/SoftapOverlay` do S947B, além disso, tem o mesmo
+pacote do `vendor/overlay/SoftapOverlay` do G986B e o substitui, ligando 6 GHz e
+SoftAP bridged.
+
+Correção: `platform/exynos990/debloat.sh` remove os dois overlays do S947B, e o
+`SoftapOverlay` original da vendor volta a valer (sem o evento do driver, sem
+6 GHz, 5 GHz em `config_wifiSoftap5gChannelList=149`). Validar no aparelho:
+`dumpsys wifi` deve mostrar `mDriverCountryCode: BR`, e a `SoftApCapability` do
+`dumpsys sem_wifi` deve manter `SupportedChannelListIn5g` preenchida.

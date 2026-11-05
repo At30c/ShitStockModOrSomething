@@ -41,7 +41,18 @@ system/priv-app/VideoScan
 "
 
 # Wi-Fi Hotspot Overlays
+# SoftapOverlay and SoftapOverlayQC come from the source firmware.
+# SoftapOverlay shares its package name with the target's
+# vendor/overlay/SoftapOverlay and replaced it, enabling 6 GHz and bridged
+# SoftAP. SoftapOverlayQC (Qualcomm Wi-Fi) sets
+# config_wifiDriverSupportedNl80211RegChangedEvent=true: the framework then
+# waits for the driver to confirm the country code, the Broadcom driver never
+# does, the driver country stays unset ("99") and the SoftAP capability loses
+# every channel, so the hotspot settings only offer 2.4 GHz.  Without them the
+# stock S20 SoftapOverlay applies again.
 PRODUCT_DEBLOAT+="
+overlay/SoftapOverlay
+overlay/SoftapOverlayQC
 overlay/SoftapOverlay6GHz
 overlay/SoftapOverlayDualAp
 overlay/SoftapOverlayOWE
