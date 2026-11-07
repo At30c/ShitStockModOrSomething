@@ -1,0 +1,1 @@
+Disabled 06/11/2026: the S26+ binaries use ARMv8.3 PAC (retaa) and ARMv8.4 LRCPC2 (ldapur), which the Exynos 990 does not execute; the service dies with SIGILL. See INSTRUCTIONS.md.

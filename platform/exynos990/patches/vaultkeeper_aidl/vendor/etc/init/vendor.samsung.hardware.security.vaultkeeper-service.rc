@@ -1,0 +1,11 @@
+# VaultKeeper AIDL front-end (S26+ service binary). It forwards to the stock
+# y2s backend through libvkmanager_vendor.so and /dev/socket/vaultkeeper, so
+# start it with the stock daemon and HIDL HAL from vaultkeeper_common.rc.
+service vaultkeeper_aidl /vendor/bin/vendor.samsung.hardware.security.vaultkeeper-service
+    class early_hal
+    user system
+    group system
+    disabled
+
+on late-fs
+    start vaultkeeper_aidl

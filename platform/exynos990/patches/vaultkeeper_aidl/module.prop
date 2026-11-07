@@ -1,0 +1,4 @@
+id=vaultkeeper_aidl
+name=VaultKeeper AIDL front-end
+author=At30c
+description=Runs the S26+ VaultKeeper AIDL service over the y2s VaultKeeper backend (libvkmanager_vendor, vaultkeeperd, TEEgris TA and /efs/vk stay stock).

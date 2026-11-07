@@ -1,0 +1,8 @@
+<!-- VaultKeeper AIDL front-end over the stock y2s backend. The HIDL 2.0
+     declaration in vaultkeeper_manifest.xml stays for the legacy clients. -->
+<manifest version="9.0" type="device">
+    <hal format="aidl">
+        <name>vendor.samsung.hardware.security.vaultkeeper</name>
+        <fqname>ISehVaultKeeper/default</fqname>
+    </hal>
+</manifest>
