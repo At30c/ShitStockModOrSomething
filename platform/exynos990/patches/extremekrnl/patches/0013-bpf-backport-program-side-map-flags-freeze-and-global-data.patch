@@ -1,0 +1,400 @@
+From: At30c <173511395+At30c@users.noreply.github.com>
+Subject: [PATCH] bpf: backport program-side map flags, map freeze and global data BTF
+
+libbpf creates the internal .rodata map as an ARRAY with BPF_F_RDONLY_PROG,
+names it "<obj>.rodata" and freezes it with BPF_MAP_FREEZE. Linux 4.19 rejects
+all three with EINVAL, so every Android 17 BPF object with global data failed
+to load (semSmartHS, semUidBPF, netlog, tcpAccECN, ztdMdd).
+
+- BPF_F_RDONLY_PROG/BPF_F_WRONLY_PROG for ARRAY and HASH maps, with
+  check_map_access_type() in the verifier (upstream 591fe9888d78)
+- BPF_MAP_FREEZE and map->frozen (upstream 87df15de441b); command 21 is only
+  reserved so the UAPI numbering matches
+- "." accepted in BPF object names (upstream 3e0ddc4f3ff1)
+- key-less BTF for single-entry ARRAY maps holding a DATASEC value, and
+  DATASEC sized in btf_type_has_size() (upstream 2824ecb7010f and the 5.2
+  BTF VAR/DATASEC support)
+- PTR_TO_MEM (ring buffer records) accepted by check_helper_mem_access()
+---
+--- a/include/uapi/linux/bpf.h
++++ b/include/uapi/linux/bpf.h
+@@ -103,6 +103,8 @@
+ 	BPF_BTF_LOAD,
+ 	BPF_BTF_GET_FD_BY_ID,
+ 	BPF_TASK_FD_QUERY,
++	BPF_MAP_LOOKUP_AND_DELETE_ELEM,
++	BPF_MAP_FREEZE,
+ };
+ 
+ enum bpf_map_type {
+@@ -293,6 +295,13 @@
+ /* Flag for stack_map, store build_id+offset instead of pointer */
+ #define BPF_F_STACK_BUILD_ID	(1U << 5)
+ 
++/* Zero-initialize hash function seed. This should only be used for testing. */
++#define BPF_F_ZERO_SEED		(1U << 6)
++
++/* Flags for accessing BPF object from program side. */
++#define BPF_F_RDONLY_PROG	(1U << 7)
++#define BPF_F_WRONLY_PROG	(1U << 8)
++
+ enum bpf_stack_build_id_status {
+ 	/* user space need an empty entry to identify end of a trace */
+ 	BPF_STACK_BUILD_ID_EMPTY = 0,
+--- a/include/linux/bpf.h
++++ b/include/linux/bpf.h
+@@ -85,7 +85,8 @@
+ 	u32 btf_value_type_id;
+ 	struct btf *btf;
+ 	bool unpriv_array;
+-	/* 55 bytes hole */
++	bool frozen; /* write-once */
++	/* 54 bytes hole */
+ 
+ 	/* The 3rd and 4th cacheline with misc members to avoid false sharing
+ 	 * particularly with refcounting.
+@@ -97,6 +98,30 @@
+ 	char name[BPF_OBJ_NAME_LEN];
+ };
+ 
++#define BPF_MAP_CAN_READ	BIT(0)
++#define BPF_MAP_CAN_WRITE	BIT(1)
++
++static inline u32 bpf_map_flags_to_cap(struct bpf_map *map)
++{
++	u32 access_flags = map->map_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG);
++
++	/* Combination of BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG is
++	 * not possible.
++	 */
++	if (access_flags & BPF_F_RDONLY_PROG)
++		return BPF_MAP_CAN_READ;
++	else if (access_flags & BPF_F_WRONLY_PROG)
++		return BPF_MAP_CAN_WRITE;
++	else
++		return BPF_MAP_CAN_READ | BPF_MAP_CAN_WRITE;
++}
++
++static inline bool bpf_map_flags_access_ok(u32 access_flags)
++{
++	return (access_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)) !=
++	       (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG);
++}
++
+ struct bpf_offload_dev;
+ struct bpf_offloaded_map;
+ 
+--- a/kernel/bpf/arraymap.c
++++ b/kernel/bpf/arraymap.c
+@@ -22,7 +22,8 @@
+ #include "map_in_map.h"
+ 
+ #define ARRAY_CREATE_FLAG_MASK \
+-	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY)
++	(BPF_F_NUMA_NODE | BPF_F_RDONLY | BPF_F_WRONLY | \
++	 BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)
+ 
+ static void bpf_array_free_percpu(struct bpf_array *array)
+ {
+@@ -63,6 +64,7 @@
+ 	if (attr->max_entries == 0 || attr->key_size != 4 ||
+ 	    attr->value_size == 0 ||
+ 	    attr->map_flags & ~ARRAY_CREATE_FLAG_MASK ||
++	    !bpf_map_flags_access_ok(attr->map_flags) ||
+ 	    (percpu && numa_node != NUMA_NO_NODE))
+ 		return -EINVAL;
+ 
+@@ -381,6 +383,18 @@
+ {
+ 	u32 int_data;
+ 
++	/* One exception for keyless BTF: .bss/.data/.rodata map */
++	if (!key_type) {
++		if (map->map_type != BPF_MAP_TYPE_ARRAY ||
++		    map->max_entries != 1)
++			return -EINVAL;
++
++		if (BTF_INFO_KIND(value_type->info) != BTF_KIND_DATASEC)
++			return -EINVAL;
++
++		return 0;
++	}
++
+ 	if (BTF_INFO_KIND(key_type->info) != BTF_KIND_INT)
+ 		return -EINVAL;
+ 
+@@ -424,6 +438,9 @@
+ 	/* only file descriptors can be stored in this type of map */
+ 	if (attr->value_size != sizeof(u32))
+ 		return -EINVAL;
++	/* Program read-only/write-only not supported for special maps yet. */
++	if (attr->map_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG))
++		return -EINVAL;
+ 	return array_map_alloc_check(attr);
+ }
+ 
+--- a/kernel/bpf/hashtab.c
++++ b/kernel/bpf/hashtab.c
+@@ -23,7 +23,8 @@
+ 
+ #define HTAB_CREATE_FLAG_MASK						\
+ 	(BPF_F_NO_PREALLOC | BPF_F_NO_COMMON_LRU | BPF_F_NUMA_NODE |	\
+-	 BPF_F_RDONLY | BPF_F_WRONLY)
++	 BPF_F_RDONLY | BPF_F_WRONLY |					\
++	 BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG)
+ 
+ struct bucket {
+ 	struct hlist_nulls_head head;
+@@ -257,7 +258,8 @@
+ 		 */
+ 		return -EPERM;
+ 
+-	if (attr->map_flags & ~HTAB_CREATE_FLAG_MASK)
++	if (attr->map_flags & ~HTAB_CREATE_FLAG_MASK ||
++	    !bpf_map_flags_access_ok(attr->map_flags))
+ 		/* reserved bits should not be used */
+ 		return -EINVAL;
+ 
+@@ -1327,6 +1329,9 @@
+ {
+ 	if (attr->value_size != sizeof(u32))
+ 		return -EINVAL;
++	/* Program read-only/write-only not supported for special maps yet. */
++	if (attr->map_flags & (BPF_F_RDONLY_PROG | BPF_F_WRONLY_PROG))
++		return -EINVAL;
+ 	return htab_map_alloc_check(attr);
+ }
+ 
+--- a/kernel/bpf/btf.c
++++ b/kernel/bpf/btf.c
+@@ -382,6 +382,8 @@
+ static bool btf_type_has_size(const struct btf_type *t)
+ {
+ 	switch (BTF_INFO_KIND(t->info)) {
++	/* Sized like a struct: .bss/.data/.rodata map values (Linux 5.2). */
++	case BTF_KIND_DATASEC:
+ 	case BTF_KIND_INT:
+ 	case BTF_KIND_STRUCT:
+ 	case BTF_KIND_UNION:
+--- a/kernel/bpf/syscall.c
++++ b/kernel/bpf/syscall.c
+@@ -468,9 +468,10 @@
+ 
+ 	memset(dst, 0, BPF_OBJ_NAME_LEN);
+ 
+-	/* Copy all isalnum() and '_' char */
++	/* Copy all isalnum(), '_' and '.' chars. */
+ 	while (src < end && *src) {
+-		if (!isalnum(*src) && *src != '_')
++		if (!isalnum(*src) &&
++		    *src != '_' && *src != '.')
+ 			return -EINVAL;
+ 		*dst++ = *src++;
+ 	}
+@@ -496,9 +497,20 @@
+ 	u32 key_size, value_size;
+ 	int ret = 0;
+ 
+-	key_type = btf_type_id_size(btf, &btf_key_id, &key_size);
+-	if (!key_type || key_size != map->key_size)
+-		return -EINVAL;
++	/* Only single-entry ARRAY maps holding a .bss/.data/.rodata DATASEC
++	 * may leave the key type unspecified; array_map_check_btf() gets a
++	 * NULL key type for them.
++	 */
++	if (btf_key_id) {
++		key_type = btf_type_id_size(btf, &btf_key_id, &key_size);
++		if (!key_type || key_size != map->key_size)
++			return -EINVAL;
++	} else {
++		if (map->map_type != BPF_MAP_TYPE_ARRAY ||
++		    !map->ops->map_check_btf)
++			return -EINVAL;
++		key_type = NULL;
++	}
+ 
+ 	value_type = btf_type_id_size(btf, &btf_value_id, &value_size);
+ 	if (!value_type || value_size != map->value_size)
+@@ -547,7 +559,7 @@
+ 	if (attr->btf_key_type_id || attr->btf_value_type_id) {
+ 		struct btf *btf;
+ 
+-		if (!attr->btf_key_type_id || !attr->btf_value_type_id) {
++		if (!attr->btf_value_type_id) {
+ 			err = -EINVAL;
+ 			goto free_map_nouncharge;
+ 		}
+@@ -678,6 +690,18 @@
+ 	return -ENOTSUPP;
+ }
+ 
++static fmode_t map_get_sys_perms(struct bpf_map *map, struct fd f)
++{
++	fmode_t mode = f.file->f_mode;
++
++	/* Our file permissions may have been overridden by global
++	 * map permissions facing syscall side.
++	 */
++	if (READ_ONCE(map->frozen))
++		mode &= ~FMODE_CAN_WRITE;
++	return mode;
++}
++
+ /* last field in 'union bpf_attr' used by this command */
+ #define BPF_MAP_LOOKUP_ELEM_LAST_FIELD value
+ 
+@@ -700,7 +724,7 @@
+ 	if (IS_ERR(map))
+ 		return PTR_ERR(map);
+ 
+-	if (!(f.file->f_mode & FMODE_CAN_READ)) {
++	if (!(map_get_sys_perms(map, f) & FMODE_CAN_READ)) {
+ 		err = -EPERM;
+ 		goto err_put;
+ 	}
+@@ -810,7 +834,7 @@
+ 	if (IS_ERR(map))
+ 		return PTR_ERR(map);
+ 
+-	if (!(f.file->f_mode & FMODE_CAN_WRITE)) {
++	if (!(map_get_sys_perms(map, f) & FMODE_CAN_WRITE)) {
+ 		err = -EPERM;
+ 		goto err_put;
+ 	}
+@@ -909,7 +933,7 @@
+ 	if (IS_ERR(map))
+ 		return PTR_ERR(map);
+ 
+-	if (!(f.file->f_mode & FMODE_CAN_WRITE)) {
++	if (!(map_get_sys_perms(map, f) & FMODE_CAN_WRITE)) {
+ 		err = -EPERM;
+ 		goto err_put;
+ 	}
+@@ -961,7 +985,7 @@
+ 	if (IS_ERR(map))
+ 		return PTR_ERR(map);
+ 
+-	if (!(f.file->f_mode & FMODE_CAN_READ)) {
++	if (!(map_get_sys_perms(map, f) & FMODE_CAN_READ)) {
+ 		err = -EPERM;
+ 		goto err_put;
+ 	}
+@@ -2331,6 +2355,36 @@
+ 	return err;
+ }
+ 
++#define BPF_MAP_FREEZE_LAST_FIELD map_fd
++
++static int map_freeze(const union bpf_attr *attr)
++{
++	int err = 0, ufd = attr->map_fd;
++	struct bpf_map *map;
++	struct fd f;
++
++	if (CHECK_ATTR(BPF_MAP_FREEZE))
++		return -EINVAL;
++
++	f = fdget(ufd);
++	map = __bpf_map_get(f);
++	if (IS_ERR(map))
++		return PTR_ERR(map);
++	if (READ_ONCE(map->frozen)) {
++		err = -EBUSY;
++		goto err_put;
++	}
++	if (!capable(CAP_SYS_ADMIN)) {
++		err = -EPERM;
++		goto err_put;
++	}
++
++	WRITE_ONCE(map->frozen, true);
++err_put:
++	fdput(f);
++	return err;
++}
++
+ #define BPF_TASK_FD_QUERY_LAST_FIELD task_fd_query.probe_addr
+ 
+ static int bpf_task_fd_query(const union bpf_attr *attr,
+@@ -2504,6 +2558,9 @@
+ 	case BPF_TASK_FD_QUERY:
+ 		err = bpf_task_fd_query(&attr, uattr);
+ 		break;
++	case BPF_MAP_FREEZE:
++		err = map_freeze(&attr);
++		break;
+ 	default:
+ 		err = -EINVAL;
+ 		break;
+--- a/kernel/bpf/verifier.c
++++ b/kernel/bpf/verifier.c
+@@ -1226,6 +1226,28 @@
+ 	return 0;
+ }
+ 
++static int check_map_access_type(struct bpf_verifier_env *env, u32 regno,
++				 int off, int size, enum bpf_access_type type)
++{
++	struct bpf_reg_state *regs = cur_regs(env);
++	struct bpf_map *map = regs[regno].map_ptr;
++	u32 cap = bpf_map_flags_to_cap(map);
++
++	if (type == BPF_WRITE && !(cap & BPF_MAP_CAN_WRITE)) {
++		verbose(env, "write into map forbidden, value_size=%d off=%d size=%d\n",
++			map->value_size, off, size);
++		return -EACCES;
++	}
++
++	if (type == BPF_READ && !(cap & BPF_MAP_CAN_READ)) {
++		verbose(env, "read from map forbidden, value_size=%d off=%d size=%d\n",
++			map->value_size, off, size);
++		return -EACCES;
++	}
++
++	return 0;
++}
++
+ /* check read/write into a map element with possible variable offset */
+ static int check_map_access(struct bpf_verifier_env *env, u32 regno,
+ 			    int off, int size, bool zero_size_allowed)
+@@ -1680,6 +1702,9 @@
+ 			return -EACCES;
+ 		}
+ 
++		err = check_map_access_type(env, regno, off, size, t);
++		if (err)
++			return err;
+ 		err = check_map_access(env, regno, off, size, false);
+ 		if (!err && t == BPF_READ && value_regno >= 0)
+ 			mark_reg_unknown(env, regs, value_regno);
+@@ -1980,8 +2005,30 @@
+ 		return check_packet_access(env, regno, reg->off, access_size,
+ 					   zero_size_allowed);
+ 	case PTR_TO_MAP_VALUE:
++		if (check_map_access_type(env, regno, reg->off, access_size,
++					  meta && meta->raw_mode ? BPF_WRITE :
++					  BPF_READ))
++			return -EACCES;
+ 		return check_map_access(env, regno, reg->off, access_size,
+ 					zero_size_allowed);
++	case PTR_TO_MEM: {
++		/* Ring buffer record passed to a helper (Linux 5.8). */
++		s64 mem_off;
++
++		if (!tnum_is_const(reg->var_off)) {
++			verbose(env, "variable offset access into ringbuf memory prohibited\n");
++			return -EACCES;
++		}
++		mem_off = reg->off + reg->var_off.value;
++		if (mem_off < 0 || access_size < 0 ||
++		    (!zero_size_allowed && access_size == 0) ||
++		    mem_off + access_size > reg->mem_size) {
++			verbose(env, "invalid access to ringbuf memory, mem_size=%u off=%lld size=%d\n",
++				reg->mem_size, mem_off, access_size);
++			return -EACCES;
++		}
++		return 0;
++	}
+ 	default: /* scalar_value|ptr_to_stack or invalid ptr */
+ 		return check_stack_boundary(env, regno, access_size,
+ 					    zero_size_allowed, meta);

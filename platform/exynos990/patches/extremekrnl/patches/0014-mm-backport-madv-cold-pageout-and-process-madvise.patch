@@ -1,0 +1,508 @@
+From: At30c <173511395+At30c@users.noreply.github.com>
+Subject: [PATCH] mm: backport MADV_COLD, MADV_PAGEOUT and process_madvise
+
+Android 17 compacts cached apps through process_madvise(MADV_COLD/PAGEOUT),
+and Samsung PerProcessNandswap (RAM Plus) uses process_madvise as well.
+
+- deactivate_page() and the lru_deactivate pagevec (upstream 5.4)
+- MADV_COLD/MADV_PAGEOUT; PAGEOUT reuses reclaim_pages_from_list() from the
+  Samsung CONFIG_PROCESS_RECLAIM path, THP are split like its PTE walker
+- process_madvise(2) as syscall 440 for 64-bit tasks (upstream 5.10), with
+  the pidfd resolved locally (no pidfd_get_pid in this tree); the syscall
+  table size is reserved by the close_range patch (0008)
+---
+--- a/include/uapi/asm-generic/mman-common.h
++++ b/include/uapi/asm-generic/mman-common.h
+@@ -66,6 +66,9 @@
+ #define MADV_WIPEONFORK 18		/* Zero memory on fork, child only */
+ #define MADV_KEEPONFORK 19		/* Undo MADV_WIPEONFORK */
+ 
++#define MADV_COLD	20		/* deactivate these pages */
++#define MADV_PAGEOUT	21		/* reclaim these pages */
++
+ /* compatibility flags */
+ #define MAP_FILE	0
+ 
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -736,6 +736,9 @@
+ __SC_COMP(__NR_io_pgetevents, sys_io_pgetevents, compat_sys_io_pgetevents)
+ #define __NR_rseq 293
+ __SYSCALL(__NR_rseq, sys_rseq)
++/* Backported from Linux 5.10; the table size is reserved by close_range's patch. */
++#define __NR_process_madvise 440
++__SYSCALL(__NR_process_madvise, sys_process_madvise)
+ #define __NR_pidfd_send_signal 424
+ __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
+ #define __NR_pidfd_open 434
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -801,6 +801,8 @@
+ asmlinkage long sys_mincore(unsigned long start, size_t len,
+ 				unsigned char __user * vec);
+ asmlinkage long sys_madvise(unsigned long start, size_t len, int behavior);
++asmlinkage long sys_process_madvise(int pidfd, const struct iovec __user *vec,
++			size_t vlen, int behavior, unsigned int flags);
+ asmlinkage long sys_remap_file_pages(unsigned long start, unsigned long size,
+ 			unsigned long prot, unsigned long pgoff,
+ 			unsigned long flags);
+--- a/include/linux/swap.h
++++ b/include/linux/swap.h
+@@ -345,6 +345,7 @@
+ extern void lru_add_drain_all(void);
+ extern void rotate_reclaimable_page(struct page *page);
+ extern void deactivate_file_page(struct page *page);
++extern void deactivate_page(struct page *page);
+ extern void mark_page_lazyfree(struct page *page);
+ extern void swap_setup(void);
+ 
+--- a/mm/swap.c
++++ b/mm/swap.c
+@@ -48,6 +48,7 @@
+ static DEFINE_PER_CPU(struct pagevec, lru_rotate_pvecs);
+ static DEFINE_PER_CPU(struct pagevec, lru_deactivate_file_pvecs);
+ static DEFINE_PER_CPU(struct pagevec, lru_lazyfree_pvecs);
++static DEFINE_PER_CPU(struct pagevec, lru_deactivate_pvecs);
+ #ifdef CONFIG_SMP
+ static DEFINE_PER_CPU(struct pagevec, activate_page_pvecs);
+ #endif
+@@ -539,6 +540,23 @@
+ }
+ 
+ 
++static void lru_deactivate_fn(struct page *page, struct lruvec *lruvec,
++			      void *arg)
++{
++	if (PageLRU(page) && PageActive(page) && !PageUnevictable(page)) {
++		int file = page_is_file_cache(page);
++		int lru = page_lru_base_type(page);
++
++		del_page_from_lru_list(page, lruvec, lru + LRU_ACTIVE);
++		ClearPageActive(page);
++		ClearPageReferenced(page);
++		add_page_to_lru_list(page, lruvec, lru);
++
++		__count_vm_events(PGDEACTIVATE, hpage_nr_pages(page));
++		update_page_reclaim_stat(lruvec, file, 0);
++	}
++}
++
+ static void lru_lazyfree_fn(struct page *page, struct lruvec *lruvec,
+ 			    void *arg)
+ {
+@@ -590,6 +608,10 @@
+ 	if (pagevec_count(pvec))
+ 		pagevec_lru_move_fn(pvec, lru_deactivate_file_fn, NULL);
+ 
++	pvec = &per_cpu(lru_deactivate_pvecs, cpu);
++	if (pagevec_count(pvec))
++		pagevec_lru_move_fn(pvec, lru_deactivate_fn, NULL);
++
+ 	pvec = &per_cpu(lru_lazyfree_pvecs, cpu);
+ 	if (pagevec_count(pvec))
+ 		pagevec_lru_move_fn(pvec, lru_lazyfree_fn, NULL);
+@@ -623,6 +645,26 @@
+ 	}
+ }
+ 
++/*
++ * deactivate_page - deactivate a page
++ * @page: page to deactivate
++ *
++ * deactivate_page() moves @page to the inactive list if @page was on the active
++ * list and was not an unevictable page.  This is done to accelerate the reclaim
++ * of @page.
++ */
++void deactivate_page(struct page *page)
++{
++	if (PageLRU(page) && PageActive(page) && !PageUnevictable(page)) {
++		struct pagevec *pvec = &get_cpu_var(lru_deactivate_pvecs);
++
++		get_page(page);
++		if (!pagevec_add(pvec, page) || PageCompound(page))
++			pagevec_lru_move_fn(pvec, lru_deactivate_fn, NULL);
++		put_cpu_var(lru_deactivate_pvecs);
++	}
++}
++
+ /**
+  * mark_page_lazyfree - make an anon page lazyfree
+  * @page: page to deactivate
+@@ -687,6 +729,7 @@
+ 		if (pagevec_count(&per_cpu(lru_add_pvec, cpu)) ||
+ 		    pagevec_count(&per_cpu(lru_rotate_pvecs, cpu)) ||
+ 		    pagevec_count(&per_cpu(lru_deactivate_file_pvecs, cpu)) ||
++		    pagevec_count(&per_cpu(lru_deactivate_pvecs, cpu)) ||
+ 		    pagevec_count(&per_cpu(lru_lazyfree_pvecs, cpu)) ||
+ 		    need_activate_page_drain(cpu)) {
+ 			INIT_WORK(work, lru_add_drain_per_cpu);
+--- a/mm/madvise.c
++++ b/mm/madvise.c
+@@ -24,6 +24,13 @@
+ #include <linux/swapops.h>
+ #include <linux/shmem_fs.h>
+ #include <linux/mmu_notifier.h>
++#include <linux/mm_inline.h>
++#include <linux/page_idle.h>
++#include <linux/pid.h>
++#include <linux/rmap.h>
++#include <linux/ptrace.h>
++#include <linux/sched/mm.h>
++#include <linux/uio.h>
+ 
+ #include <asm/tlb.h>
+ 
+@@ -40,6 +47,8 @@
+ 	case MADV_REMOVE:
+ 	case MADV_WILLNEED:
+ 	case MADV_DONTNEED:
++	case MADV_COLD:
++	case MADV_PAGEOUT:
+ 	case MADV_FREE:
+ 		return 0;
+ 	default:
+@@ -688,6 +697,158 @@
+ }
+ #endif
+ 
++struct madvise_walk_private {
++	bool pageout;
++};
++
++/*
++ * Backport of MADV_COLD/MADV_PAGEOUT (Linux 5.4).  Transparent huge pages are
++ * split like the Samsung process reclaim walker does, and MADV_PAGEOUT reuses
++ * its reclaim_pages_from_list() path.
++ */
++static int madvise_cold_or_pageout_pte_range(pmd_t *pmd,
++				unsigned long addr, unsigned long end,
++				struct mm_walk *walk)
++{
++	struct madvise_walk_private *private = walk->private;
++	struct vm_area_struct *vma = walk->vma;
++	struct mm_struct *mm = walk->mm;
++	bool pageout = private->pageout;
++	pte_t *orig_pte, *pte, ptent;
++	spinlock_t *ptl;
++	struct page *page;
++	LIST_HEAD(page_list);
++
++	if (fatal_signal_pending(current))
++		return -EINTR;
++
++	split_huge_pmd(vma, pmd, addr);
++	if (pmd_trans_unstable(pmd))
++		return 0;
++
++	orig_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
++	flush_tlb_batched_pending(mm);
++	arch_enter_lazy_mmu_mode();
++	for (; addr < end; pte++, addr += PAGE_SIZE) {
++		ptent = *pte;
++
++		if (pte_none(ptent) || !pte_present(ptent))
++			continue;
++
++		page = vm_normal_page(vma, addr, ptent);
++		if (!page)
++			continue;
++
++		/* Not split above (e.g. a PTE-mapped THP) or shared: skip. */
++		if (PageTransCompound(page) || page_mapcount(page) != 1)
++			continue;
++
++		ptep_test_and_clear_young(vma, addr, pte);
++		ClearPageReferenced(page);
++		test_and_clear_page_young(page);
++
++		if (!pageout) {
++			deactivate_page(page);
++			continue;
++		}
++
++#ifdef CONFIG_PROCESS_RECLAIM
++		if (PageUnevictable(page) || isolate_lru_page(page))
++			continue;
++
++		/* Lazyfree (MADV_FREE) anon pages are handled by reclaim. */
++		if (PageAnon(page) && !PageSwapBacked(page)) {
++			putback_lru_page(page);
++			continue;
++		}
++
++		list_add(&page->lru, &page_list);
++		inc_node_page_state(page, NR_ISOLATED_ANON +
++				    page_is_file_cache(page));
++#else
++		deactivate_page(page);
++#endif
++	}
++	arch_leave_lazy_mmu_mode();
++	pte_unmap_unlock(orig_pte, ptl);
++
++#ifdef CONFIG_PROCESS_RECLAIM
++	if (pageout && !list_empty(&page_list))
++		reclaim_pages_from_list(&page_list, vma);
++#endif
++	cond_resched();
++
++	return 0;
++}
++
++static inline bool can_madv_lru_vma(struct vm_area_struct *vma)
++{
++	return !(vma->vm_flags & (VM_LOCKED|VM_HUGETLB|VM_PFNMAP));
++}
++
++static void madvise_cold_or_pageout_range(struct vm_area_struct *vma,
++				unsigned long addr, unsigned long end,
++				bool pageout)
++{
++	struct madvise_walk_private walk_private = {
++		.pageout = pageout,
++	};
++	struct mm_walk walk = {
++		.pmd_entry = madvise_cold_or_pageout_pte_range,
++		.mm = vma->vm_mm,
++		.private = &walk_private,
++	};
++
++	walk_page_range(addr, end, &walk);
++}
++
++static long madvise_cold(struct vm_area_struct *vma,
++			struct vm_area_struct **prev,
++			unsigned long start_addr, unsigned long end_addr)
++{
++	*prev = vma;
++	if (!can_madv_lru_vma(vma))
++		return -EINVAL;
++
++	lru_add_drain();
++	madvise_cold_or_pageout_range(vma, start_addr, end_addr, false);
++
++	return 0;
++}
++
++static inline bool can_do_pageout(struct vm_area_struct *vma)
++{
++	if (vma_is_anonymous(vma))
++		return true;
++	if (!vma->vm_file)
++		return false;
++	/*
++	 * paging out pagecache only for non-anonymous mappings that correspond
++	 * to the files the calling process could (if tried) open for writing;
++	 * otherwise we'd be including shared non-exclusive mappings, which
++	 * opens a side channel.
++	 */
++	return inode_owner_or_capable(file_inode(vma->vm_file)) ||
++		inode_permission(file_inode(vma->vm_file), MAY_WRITE) == 0;
++}
++
++static long madvise_pageout(struct vm_area_struct *vma,
++			struct vm_area_struct **prev,
++			unsigned long start_addr, unsigned long end_addr)
++{
++	*prev = vma;
++	if (!can_madv_lru_vma(vma))
++		return -EINVAL;
++
++	if (!can_do_pageout(vma))
++		return 0;
++
++	lru_add_drain();
++	madvise_cold_or_pageout_range(vma, start_addr, end_addr, true);
++
++	return 0;
++}
++
+ static long
+ madvise_vma(struct vm_area_struct *vma, struct vm_area_struct **prev,
+ 		unsigned long start, unsigned long end, int behavior)
+@@ -697,6 +858,10 @@
+ 		return madvise_remove(vma, prev, start, end);
+ 	case MADV_WILLNEED:
+ 		return madvise_willneed(vma, prev, start, end);
++	case MADV_COLD:
++		return madvise_cold(vma, prev, start, end);
++	case MADV_PAGEOUT:
++		return madvise_pageout(vma, prev, start, end);
+ 	case MADV_FREE:
+ 	case MADV_DONTNEED:
+ 		return madvise_dontneed_free(vma, prev, start, end, behavior);
+@@ -718,6 +883,8 @@
+ 	case MADV_WILLNEED:
+ 	case MADV_DONTNEED:
+ 	case MADV_FREE:
++	case MADV_COLD:
++	case MADV_PAGEOUT:
+ #ifdef CONFIG_KSM
+ 	case MADV_MERGEABLE:
+ 	case MADV_UNMERGEABLE:
+@@ -802,7 +969,21 @@
+  *  -EBADF  - map exists, but area maps something that isn't a file.
+  *  -EAGAIN - a kernel resource was temporarily unavailable.
+  */
+-SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
++static bool
++process_madvise_behavior_valid(int behavior)
++{
++	switch (behavior) {
++	case MADV_COLD:
++	case MADV_PAGEOUT:
++	case MADV_WILLNEED:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static int do_madvise(struct mm_struct *mm, unsigned long start,
++		      size_t len_in, int behavior)
+ {
+ 	unsigned long end, tmp;
+ 	struct vm_area_struct *vma, *prev;
+@@ -840,10 +1021,10 @@
+ 
+ 	write = madvise_need_mmap_write(behavior);
+ 	if (write) {
+-		if (down_write_killable(&current->mm->mmap_sem))
++		if (down_write_killable(&mm->mmap_sem))
+ 			return -EINTR;
+ 	} else {
+-		down_read(&current->mm->mmap_sem);
++		down_read(&mm->mmap_sem);
+ 	}
+ 
+ 	/*
+@@ -851,7 +1032,7 @@
+ 	 * ranges, just ignore them, but return -ENOMEM at the end.
+ 	 * - different from the way of handling in mlock etc.
+ 	 */
+-	vma = find_vma_prev(current->mm, start, &prev);
++	vma = find_vma_prev(mm, start, &prev);
+ 	if (vma && start > vma->vm_start)
+ 		prev = vma;
+ 
+@@ -888,14 +1069,117 @@
+ 		if (prev)
+ 			vma = prev->vm_next;
+ 		else	/* madvise_remove dropped mmap_sem */
+-			vma = find_vma(current->mm, start);
++			vma = find_vma(mm, start);
+ 	}
+ out:
+ 	blk_finish_plug(&plug);
+ 	if (write)
+-		up_write(&current->mm->mmap_sem);
++		up_write(&mm->mmap_sem);
+ 	else
+-		up_read(&current->mm->mmap_sem);
++		up_read(&mm->mmap_sem);
+ 
+ 	return error;
+ }
++
++SYSCALL_DEFINE3(madvise, unsigned long, start, size_t, len_in, int, behavior)
++{
++	return do_madvise(current->mm, start, len_in, behavior);
++}
++
++static struct pid *madvise_pidfd_get_pid(unsigned int fd)
++{
++	struct fd f = fdget(fd);
++	struct pid *pid;
++
++	if (!f.file)
++		return ERR_PTR(-EBADF);
++
++	if (f.file->f_op == &pidfd_fops)
++		pid = get_pid(f.file->private_data);
++	else
++		pid = ERR_PTR(-EBADF);
++
++	fdput(f);
++	return pid;
++}
++
++/* Backport of process_madvise(2) (Linux 5.10). */
++SYSCALL_DEFINE5(process_madvise, int, pidfd, const struct iovec __user *, vec,
++		size_t, vlen, int, behavior, unsigned int, flags)
++{
++	ssize_t ret;
++	struct iovec iovstack[UIO_FASTIOV], iovec;
++	struct iovec *iov = iovstack;
++	struct iov_iter iter;
++	struct pid *pid;
++	struct task_struct *task;
++	struct mm_struct *mm;
++	size_t total_len;
++
++	if (flags != 0) {
++		ret = -EINVAL;
++		goto out;
++	}
++
++	ret = import_iovec(READ, vec, vlen, ARRAY_SIZE(iovstack), &iov, &iter);
++	if (ret < 0)
++		goto out;
++
++	pid = madvise_pidfd_get_pid(pidfd);
++	if (IS_ERR(pid)) {
++		ret = PTR_ERR(pid);
++		goto free_iov;
++	}
++
++	task = get_pid_task(pid, PIDTYPE_PID);
++	if (!task) {
++		ret = -ESRCH;
++		goto put_pid;
++	}
++
++	if (!process_madvise_behavior_valid(behavior)) {
++		ret = -EINVAL;
++		goto release_task;
++	}
++
++	/* Require PTRACE_MODE_READ to avoid leaking ASLR metadata. */
++	mm = mm_access(task, PTRACE_MODE_READ_FSCREDS);
++	if (IS_ERR_OR_NULL(mm)) {
++		ret = IS_ERR(mm) ? PTR_ERR(mm) : -ESRCH;
++		goto release_task;
++	}
++
++	/*
++	 * Require CAP_SYS_NICE for influencing process performance. Note that
++	 * only non-destructive hints are currently supported.
++	 */
++	if (!capable(CAP_SYS_NICE)) {
++		ret = -EPERM;
++		goto release_mm;
++	}
++
++	total_len = iov_iter_count(&iter);
++
++	while (iov_iter_count(&iter)) {
++		iovec = iov_iter_iovec(&iter);
++		ret = do_madvise(mm, (unsigned long)iovec.iov_base,
++				 iovec.iov_len, behavior);
++		if (ret < 0)
++			break;
++		iov_iter_advance(&iter, iovec.iov_len);
++	}
++
++	if (ret == 0)
++		ret = total_len - iov_iter_count(&iter);
++
++release_mm:
++	mmput(mm);
++release_task:
++	put_task_struct(task);
++put_pid:
++	put_pid(pid);
++free_iov:
++	kfree(iov);
++out:
++	return ret;
++}

@@ -127,7 +127,7 @@ index be311b944b19..cef0ef51ffbb 100644
  
  #undef __NR_syscalls
 -#define __NR_syscalls 435
-+#define __NR_syscalls 437
++#define __NR_syscalls 441
  
  /*
   * 32 bit systems traditionally used different
