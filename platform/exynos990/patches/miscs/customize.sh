@@ -89,11 +89,88 @@ if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 37 ]]; then
     if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
         SET_PROP "vendor" "ro.slmk.cached_max" "256"
 
-        # This is the stock S20 ART policy. The S24+ source does not declare
-        # it, so it was lost while system properties were merged. Profile
-        # guided JIT compilation improves code quality after normal app use
-        # without changing ART heap sizes or compilation filters.
-        SET_PROP "system" "dalvik.vm.usejitprofiles" "true"
+        # Memory policy taken from the Android 17 source (S947B), not from the
+        # S20 stock vendor, whose values target One UI 2-5 lmkd/ActivityManager.
+
+        # The S20 vendor sets the old DHA/PSI tuning. The Android 17 source
+        # sets none of them and lets BGSlotManager/lmkd derive the limits from
+        # RAM with use_bg_keeping_policy. dalvik.vm.usejitprofiles is also
+        # dropped: Android 17 libandroid_runtime no longer reads it and always
+        # passes -Xjitsaveprofilinginfo.
+        for prop in \
+                ro.slmk.dha_cached_min ro.slmk.dha_cached_max \
+                ro.slmk.dha_empty_min ro.slmk.dha_empty_max \
+                ro.slmk.2nd.dha_cached_min ro.slmk.2nd.dha_cached_max \
+                ro.slmk.2nd.dha_empty_min ro.slmk.2nd.dha_empty_max \
+                ro.slmk.2nd.freelimit_val ro.slmk.2nd.custom_sw_limit \
+                ro.slmk.custom_sw_limit ro.slmk.dha_pwhl_key \
+                ro.slmk.psi_medium ro.slmk.psi_critical ro.slmk.dha_th_rate; do
+            SET_PROP "vendor" "$prop" --delete
+        done
+        unset prop
+        SET_PROP "system" "dalvik.vm.usejitprofiles" --delete
+
+        # Android 17 source SLMK/Chimera policy (S947B vendor). Only properties
+        # that lmkd or services.jar of this build read are copied:
+        # - use_bg_keeping_policy: lmkd + ActivityManager background slots
+        # - chimera_quota_enable: quota-driven PerProcessNandswap (RAM Plus)
+        # - cam_dha_ver 3 / cam_kill_start_minutes 30: camera memory policy
+        #   (the S20 vendor still used version 19)
+        # - genie.*: unloading of on-device AI models under memory pressure
+        # - dha_2ndprop_thMB 12288: second property set only above 12 GiB
+        # add_bonusEFK/v_bonusEFK/plg_key have no reader here, and
+        # frequent_platform_reset is a KillPolicyManager auto-restart switch.
+        SET_PROP "vendor" "ro.slmk.use_bg_keeping_policy" "true"
+        SET_PROP "vendor" "ro.slmk.chimera_quota_enable" "true"
+        SET_PROP "vendor" "ro.slmk.cam_dha_ver" "3"
+        SET_PROP "vendor" "ro.slmk.cam_kill_start_minutes" "30"
+        SET_PROP "vendor" "ro.slmk.dha_2ndprop_thMB" "12288"
+        SET_PROP "vendor" "ro.slmk.freelimit_val" "13"
+        SET_PROP "vendor" "ro.slmk.genie.model_count" "1"
+        SET_PROP "vendor" "ro.slmk.genie.unload.threshold" "3145728"
+        SET_PROP "vendor" "ro.slmk.genie.oomadj.threshold" "850"
+        SET_PROP "vendor" "ro.slmk.genie.oomadj.psilevel" "1"
+        SET_PROP "vendor" "ro.slmk.genie.unload.timeout" "60"
+
+        # RAM Plus (Chimera NandswapManager/PerProcessNandswap), as in the
+        # Android 17 source: swap apps out quickly once they reach the
+        # background and after boot settles, so fewer cached apps are killed
+        # and cold-started again. higher_max_size is not copied: it only
+        # unlocks larger RAM Plus sizes and more storage wear.
+        SET_PROP "vendor" "ro.sys.kernelmemory.nandswap.quickswap" "true"
+        SET_PROP "vendor" "ro.sys.kernelmemory.nandswap.swap_after_boot" "true"
+
+        # ART heap from the Android 17 source vendor instead of the S20 one
+        # (2m/8m/0.75). Samsung init still runs tune_heap at early-init
+        # (init.sysfw.rc) and replaces these with RAM-based values (on this
+        # 8 GiB device: start 8m, maxfree 16m, target 0.6), so the two values
+        # it lowers below the Android 17 source are restored from "on init".
+        # heapgrowthlimit/heapsize/heaptargetutilization keep tune_heap's
+        # RAM-based results.
+        SET_PROP "vendor" "dalvik.vm.heapstartsize" "16m"
+        SET_PROP "vendor" "dalvik.vm.heapgrowthlimit" "256m"
+        SET_PROP "vendor" "dalvik.vm.heapsize" "512m"
+        SET_PROP "vendor" "dalvik.vm.heaptargetutilization" "0.5"
+        SET_PROP "vendor" "dalvik.vm.heapminfree" "8m"
+        SET_PROP "vendor" "dalvik.vm.heapmaxfree" "32m"
+
+        # Background dexopt (artd, Dex2OatBackground) only on the Cortex-A55
+        # cluster (cpu0-3) with 4 threads, so idle-time compilation does not
+        # wake the M5/A76 cores. Install and boot dexopt are unchanged.
+        ART_TUNING_STAGE="$(mktemp -d)"
+        mkdir -p "$ART_TUNING_STAGE/system/system/etc/init"
+        cat > "$ART_TUNING_STAGE/system/system/etc/init/init.exynos990.art.rc" << 'EOF'
+# Exynos 990 ART policy, applied after Samsung's early-init tune_heap.
+on init
+    setprop dalvik.vm.heapstartsize 16m
+    setprop dalvik.vm.heapmaxfree 32m
+    setprop dalvik.vm.background-dex2oat-cpu-set 0,1,2,3
+    setprop dalvik.vm.background-dex2oat-threads 4
+EOF
+        ADD_TO_WORK_DIR "$ART_TUNING_STAGE" "system" "system/etc/init/init.exynos990.art.rc" \
+            0 0 644 "u:object_r:system_file:s0"
+        rm -rf "$ART_TUNING_STAGE"
+        unset ART_TUNING_STAGE
     fi
 
     LOG_STEP_OUT
