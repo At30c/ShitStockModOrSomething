@@ -12,7 +12,10 @@ TARGET_PRODUCT_SHIPPING_API_LEVEL=29
 EXYNOS990_RUNTIME32_APEX_MODE="${EXYNOS990_RUNTIME32_APEX_MODE:-source_apex}"
 
 # Partitions
-TARGET_BOOT_PARTITION_SIZE=67108864
+# Real size of /dev/block/by-name/boot (blockdev --getsize64 on y2s). avbtool
+# pads the signed boot.img to this size, so a larger value makes the image
+# overflow the partition and recovery fails with an I/O error.
+TARGET_BOOT_PARTITION_SIZE=61865984
 TARGET_DTBO_PARTITION_SIZE=8388608
 TARGET_DTBO_LTE_PARTITION_SIZE=8388608
 TARGET_VENDOR_BOOT_PARTITION_SIZE=67108864
