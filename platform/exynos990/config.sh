@@ -37,7 +37,11 @@ TARGET_OS_BUILD_SYSTEM_EXT_PARTITION=false
 
 # SEC Product Feature
 TARGET_BLUETOOTH_SUPPORT_A2DPSINK_PROFILE=true
-TARGET_BLUETOOTH_SUPPORT_A2DP_SBM=true
+# The S20 stock firmware enables SBM, but the Bluetooth APEX is the Android
+# 17 source one (SBM off, as on the S947B) and the earlier S23 FE APEX also
+# ran with it off. There is no SBM patch for the CP2A smali, so keep the
+# source behavior instead of patching the module.
+TARGET_BLUETOOTH_SUPPORT_A2DP_SBM=false
 TARGET_BLUETOOTH_SUPPORT_HEAD_SAR_BACKOFF=false
 TARGET_BLUETOOTH_SUPPORT_XLNA_CONTROL=false
 TARGET_WLAN_CONFIG_CONNECTION_PERSONALIZATION="0"
