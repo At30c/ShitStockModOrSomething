@@ -110,27 +110,12 @@
 .end method
 
 .method public final onConfigurationChanged(Landroid/content/res/Configuration;)V
-    .locals 1
+    .locals 0
 
     invoke-super {p0, p1}, Lcom/android/settings/SettingsPreferenceFragment;->onConfigurationChanged(Landroid/content/res/Configuration;)V
 
-    iget-object p1, p0, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->mContext:Landroid/content/Context;
+    invoke-virtual {p0}, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->updatePickerPadding()V
 
-    const/4 v0, 0x0
-
-    invoke-static {p1, v0}, Lcom/android/settings/Utils;->getListHorizontalPadding(Landroid/content/Context;Landroidx/core/graphics/Insets;)I
-
-    move-result p1
-
-    iget-object p0, p0, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->mAppPickerView:Landroidx/picker/widget/SeslAppPickerListView;
-
-    if-eqz p0, :cond_0
-
-    const/4 v0, 0x0
-
-    invoke-virtual {p0, p1, v0, p1, v0}, Landroid/view/ViewGroup;->setPadding(IIII)V
-
-    :cond_0
     return-void
 .end method
 
@@ -211,6 +196,8 @@
 
     invoke-virtual {v0, p2, v1, p2, v1}, Landroid/view/ViewGroup;->setPadding(IIII)V
 
+    invoke-virtual {p0}, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->updatePickerPadding()V
+
     iget-object p2, p0, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->mAppPickerView:Landroidx/picker/widget/SeslAppPickerListView;
 
     invoke-virtual {p2, v1}, Landroidx/recyclerview/widget/RecyclerView;->setItemAnimator(Landroidx/recyclerview/widget/RecyclerView$ItemAnimator;)V
@@ -248,6 +235,12 @@
     invoke-direct {v1, p2, p1, v0}, Lcom/android/settings/widget/LoadingViewController;-><init>(Landroid/view/View;Landroid/view/View;Landroid/view/View;)V
 
     iput-object v1, p0, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->mLoadingViewController:Lcom/android/settings/widget/LoadingViewController;
+
+    # The list container is as tall as the window but starts below the app
+    # bar; without this the end of the list stays below the screen.
+    invoke-virtual {p0, p2}, Lcom/android/settings/SettingsPreferenceFragment;->adjustViewHeightWithAppBar(Landroid/view/View;)V
+
+    invoke-virtual {p0, p1}, Lcom/android/settings/SettingsPreferenceFragment;->adjustViewHeightWithAppBar(Landroid/view/View;)V
 
     const p2, 0x102003f
 
@@ -346,5 +339,51 @@
 
     invoke-static {v0}, Lcom/android/settingslib/utils/ThreadUtils;->postOnBackgroundThread(Ljava/lang/Runnable;)Lcom/google/common/util/concurrent/ListenableFuture;
 
+    return-void
+.end method
+
+.method public final applyListSpacing(Landroidx/core/graphics/Insets;)V
+    .locals 0
+
+    invoke-super {p0, p1}, Lcom/android/settings/SettingsPreferenceFragment;->applyListSpacing(Landroidx/core/graphics/Insets;)V
+
+    invoke-virtual {p0}, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->updatePickerPadding()V
+
+    return-void
+.end method
+
+.method public final updatePickerPadding()V
+    .locals 4
+
+    # Keep the last app above the navigation bar: Settings draws edge to edge,
+    # so the list needs the window's bottom inset as padding.
+    iget-object v0, p0, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->mAppPickerView:Landroidx/picker/widget/SeslAppPickerListView;
+
+    if-eqz v0, :cond_1
+
+    iget-object v1, p0, Lio/mesalabs/unica/settings/spoof/HideDeveloperStatusFragment;->mContext:Landroid/content/Context;
+
+    const/4 v2, 0x0
+
+    invoke-static {v1, v2}, Lcom/android/settings/Utils;->getListHorizontalPadding(Landroid/content/Context;Landroidx/core/graphics/Insets;)I
+
+    move-result v1
+
+    iget-object v2, p0, Lcom/android/settings/SettingsPreferenceFragment;->mIncludedWindowInset:Landroidx/core/graphics/Insets;
+
+    const/4 v3, 0x0
+
+    if-eqz v2, :cond_0
+
+    iget v3, v2, Landroidx/core/graphics/Insets;->bottom:I
+
+    :cond_0
+    const/4 v2, 0x0
+
+    invoke-virtual {v0, v1, v2, v1, v3}, Landroid/view/ViewGroup;->setPadding(IIII)V
+
+    invoke-virtual {v0, v2}, Landroid/view/ViewGroup;->setClipToPadding(Z)V
+
+    :cond_1
     return-void
 .end method
