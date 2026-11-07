@@ -26,12 +26,11 @@ SENSORHUB_FIRMWARE="$KERNEL_TMP_DIR/firmware/sensorhub/shub_ramen_m31.fw"
 BOOT_WORK_DIR="$KERNEL_TMP_DIR/boot-repack"
 KERNEL_TOOLCHAIN_DIR="$KERNEL_TMP_DIR/toolchain"
 KERNEL_TOOLCHAIN_BIN="$KERNEL_TOOLCHAIN_DIR/bin"
-# The manager APK shipped through unica/mods/preload is signed with
-# prebuilts/kernelsu-next/ksu-manager.jks. Embed its v2 signer certificate
-# size/hash so the kernel recognises exactly that manager; the official
-# KernelSU-Next release key (and the default 0x3e6/79e590...) must not be used.
-KSU_NEXT_MANAGER_SIZE="0x308"
-KSU_NEXT_MANAGER_HASH="8b4967968e3418f3ec3bf00fa2e7c2fbfbfb9813d220a4d5a1a9f2b0b1b6edaf"
+# unica/mods/preload ships the official KernelSU-Next release manager that
+# matches the pinned KernelSU-Next revision, so the kernel keeps the default
+# manager signature from KernelSU-Next's Kbuild (the official release key).
+# Never let a value inherited from the environment override it.
+unset KSU_NEXT_MANAGER_SIZE KSU_NEXT_MANAGER_HASH
 
 case "$KERNEL_TMP_DIR" in
     "$OUT_DIR"/kernel_tmp-exynos9611) ;;
@@ -229,7 +228,7 @@ GET_KERNEL_CACHE_KEY()
         printf 'integration=%s\n' "$(GET_FILE_SHA256 "$MODPATH/customize.sh")"
         printf 'patchset=%s\n' "$(GET_KERNEL_PATCHSET_DIGEST)"
         printf 'target=%s oneui=1\n' "$KERNEL_TARGET"
-        printf 'ksu_manager=%s/%s\n' "$KSU_NEXT_MANAGER_SIZE" "$KSU_NEXT_MANAGER_HASH"
+        printf 'ksu_manager=official-default\n'
         printf 'clang=%s\n' "$(readlink -f "$KERNEL_TOOLCHAIN_BIN/clang")"
         "$KERNEL_TOOLCHAIN_BIN/clang" --version 2>/dev/null | head -n1
     } | sha256sum | cut -d ' ' -f 1
@@ -434,7 +433,7 @@ PREPARE_KERNEL_TOOLCHAIN()
 BUILD_KERNEL_IMAGE()
 {
     LOG "- Building Something New kernel for $KERNEL_TARGET (One UI)"
-    export KSU_NEXT_MANAGER_SIZE KSU_NEXT_MANAGER_HASH
+    unset KSU_NEXT_MANAGER_SIZE KSU_NEXT_MANAGER_HASH
     cd "$KERNEL_TMP_DIR" || return 1
     # build_kernel.py selects exynos9611-m21_defconfig, oneui.config and
     # then emits out/arch/arm64/boot/Image.
