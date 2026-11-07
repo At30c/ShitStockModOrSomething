@@ -52,7 +52,12 @@ TARGET_WLAN_SUPPORT_LOWLATENCY=true
 TARGET_WLAN_SUPPORT_MBO=true
 TARGET_WLAN_SUPPORT_MIMO=true
 TARGET_WLAN_SUPPORT_MOBILEAP_11AX=true
-TARGET_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY=false
+# One UI 9 Settings only list the 5 GHz hotspot band when
+# SemWifiManager.supportWifiAp5GBasedOnCountry() is true; with this flag off
+# product_feature stubs it to false and the hotspot is limited to 2.4 GHz.
+# The BCM4375 does 5 GHz SoftAP, and the stock check (chip support settings
+# plus the 2.4 GHz-only country list) handles the regions that cannot.
+TARGET_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY=true
 TARGET_WLAN_SUPPORT_MOBILEAP_6G=false
 TARGET_WLAN_SUPPORT_MOBILEAP_DUALAP=false
 TARGET_WLAN_SUPPORT_MOBILEAP_OWE=false

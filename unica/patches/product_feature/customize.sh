@@ -1722,10 +1722,11 @@ if ! $SOURCE_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY; then
     fi
 else
     if ! $TARGET_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY; then
-        # The S947B donor advertises the feature, while the Exynos 990 target
-        # does not. Keep the target capability map coherent by disabling the
-        # donor's diagnostic flag instead of aborting on an unsupported
-        # source-to-target downgrade.
+        # The source advertises the feature while the target does not.
+        # Disable it instead of aborting on the downgrade. Note that One UI 9
+        # Settings only offer the 5 GHz hotspot band when
+        # supportWifiAp5GBasedOnCountry() is true, so this also limits the
+        # hotspot to 2.4 GHz: only targets without 5 GHz SoftAP should land here.
         SMALI_PATCH "system" "system/framework/semwifi-service.jar" \
             "smali/com/samsung/android/server/wifi/ap/SemSoftApConfiguration.smali" "replaceall" \
             "SPF_5G_BASEDON_COUNTRY=true" \
