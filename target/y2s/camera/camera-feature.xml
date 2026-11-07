@@ -27,6 +27,14 @@
 
     <!-- Back camera super resolution -->
     <local name="BACK_CAMERA_RESOLUTION_SUPER_RESOLUTION" value="9248x6936"/>
+    <!-- One UI 9 Samsung Camera reads a high-resolution size for every ratio while
+         64MP is active. The 64MP sensor only captures 4:3 (camera 50 advertises
+         9248x6936 only), so the other ratios fall back to their 12MP sizes, as in
+         the S20 stock camera. Without these keys the app stores resolution -1 and
+         crashes on every launch. -->
+    <local name="BACK_CAMERA_RESOLUTION_HIGH_RESOLUTION_16BY9" value="4032x2268"/>
+    <local name="BACK_CAMERA_RESOLUTION_HIGH_RESOLUTION_1BY1" value="3024x3024"/>
+    <local name="BACK_CAMERA_RESOLUTION_HIGH_RESOLUTION_FULL_RATIO" value="4032x1816"/>
 
     <!-- Back wide camera resolution -->
     <local name="BACK_WIDE_CAMERA_RESOLUTION_FULL_RATIO" value="4032x1816"/>
