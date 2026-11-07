@@ -12331,3 +12331,599 @@ UN1CA, idênticos aos do branch `sixteen` de `salvogiangri/UN1CA`
 * **CI:** o `build.yml` publicava a release manual em
   `ArtisanROM/rom_resources`; agora publica no próprio repositório
   (`${{ github.repository }}`).
+
+## Hotspot do y2s: 5 GHz na tela, Auto Hotspot e lista de apps cortada (05/11/2026)
+
+### 5 GHz ainda ausente após remover os overlays
+
+Com os overlays fora, o driver passou a confirmar o país
+(`mDriverCountryCode: BR`), mas a tela continuou só com 2,4 GHz. No One UI 9, o
+`WifiApSoftApUtils.getSupportedBandList` do SecSettings só adiciona "2,4 e 5 GHz"
+e "5 GHz" quando `SemWifiManager.supportWifiAp5GBasedOnCountry()` é true (o log
+`initMHSFeature SUPPORT_MOBILEAP_5G_BASED_ON_COUNTRY :false` mostra o estado). A
+plataforma declarava `TARGET_WLAN_SUPPORT_MOBILEAP_5G_BASEDON_COUNTRY=false`, e o
+`product_feature` então forçava esse método a retornar false no
+`SemWifiApServiceImpl`. Nas versões anteriores do One UI a flag não escondia o
+5 GHz, por isso o valor do G986B (false) foi mantido.
+
+Correção: `platform/exynos990/config.sh` passa a declarar `true`, e o método
+original do S947B volta a valer. Ele exige as configurações seguras
+`wifi_ap_chip_support5g` e `wifi_ap_chip_support5g_baseon_country` (as duas são
+`true` no y2s) e que o país não esteja na lista de países só 2,4 GHz
+(`isRegionFor5GCountry`). O chip é o BCM4375 (`Chip: 4375 Rev 5`), que faz
+SoftAP em 5 GHz.
+
+### Auto Hotspot: o y2s não aparecia para os outros aparelhos
+
+O y2s recebia o anúncio BLE do cliente (`same guid starting, MHS adv`), mas
+não respondia: `bleAdapter is null or invalid` e
+`can't start MHS advertisement1`. O `SemWifiApSmartBleScanner` só registra o
+servidor GATT e o anúncio MHS com o BLE standalone ligado, e o
+`SemWifiApSmartUtil.setAutoHotspotStandAloneBleMode` chama
+`BluetoothAdapter.semSetStandAloneBleMode(Z)`. O framework do Bluetooth do
+Android 17 (`com.android.bt.apex`) recusa essa chamada para o uid do sistema
+(`semSetStandAloneBleMode() is not permitted on the system server.`). O
+`semwifi-service` roda no system_server, então a chamada sempre falha. A
+variante para o system_server é `semSetSystemAppStandAloneBleMode(Z, String)`.
+Ela chama o mesmo `semSetStandAloneBleMode(ZZ)` interno e registra quem pediu.
+
+Correção: o `unica/patches/product_feature/customize.sh` troca a chamada
+pela variante de sistema e passa `"SemWifiApSmartUtil"` (já em `v1`) como nome.
+Depois disso, `getStandAloneBleMode()` (`sShouldAllowUseOfLeApi`) reflete o modo
+ligado e o resto do fluxo segue sem alteração. Validar no aparelho: com o
+Auto Hotspot ligado, o log não deve mais ter `not permitted on the system
+server`, e o y2s deve aparecer no Wi-Fi do outro aparelho com a mesma conta
+Samsung.
+
+Atualização (06/11/2026): o bloqueio acima era do `framework-bluetooth.jar`
+do APEX do S23 FE (r11s), não do Android 17. No APEX do S947B (CP2A), o
+`semSetStandAloneBleMode(Z)` não tem esse bloqueio e chama direto
+`enableBle`/`disableBle`; o `semSetSystemAppStandAloneBleMode` nem existe.
+Com a troca para o APEX de origem (seção "Bluetooth fechava em ligação pela
+multimídia do carro"), o patch foi removido do `product_feature`: se fosse
+aplicado, o system_server chamaria um método que não existe. O
+`semwifi-service` original volta a ser usado sem alteração. Revalidar o Auto
+Hotspot no aparelho.
+
+### Lista do "Ocultar apps instalados" cortada no final
+
+O `HideMyApplistFragment` e o `HideDeveloperStatusFragment` do mod `settings`
+aplicavam só o padding horizontal ao `SeslAppPickerListView`. As Configurações
+desenham de ponta a ponta, então o último app ficava atrás da barra de
+navegação. Os dois agora sobrescrevem `applyListSpacing(Insets)`, como o
+`CameraFlashNotificationAppPickerFragment` original. Um `updatePickerPadding()`
+aplica o `bottom` de `mIncludedWindowInset` como padding inferior, com
+`setClipToPadding(false)`. Ele também é chamado no `onCreateView` e no
+`onConfigurationChanged`.
+
+Só isso não resolveu (build `d7eb2919-dirty`). A causa principal era a altura:
+a view da lista (`list_container`, 0–2400 px) começa abaixo da app bar, então
+os últimos ~250 px ficavam fora da tela, e os apps depois do Waze nunca
+apareciam. Os fragments da Samsung com lista própria, como o
+`AppInteractionAgentListFragment`, chamam
+`SettingsPreferenceFragment.adjustViewHeightWithAppBar(View)` no
+`loading_container` e na view inflada. Esse método ajusta a altura pelo offset
+da `AppBarLayout`. Os dois fragments da UN1CA agora fazem o mesmo no
+`onCreateView`, logo depois de criar o `LoadingViewController`. Testado no
+aparelho com o `classes4.dex` refeito e um bind mount temporário do
+SecSettings: as duas listas vão até o último app (WhatsApp), acima da barra
+de gestos.
+
+### Senha única e Priorizar tráfego
+
+* **Senha única** (`WifiApOtpSwitchController`): só aparece com segurança
+  WPA2-Personal (`getSecurityType == 1`). Ao salvar a banda "2,4 GHz e 5 GHz",
+  a configuração ficou em WPA2/WPA3-Personal (tipo 2), e a opção sumiu. É
+  comportamento do One UI. Voltar a segurança para WPA2-Personal traz a opção
+  de volta.
+* **Priorizar tráfego** (`WifiApSmartPrioritySwitchController`): exige
+  `WifiApFeatureUtils.isMobileDataUsageSupported`, ou seja, kernel 5.0 ou
+  mais novo, ou `vendor.wifiap.kernel.datausage=1`. O `semwifi-service`
+  define essa propriedade a partir de `IOemNetd.isMBBPathsPresent()`, e no y2s
+  ela fica `0`. O netd procura os programas
+  `/sys/fs/bpf/netd_shared/prog_semSmartHS_*`, mas o `semSmartHS.bpf` do S947B
+  não carrega no kernel 4.19 (`BpfLoader-rs: Error when loading
+  /system/etc/bpf/semSmartHS.bpf: Invalid argument`). `semUidBPF`, `netlog`,
+  `tcpAccECN` e `kernelWakelockDuration` falham do mesmo jeito. Sem esses
+  mapas não há contagem por cliente. A tela usa então a interface antiga
+  (limite de dados global), que não tem o Priorizar tráfego. Forçar a
+  propriedade só mostraria um interruptor sem efeito. O G986B usava outro
+  programa (`ss_netd.o`) com outro netd.
+
+## ZIP incremental falhou no boot.img: tamanho da partição errado (05/11/2026)
+
+O incremental `UN1CA_2.0.1_20261105_y2s-INCREMENTAL` gravou system, vendor,
+product, odm e dtbo e abortou em `package_extract_file: Failed to extract entry
+"boot.img" (67108864 bytes) to "/dev/block/by-name/boot": I/O error` (E2001).
+A partição boot do y2s tem 61865984 bytes (`blockdev --getsize64`), mas
+`platform/exynos990/config.sh` declarava `TARGET_BOOT_PARTITION_SIZE=67108864`.
+O `SIGN_IMAGE_WITH_AVB` do `build_flashable_zip.sh` passa esse valor ao
+`avbtool add_hash_footer`, que completa a imagem até ele (o boot.img tem
+44404752 bytes). O footer AVB fica nos últimos 64 bytes de 64 MiB, além do fim
+da partição. dtbo, recovery, cache e up_param conferem com o config.
+
+O erro não aparecia antes porque o ZIP full gravava boot em `"/boot"` no ramdisk
+do recovery até a correção de 03/11 (`TARGET_OS_BOOT_DEVICE_PATH`). Depois da
+falha, a partição ficou com o boot.img novo inteiro (o sha1 dos primeiros
+44404752 bytes confere), mas sem vbmeta e sem footer. Correção:
+`TARGET_BOOT_PARTITION_SIZE=61865984`.
+
+## Kernel 4.19 do y2s: o que falha por falta de backport (05/11/2026)
+
+Kernel em execução: `4.19.325-cip119-st3-ExtremeKRNL-Nexus-v1+`, fonte em
+`out/kernel_tmp-exynos990` (já tem backport de ring buffer BPF, BTF com todos os
+kinds, freeze notification do binder e `cgroup.kill`). Testes feitos no aparelho
+com binários estáticos do NDK 29 (syscall direto, como root).
+
+### eBPF: `.rodata` exige `BPF_F_RDONLY_PROG` e `BPF_MAP_FREEZE` (5.2)
+
+Os seis objetos que falham com `Invalid argument` no boot (`semSmartHS`,
+`semUidBPF`, `netlog`, `tcpAccECN`, `kernelWakelockDuration`, `ztdMdd`) são
+exatamente os que têm seção `.rodata`. Os que carregam não têm. O BpfLoader é
+baseado em libbpf (o `ztdProc` carrega usando `probe_read_kernel`, que não
+existe neste kernel, porque o libbpf troca a chamada por `probe_read`). O
+libbpf cria o mapa interno `.rodata` como ARRAY com `BPF_F_RDONLY_PROG` e o
+congela com `BPF_MAP_FREEZE`. Teste no aparelho:
+
+| Chamada | Resultado |
+|---|---|
+| `BPF_MAP_CREATE` ARRAY + `BPF_F_RDONLY_PROG` / `BPF_F_WRONLY_PROG` | EINVAL |
+| ARRAY + `BPF_F_MMAPABLE` (5.5) | EINVAL (o libbpf testa antes e não usa) |
+| HASH + `BPF_F_ZERO_SEED` (5.0) | EINVAL |
+| `BPF_MAP_FREEZE` (cmd 22) com fd inválido | EINVAL (comando desconhecido; com o comando presente seria EBADF) |
+
+O acesso direto ao valor (`BPF_PSEUDO_MAP_VALUE`, `array_map_direct_value_addr`)
+e o BTF `VAR`/`DATASEC` já existem. Backports necessários: upstream
+`591fe9888d78` ("bpf: add program side {rd, wr}only support for maps") e
+`87df15de441b` ("bpf: add syscall side map freeze support"). Isso destrava:
+
+* `semSmartHS`: mapas MBB do hotspot (`prog_semSmartHS_*`). O netd passa a
+  responder `isMBBPathsPresent`, o `semwifi-service` grava
+  `vendor.wifiap.kernel.datausage=1`, e a tela do hotspot muda para a
+  interface com uso de dados por aparelho e Priorizar tráfego.
+* `semUidBPF`: filtros por UID da Samsung (`net_block`, `dns_check`, `tsm`,
+  `wlanfw`).
+* `kernelWakelockDuration`: estatística de wakelock do kernel via BPF (hoje
+  vem de `/sys/class/wakeup`, que funciona).
+* `netlog`, `tcpAccECN`, `ztdMdd`: diagnóstico de rede, marcação AccECN e
+  telemetria do Zero Trust da Samsung.
+
+### eBPF: outras falhas
+
+* `timeInState` e `dmabufIter` (ESRCH): usam relocações CO-RE (28 e 156 bytes
+  em `.BTF.ext`) e precisam do BTF do kernel (`/sys/kernel/btf/vmlinux`,
+  `CONFIG_DEBUG_INFO_BTF`, 5.5+), que não existe. O `dmabufIter` também
+  depende de iteradores BPF (5.8+). O Android usa a alternativa:
+  `/proc/uid_time_in_state` (`CONFIG_CPU_FREQ_TIMES=y`); o batterystats
+  mostra "CPU times (time_in_state)".
+* `fuseMedia`: tipo de programa fuse-bpf (kernels Android 5.10+). O FUSE
+  passthrough já existe e está ativo (`persist.sys.fuse.passthrough.enable=true`).
+* `bpfMemEvents` (EACCES): tracepoints `android_vendor_lmk/*` e
+  `kmem/mm_calculate_totalreserve_pages` não existem (vendor hooks GKI). O lmkd
+  segue só com PSI.
+* `ztdFs`, `ztdPrivEscal`, `ztdShell` (EACCES): telemetria do Zero Trust; o
+  `f2fs_dataread_*` não existe neste kernel. Sem efeito para o usuário.
+* `bpfLockContention`: tracepoints `lock/contention_*` são do 5.19.
+
+### Fora do eBPF
+
+| Recurso | Estado | Efeito |
+|---|---|---|
+| `MADV_COLD` / `MADV_PAGEOUT` (5.4) e `process_madvise` (5.10) | ausentes | Compactação de apps do ActivityManager desligada (`use_compaction=false`) |
+| `process_mrelease` (5.15) | ausente | lmkd não acelera a liberação de memória depois de matar um processo |
+| `clone3`, `faccessat2`, `epoll_pwait2`, `pidfd_getfd`, `mount_setattr` | ausentes | bionic e os serviços têm alternativa |
+| `io_uring`, `landlock`, `memfd_secret`, `futex_waitv`, `cachestat` | ausentes | não usados pelo sistema (o `io_uring` é bloqueado para apps) |
+| `pidfd_open`, `pidfd_send_signal`, `close_range`, `userfaultfd`, `rseq`, `memfd_create` | presentes | |
+| Freezer de apps (cgroup v2 `cgroup.freeze`, binder `freeze_notification`) | funciona | `use_freezer=true` |
+| fs-verity, incremental-fs, binderfs, PSI, FUSE passthrough | presentes | |
+| zram | `lzo-rle`, 8 GiB | `CONFIG_CRYPTO_LZ4` está desligado; habilitar LZ4 é só config |
+
+### Backports aplicados no kernel (06/11/2026, build #38)
+
+Os backports estão na série do build, em
+`platform/exynos990/patches/extremekrnl/patches/`:
+`0013-bpf-backport-program-side-map-flags-freeze-and-global-data.patch` e
+`0014-mm-backport-madv-cold-pageout-and-process-madvise.patch`. Na primeira versão
+eles estavam só em `out/kernel_tmp-exynos990`, e o `make_rom` abortou em
+`Could not apply kernel compatibility patch 0005-bpf-btf-support-modern-btf-kinds.patch`.
+O `APPLY_KERNEL_PATCHES` testa cada patch sozinho (`git apply --check`, senão
+`--reverse --check`), e a linha `case BTF_KIND_DATASEC:` colada às linhas que o
+`0005` adiciona quebrava o contexto dele nos dois sentidos. A linha foi movida
+para o início do `switch` de `btf_type_has_size()`. O `0008` (close_range) e o
+`0014` disputavam a linha `__NR_syscalls` de `include/uapi/asm-generic/unistd.h`.
+Agora o `0008` já reserva a tabela até o 440 (`__NR_syscalls 441`; de 437 a 439
+fica `sys_ni_syscall`), e o `0014` registra o `process_madvise` depois do `rseq`,
+com a declaração ao lado de `sys_madvise` em `syscalls.h`. A série foi
+verificada nos dois casos do build: árvore limpa (0001–0003 já estão no HEAD
+como commits, 0004–0014 entram em ordem) e árvore já aplicada (os 14 aparecem
+como presentes). Os objetos afetados compilam sem aviso. Backup da árvore antes
+da conversão: `/mnt/aleatory/kernel_backup_20261106_0858`. `fs/exec.c`,
+`fs/read_write.c`, `security/selinux/hooks.c` e o hardening do
+`exynos9830_defconfig` não fazem parte da série: o script do kernel os ajusta
+ao preparar o KernelSU. O boot.img é assinado com AVB usando a partição real
+(61865984 bytes).
+
+* **Dados globais BPF (5.2):** `BPF_F_RDONLY_PROG`/`BPF_F_WRONLY_PROG` em mapas
+  ARRAY e HASH (recusados em mapas de fd), `check_map_access_type()` no verifier
+  para acessos diretos e argumentos de helpers, comando `BPF_MAP_FREEZE`
+  (`map->frozen`, `map_get_sys_perms()`) e `BPF_MAP_LOOKUP_AND_DELETE_ELEM` só
+  reservando o número 21. BTF sem chave para ARRAY de uma entrada com valor
+  DATASEC, e DATASEC em `btf_type_has_size()`.
+* **`.` em nomes de objeto BPF** (`3e0ddc4f3ff1`): o libbpf nomeia o mapa
+  interno `<obj>.rodata`, e `bpf_obj_name_cpy()` recusava o ponto. Esta era a
+  última causa do EINVAL depois das flags (build #36 ainda falhava).
+* **Memória de ring buffer como argumento de helper (5.8):** caso
+  `PTR_TO_MEM` em `check_helper_mem_access()`, com a mesma checagem de limites
+  do acesso direto. Corrige `R? type=mem expected=fp`.
+* **`MADV_COLD`/`MADV_PAGEOUT` (5.4) e `process_madvise` (5.10, syscall 440,
+  só 64 bits):** `deactivate_page()` em `mm/swap.c`. O PAGEOUT reaproveita o
+  `reclaim_pages_from_list()` do `CONFIG_PROCESS_RECLAIM` da Samsung, e os THP
+  são divididos como no walker do `/proc/<pid>/reclaim`. O `do_madvise()`
+  recebe o `mm`, e o pidfd é resolvido localmente (não há `pidfd_get_pid`).
+
+Resultado no aparelho: `semSmartHS`, `semUidBPF`, `netlog`, `tcpAccECN`,
+`ztdMdd`, `ztdFs` e o programa de OOM do `bpfMemEvents` carregam, com 103
+programas fixados. O netd inicializa o "Smart Hotspot MBB v0.91", o
+`vendor.wifiap.kernel.datausage` fica `1`, e o Priorizar tráfego aparece na
+tela do hotspot. Teste de madvise: `MADV_COLD`/`MADV_PAGEOUT` ok;
+`process_madvise(PAGEOUT)` no próprio processo devolve 262144 bytes e recusa
+`DONTNEED`; os dados ficam íntegros.
+
+Ainda falham:
+* `kernelWakelockDuration`: `BPF_STX uses reserved fields` (instruções
+  atômicas, 5.12).
+* `ztdPrivEscal`: acesso variável à pilha.
+* `ztdShell`: deslocamento variável na memória do ring buffer.
+* `timeInState` e `dmabufIter`: precisam do BTF do kernel.
+* O BTF dos objetos com bitfields falha com `bits_offset exceeds its struct
+  size` (`kind_flag`, 5.1); o libbpf segue sem BTF.
+
+**Compactação de apps:** não ligar `use_compaction`. A compactação do AOSP
+(`CachedAppOptimizer`) fica desligada de propósito na Samsung
+(`DEFAULT_USE_COMPACTION=false`; o S947B original não sobrescreve), e o caminho
+não é inicializado. Com `device_config put activity_manager use_compaction true`,
+o system_server caiu (NullPointerException em `CachedAppOptimizer.compactApp`,
+chamado por `onProcessFrozen`, porque o `updateUseCompaction()` só cria o
+`CompactionStatsManager` quando `mCompactionHandler` ainda é nulo). A
+configuração foi apagada. O equivalente da Samsung é o Chimera:
+* `PerProcessNandswap` e `NandswapManager` (RAM Plus): ativos no y2s, zram
+  com `backing_dev=/dev/block/loop59` e 4 GB. A biblioteca
+  `libandroid_servers.so` usa `process_madvise` e `/proc/<pid>/reclaim`
+  (`CONFIG_PROCESS_RECLAIM`), e os dois existem no kernel agora.
+* `UnifiedMemoryReclaimer`: desligado (`ro.sys.kernelmemory.umr.enabled`
+  ausente), também no S947B original. Ele usaria `memory.reclaim` do cgroup v2
+  (5.19), que o 4.19 não tem.
+
+## y2s: RAM Plus, SLMK e ART para fluidez e bateria (06/11/2026)
+
+`platform/exynos990/patches/miscs/customize.sh` (bloco y2s/y2slte). Os valores
+vêm da fonte Android 17 (vendor do S947B) ou da lógica do próprio Android 17,
+nunca do vendor do S20 (One UI 2–5).
+
+* **SLMK antigo removido:** `dha_cached/empty_min/max` e as versões `2nd.*`,
+  `2nd.freelimit_val`, `custom_sw_limit` (as duas), `dha_pwhl_key`,
+  `psi_medium`, `psi_critical` e `dha_th_rate`. O lmkd e o `services.jar` do
+  A17 ainda leem essas propriedades, mas o S947B não define nenhuma: o
+  `BGSlotManager` e o lmkd calculam os limites pela RAM.
+* **SLMK/Chimera do A17:** só as propriedades que o lmkd ou o `services.jar`
+  desta build leem: `use_bg_keeping_policy=true`, `chimera_quota_enable=true`
+  (PPN por cota), `cam_dha_ver=3` (o S20 tinha 19),
+  `cam_kill_start_minutes=30`, `dha_2ndprop_thMB=12288`, `freelimit_val=13` e
+  `genie.*` (descarregar modelos de IA). Ficam de fora: `add_bonusEFK`,
+  `v_bonusEFK` e `plg_key` (sem leitor no y2s) e `frequent_platform_reset`
+  (reinício automático do `KillPolicyManager`).
+* **`dalvik.vm.usejitprofiles` removido:** o `libandroid_runtime` do A17 não lê
+  mais essa propriedade e sempre passa `-Xjitsaveprofilinginfo`.
+* **RAM Plus:** `nandswap.quickswap=true` e `nandswap.swap_after_boot=true`,
+  como no S947B. O `higher_max_size` não foi copiado: só libera tamanhos
+  maiores.
+* **Heap do ART:** o `vendor/build.prop` passa a ter o heap do S947B
+  (16m/256m/512m/0.5/8m/32m) no lugar do S20 (8m/256m/512m/0.75/2m/8m). O
+  `init` da Samsung executa `tune_heap` no `early-init` (`init.sysfw.rc`) e
+  recalcula o heap pela RAM; neste aparelho o resultado é start 8m, maxfree
+  16m, target 0.6. O `/system/etc/init/init.exynos990.art.rc` volta, no
+  `on init`, os dois valores que ficam abaixo da fonte A17
+  (`heapstartsize=16m`, `heapmaxfree=32m`). growthlimit, heapsize e target
+  continuam os calculados pelo `tune_heap`.
+* **Dexopt em segundo plano:** `background-dex2oat-cpu-set=0,1,2,3` e
+  `background-dex2oat-threads=4`, pelo mesmo `.rc`. O `artd` lê as duas; antes
+  o dexopt em segundo plano só entrava no cgroup `cpu/dex2oat`, sem afinidade
+  de núcleos. Teste com
+  `cmd package compile -r bg-dexopt -f com.samsung.android.app.notes`: o
+  `dex2oat64` rodou com `--cpu-set=0,1,2,3 -j4` e `Cpus_allowed_list: 0-3`.
+
+## Câmera: troca de proporção no 12MP ("Erro na câmera" e preview preto) (06/11/2026)
+
+A causa estava no provider AIDL (`platform/exynos990/patches/camera_aidl_port`),
+não na unificação do `graphics_aidl`: o binário do provider não mudava desde o
+`bce5eb2`, e o `92a490f` só o moveu. Duas falhas da ponte aparecem quando a
+Samsung Camera reconfigura a sessão para outra proporção:
+
+1. **Resultado vazio depois de `ERROR_REQUEST`.** O primeiro pedido da sessão
+   nova falha no backend (`REQUEST ERROR`), e o HAL devolve em seguida um
+   resultado sem metadata, com buffers que `takeReturned` rejeita (são da
+   configuração anterior). A ponte repassava esse `CaptureResult` vazio, e o
+   Camera3Device respondia `No result data provided by HAL for frame N` e
+   `ERROR_CAMERA_DEVICE`, que o app mostra como "Erro na câmera".
+   `CameraSession::handleResult` agora descarta o resultado quando não sobra
+   metadata, buffer nem metadata física (log `dropping empty capture result`),
+   e zera `partialResult` sem metadata.
+2. **`camera3_stream_t` recriado a cada `configure_streams`.** A ponte chamava
+   `clear()` e recriava todos os streams com `priv = NULL`. O HAL Exynos guarda
+   o próprio `ExynosCameraStream` no `priv`, e o wrapper HIDL (o
+   `preProcessConfigurationLocked`/`mStreamMap` do AOSP) passa os streams
+   mantidos com o mesmo objeto e o mesmo `priv`. Recebendo tudo como novo, o HAL
+   misturava os objetos (o stream 5 recebia o `priv` antigo do 6), reaproveitava
+   as frame factories (`framefactory already create`) e não recriava os
+   gerenciadores do secundário: `[P19] Failed to find bufferManager` e
+   `MCSC_PREVIEW Failed to getBuffer`, com todos os frames descartados e preview
+   preto. O `Camera3Streams` agora mantém `persistent_`
+   (`std::map<int32_t, std::unique_ptr<SamsungCamera3Stream>>`): o stream mantido
+   conserva o objeto e o `priv`, o novo começa com `priv = NULL`, e o removido sai
+   do mapa depois que o HAL aceita a configuração. Uma configuração recusada
+   descarta só os streams criados por ela. O `audit_camera_streams.sh` passou a
+   checar o mapa e o `priv` preservado.
+
+Testado no aparelho com bind mount do provider sobre
+`/vendor/bin/hw/...exynos990` (o init só executa o binário montado com o SELinux
+permissivo no instante do `start`; ele volta para enforcing logo depois): 3:4,
+9:16, 1:1 e Tela cheia funcionam no 12MP. O prebuilt
+`prebuilts/exynos990/camera_aidl_port/vendor/bin/hw/` foi atualizado com o mesmo
+binário, sem símbolos (`llvm-strip`).
+
+Para compilar, as dependências AOSP (sparse do `android17-release`) ficaram em
+`/mnt/aleatory/aosp-camera-aidl-deps`:
+`EXYNOS990_CAMERA_AIDL_AOSP_ROOT=/mnt/aleatory/aosp-camera-aidl-deps bash build_probe.sh`.
+
+### 64MP: troca de proporção grava resolução -1
+
+A Samsung Camera do One UI 9 monta o mapa (nível, proporção) → resolução no
+`te.f0`. O `SUPPORT_BACK_HIGH_RESOLUTION` liga sozinho porque o
+`BACK_CAMERA_RESOLUTION_SUPER_RESOLUTION` existe (9248x6936). No nível alto, cada
+proporção lê `BACK_CAMERA_RESOLUTION_HIGH_RESOLUTION_16BY9`, `_1BY1` e
+`_FULL_RATIO`. O S20 não tem essas chaves, então o parser devolve `""`, o
+`l9.a2.f()` devolve -1 e o app grava `BACK_CAMERA_RESOLUTION = -1`
+(`SettingNotifier: prevValue = 65, nextValue = -1`). A partir daí ele quebra
+toda vez que abre (`getResolution : argument is invalid - -1`). O HAL não
+participa: a câmera 50 anuncia 9248x6936 só em 4:3, como no S20 original.
+
+Correção em `target/y2s/camera/camera-feature.xml` e
+`target/y2slte/camera/camera-feature.xml`: as três chaves apontam para os
+tamanhos 12MP de cada proporção (4032x2268, 3024x3024, 4032x1816). Com o 64MP
+ativo, trocar de proporção vai para o 12MP daquela proporção, como no S20.
+Testado com bind mount do xml: 64 → 110 (64MP), → 67 (1:1), → 65 (9:16), → 102
+(tela cheia), → 110 (64MP em 3:4), sem crash. Para recuperar um app que já
+gravou -1: em
+`/data/data/com.sec.android.app.camera/shared_prefs/com.sec.android.app.camera_preferences.xml`,
+apague `back_camera_resolution` e ponha `back_camera_picture_ratio` em 0. x1s e
+c1s (9248x6936) e z3s e c2s (12000x9000) têm o mesmo esquema e devem precisar
+das chaves equivalentes, com os tamanhos 12MP de cada um. Não foram alterados
+nem testados.
+
+## Bluetooth fechava em ligação pela multimídia do carro (06/11/2026)
+
+Sintoma: ao ligar com o celular pareado na central do carro, o
+`com.android.bluetooth` fechava em loop e a conexão caía. No buffer `crash`:
+`NoSuchMethodError: No virtual method getMultiSimConfiguration()` em
+`BluetoothInCallService.isMultiSim()`, chamado por `getNetworkOperator()` no
+`HeadsetStateMachine.processAtCops()`. A central manda `AT+COPS?` (nome da
+operadora) ao conectar o HFP ou começar a ligação.
+
+Causa: o APEX de Bluetooth não era o do S947B. O módulo
+`platform/exynos990/patches/r11s_bluetooth_vaultkeeper` trazia o
+`com.android.bt.apex` do S23 FE (BP4A, Android 16, versionCode 361099999), e o
+`cidmanager` o reaplicava por último. Esse módulo ainda chama o método oculto
+`TelephonyManager#getMultiSimConfiguration()`, que o `framework.jar` do
+Android 17 não tem mais. O APEX do S947B (CP2A, 370399999) não faz essa chamada.
+
+Troca para o APEX do Android 17:
+- O módulo r11s não traz mais `com.android.bt.apex`, `libbt-iopdb.so` nem
+  `libbt-iopdb_mod.so`. O `customize.sh` dele recoloca os do firmware de
+  origem (por causa do work dir em cache), e o `cidmanager` deixou de
+  verificar esses três. As bibliotecas HIDL 2.0 do VaultKeeper
+  (`libvkjni.so`, `libvkmanager.so`, `vaultkeeper@2.0.so`) continuam, para o
+  `VaultKeeperService` do system_server.
+- Com o APEX de origem, o `unica/patches/bluetooth` volta a rodar (antes saía
+  com "Nothing to do"). O `libbluetooth_jni.so` do CP2A tem o padrão
+  `8856523948050037`, então o patch desliga a inicialização do VaultKeeper e o
+  cliente AIDL dele não precisa do serviço do vendor (o y2s só tem HIDL 2.0).
+- `TARGET_BLUETOOTH_SUPPORT_A2DP_SBM` passou para `false` no Exynos 990. Os
+  dois patches SBM existentes não aplicam no smali do CP2A, e o SBM já estava
+  desligado no APEX do r11s, então fica como na base.
+
+Conferido antes da troca, CP2A contra r11s: os dois usam o HAL HIDL
+`bluetooth@1.0/1.1` e os HALs de áudio Samsung (`audio@2.x`, `a2dp@1.0`); os
+dois leem `persist.bluetooth.a2dp_offload.disabled` e
+`persist.bluetooth.samsung.a2dp_offload.cap` (o ajuste de SBC no carro
+continua valendo); o `services.jar` do S947B não usa nenhuma API ausente no
+`framework-bluetooth.jar` do CP2A; os dois APEX só têm `lib64`, e o
+`Bluetooth.apk` não tem bibliotecas nativas. Vendor 32 bits não muda nada aqui:
+o serviço de HCI do y2s é 64 bits, e os HALs de áudio 32 bits do vendor falam
+com o Bluetooth por binder.
+
+O patch do Auto Hotspot no `product_feature` (`semSetSystemAppStandAloneBleMode`)
+foi removido: esse método só existia no `framework-bluetooth.jar` do r11s.
+Uma varredura das chamadas `android.bluetooth` em `unica`, `platform` e
+`target` contra o jar do CP2A não achou outra dependência do r11s.
+
+Para voltar ao r11s: restaurar os três arquivos do módulo pelo git, a lista do
+`cidmanager` e o patch do Auto Hotspot. Falta testar no aparelho: ligação pela central, áudio A2DP no
+carro e nos fones, e se o VaultKeeper não gera erro no Bluetooth.
+
+### Depois do flash: Bluetooth não ligava mais (06/11/2026)
+
+Dois problemas, um atrás do outro:
+
+1. `UnsatisfiedLinkError: library "vendor.samsung.hardware.security.vaultkeeper@2.0.so"
+   not found: needed by /system/lib64/libvkmanager.so in namespace com_android_bt`.
+   O `libbluetooth_jni.so` do CP2A linka `libvkmanager.so`, e o linker pega o
+   de `/system/lib64`. O módulo r11s punha ali a versão HIDL 2.0, que o
+   namespace do APEX não consegue resolver. Com o APEX do r11s isso batia;
+   com o do S947B não. Correção no `cidmanager`: o HIDL do módulo vira
+   `libvkmanager-hidl.so` (soname trocado com `patchelf`), o `libvkjni.so` do
+   módulo passa a linkar esse nome, e o `libvkmanager.so` AIDL do S947B volta
+   para `/system/lib64` (ele também é usado pelo `/system/bin/scs` do
+   S947B). É a mesma separação que o caminho sem módulo já fazia.
+2. Com a lib resolvida, o stack nativo abortava em `bt_main_thread`:
+   `shim/helpers.h:62 ToAddressWithType: Bad address type 6c`. Os pareamentos
+   com chave LE salvos pelo stack BP4A no `/data/misc/bluedroid/bt_config.conf`
+   têm `LE_KEY_PID`/`PENC`/`LENC` de 32 bytes, um layout que o CP2A não lê
+   (log: `Adding unknown address type(108)`, `Unknown key type 32`). Os
+   dispositivos só BR/EDR (carro, fones H02D) não têm esse problema. No
+   aparelho: backup em `bt_config.conf.bp4a-backup` e remoção das seções do
+   Galaxy Fit3, Buds3 Pro e JBL PartyBox; esses três precisam ser esquecidos
+   e pareados de novo. A edição só vale com o `com.android.bluetooth` morto:
+   o `beaconmanager`/`mcfserver` religam o BLE em segundos, o processo novo
+   carrega o config antigo e regrava o arquivo inteiro (aconteceu na primeira
+   tentativa). Desligar antes `ble_scan_always_enabled`, dar force-stop nos
+   dois e no Bluetooth, conferir com `pidof` e só então editar. Quem atualizar de uma build com o APEX do r11s e tiver
+   aparelho pareado por LE cai no mesmo abort, e resolve do mesmo jeito (ou
+   esquecendo todos os dispositivos LE antes de atualizar).
+
+## Build incremental mais rápido: target-files como diretório (06/11/2026)
+
+Medido no `-i` das 18:12: o target-files levou 23 min (imagens + `7z -mx=3`),
+e o `build_incremental_ota_zip.sh` gastou mais 15 min testando (`unzip -tq`) e
+extraindo os dois zips de 7,7 GB antes de recusar o par. O zip só reduzia 16%
+(9,2 GB → 7,7 GB).
+
+Agora:
+- `make_rom -i` guarda o target-files em `incremental/target-files/` e a base em
+  `incremental/base-target-files/` (`.prev` para a anterior): os `.img`/`.map`
+  como saem do `build_fs_image.sh`, sem zip. O `create_target_files_zip.sh`
+  aceita saída `.zip` (como antes) ou diretório.
+- Os scripts de OTA usam o diretório por hardlink (`STAGE_TARGET_FILES` em
+  `scripts/utils/install_utils.sh`), sem copiar nem descompactar. Por isso eles
+  podem apagar arquivos staged, mas nunca escrever dentro deles; a cópia do
+  instalador usa `cp --remove-destination` por esse motivo.
+- `new.dat`/`patch.dat`/`transfer.list` só são gerados para as partições que
+  mudaram no incremental, como antes.
+- A compatibilidade (device, timestamp, SPL) é checada pelo `build_info.txt`
+  antes de preparar qualquer arquivo.
+- O `stamp_build_info.sh` renova `ro.unica.timestamp` a cada build. Com o work
+  dir reaproveitado, o timestamp ficava o da criação do work dir e o
+  incremental recusava ("Target build is not newer"), como no `-i` das 18:12.
+- Formatos aceitos por partição, nesta ordem: `<p>.img` + `<p>.map`;
+  `<p>.img` sem mapa; `<p>.transfer.list` + `<p>.new.dat[.br]` (um ZIP
+  completo pode servir de origem). O `VALIDATE_TARGET_FILES` verifica as duas
+  entradas antes de qualquer staging: CRC do zip, formato de cada partição,
+  partição incompleta e `transfer.list` com comandos de incremental
+  (`bsdiff`, `move`, ...), que não dá para reconstruir sozinho. Na execução,
+  `scripts/internal/sdat2img.py` reconstrói o `.img` do `new.dat` (o `.br` é
+  descompactado em stream). Uma imagem sem `.map` força diff sem mapa nos dois
+  lados (`__ZERO`/`__NONZERO` em blocos fixos, as sparse viram raw): correto,
+  mas o pacote fica bem maior, por isso o `.img` com mapa tem prioridade.
+  Testado com origem em `new.dat.br` e alvo `.img` sem mapa (40 blocos
+  alterados de 2000: patch de 165 KB, verificação do bloco ok).
+- O ZIP completo (`build_full_ota_zip.sh`) aceita os mesmos formatos: `.img`
+  é convertido com `img2sdat`, o payload `new.dat[.br]` entra como está (o
+  tamanho do `op_list` vem do `transfer.list`). Com `.img` e payload juntos,
+  o payload preparado é apagado antes do `img2sdat`, que grava na mesma pasta
+  e escreveria através do hardlink da base. Testado com `system` só em
+  `new.dat.br` e com `.img` + `new.dat.br`: os dois zips reconstroem a imagem
+  esperada, e os hashes das entradas não mudaram.
+- Transição: o `base-target-files.zip` existente (build das 14:23, timestamp
+  1793980115) é a origem do próximo incremental; depois dele vira
+  `base-target-files.prev.zip` e a base passa a ser diretório.
+
+### CSC de origem (`/ZTA`) sumiu de "Versão de software da operadora" (06/11/2026)
+
+A linha é `getSalesCode()/mdc.matched_code (por chip)/ro.boot.carrierid` e, se
+existir, `/ro.boot.activatedid` (o CSC de origem: `ZTO/ZTO,ZTO/ZTO/ZTA`). No
+y2s o bootloader não entrega `androidboot.activatedid`: quem define o
+`ro.boot.activatedid` é o `/system/bin/scs` (`exec_start` no `scs.rc`), que lê
+o vault `AID` do VaultKeeper (`VaultKeeperManager::read`, log "set Activated
+ID"). O `scs` linka `libvkmanager.so`; com a correção do Bluetooth essa lib
+voltou a ser a AIDL do S947B, que não alcança o VaultKeeper do vendor do y2s
+(só HIDL 2.0), e o quinto campo sumiu.
+
+Correção no `cidmanager`: o `scs` passa a linkar `libvkmanager-hidl.so`, como o
+`libvkjni.so`. As duas builds exportam a mesma API de `VaultKeeperManager`
+(só muda o símbolo de hash da interface AIDL), e o `scs` só importa
+`getInstance()` e `read(int, char*, int*)`. A política do vendor do y2s já
+permite o caminho HIDL (`scs_30_0` → `hal_vaultkeeper_server_hwservice` find e
+`vaultkeeperd` binder call). O script aborta se `libvkjni.so` ou `scs` não
+linkarem a cópia HIDL. Fora o APEX do Bluetooth (manager próprio, VaultKeeper
+desligado pelo patch), não há outro cliente do VaultKeeper AIDL no sistema.
+
+## VaultKeeper AIDL do S26+ sobre o backend do y2s (06/11/2026)
+
+Módulo `platform/exynos990/patches/vaultkeeper_aidl`. Traz só a camada AIDL
+do S947B: `vendor/bin/vendor.samsung.hardware.security.vaultkeeper-service` e
+`vendor/lib64/vendor.samsung.hardware.security.vaultkeeper-V1-ndk.so`. O
+backend continua o do y2s: `libvkmanager_vendor.so` → `vaultkeeperd` → TA do
+TEEgris → `/efs/vk`. O TA do S26+ é do TEEgris do Exynos 2600 (`erd9965`) e o
+vault do EFS não pode mudar de formato, por isso não entra.
+
+Conferido antes:
+- todo símbolo `VaultKeeperManager` que o serviço importa existe no
+  `libvkmanager_vendor.so` do y2s;
+- o `V1-ndk` do vendor do S26+ e o do sistema têm o mesmo hash de interface
+  (`f272cbc6…`);
+- com as libs reais (bionic e `libbinder_ndk`/`liblog` do aparelho, VNDK 30,
+  `libvkmanager_vendor`) nenhum símbolo do serviço ou do `V1-ndk` fica sem
+  resolver. O único faltante era `std::__1::__libcpp_verbose_abort` (o libc++
+  do VNDK 30 é anterior): o `V1-ndk` ganha `NEEDED libcomposer3_cxxshim.so`
+  (do `graphics_aidl`), que exporta esse símbolo como trap.
+
+Instalação: mesmo rótulo do HAL HIDL (`vaultkeeperd_exec`, domínio
+`vaultkeeperd`, que já fala com `/dev/socket/vaultkeeper` e já é chamável por
+`system_server`, `scs`, `bluetooth`, `rild`, `ssud`, `emservice`,
+`hal_drk_default`); `.rc` próprio iniciado em `late-fs` junto do
+`vaultkeeper_common.rc`; fragmento VINTF AIDL; entrada AIDL opcional na
+`target/y2s(lte)/vintf/compatibility_matrix.device.xml`;
+`vendor_service_contexts` com `hal_vaultkeeper_service` e as regras no
+`vendor_sepolicy.cil` (tipo, `service_manager_type`, `/dev/binder`,
+`servicemanager` e `find` para os clientes). O `odm/precompiled_sepolicy` não
+bate com o sistema, então o `init` compila os `.cil`; a política foi
+compilada no PC com um `secilc` feito de `external/android-tools/vendor/selinux`
+com os mesmos argumentos do `init` (`-m -M true -G -N -c 30`), sem erro.
+
+**Resultado do teste por dd (06/11/2026): não funciona, módulo desativado.**
+O vendor com só essas 7 mudanças (verificado contra o dump, AVB ok) subiu, o
+`init` iniciou o `vaultkeeper_aidl` e ele morreu em loop com SIGILL
+(`ILL_ILLOPC`) em `__cxx_global_var_init`, antes de qualquer chamada ao
+backend. O binário do S26+ e o `V1-ndk` foram compilados para ARMv8.3+:
+usam `retaa` (PAC; o `paciasp`/`autiasp` são hint e viram NOP, mas `retaa`
+não) e `ldapur` (LRCPC2, ARMv8.4). O Exynos 990 anuncia só `lrcpc` (CPU parts
+0x004/M5, 0xd05/A55, 0xd0b/A76). Enquanto o serviço estava declarado no VINTF,
+os clientes AIDL esperavam por ele (o `scs` registrou "didn't start"). O vendor
+original foi regravado pelo dump e o aparelho voltou ao estado anterior. O
+módulo tem `disable`, o work dir foi revertido (arquivos, `configs`, SELinux)
+e a entrada AIDL saiu das matrizes. Um serviço AIDL para o y2s teria de ser
+compilado para ARMv8.2 (por exemplo, um front-end próprio sobre o
+`libvkmanager_vendor.so`), não reaproveitado do S26+.
+
+Fase planejada (não executada): o serviço AIDL rodaria ao lado do HIDL 2.0 e os clientes do sistema
+continuam na ponte HIDL (`libvkjni.so` e `scs` → `libvkmanager-hidl.so`), que
+já funciona. Depois de confirmar no aparelho que o AIDL sobe e responde
+(`service list`, logs do `vaultkeeper_aidl`, sem negações), os clientes passam
+para o AIDL e a ponte HIDL sai.
+
+Achado lateral: o `IBluetoothAudioProviderFactory/default` (bluetooth_audio_aidl)
+não está registrado no aparelho; o `android.hardware.bluetooth.audio-V5-ndk.so`
+tem a mesma referência forte a `__libcpp_verbose_abort` e não linka o shim.
+
+## KernelSU-Next: manager oficial conforme o kernel (06/11/2026)
+
+**Substitui** o manager local descrito em "KernelSU-Next" (build da branch
+`dev`, versionCode 33323, keystore próprio). Removidos
+`prebuilts/kernelsu-next/` (APK, `ksu-manager.jks`, `README.properties`) e o
+hash embutido no kernel do m21s.
+
+- `unica/mods/preload` lê a tag do KernelSU-Next fixada no kernel do alvo
+  (`out/kernel_tmp-$TARGET_PLATFORM/KernelSU-Next`, `git describe --tags
+  --abbrev=0`), tira o sufixo da branch (`v3.4.0-legacy` → `v3.4.0`), busca a
+  release na API do GitHub, baixa o `KernelSU_Next_vX.Y.Z_<code>-release.apk`
+  (não o `-spoofed`) e confere o sha256 com o `digest` publicado. Alvo sem
+  árvore de KernelSU não recebe o app.
+- `target/m21s/patches/kernel9611` não define mais `KSU_NEXT_MANAGER_SIZE/HASH`
+  (dá `unset`), então o kernel usa o padrão do Kbuild do KernelSU-Next
+  (`0x3e6`/`79e590…`, chave das releases oficiais). O y2s (ExtremeKRNL) já
+  usava o padrão.
+- Hoje os dois kernels estão em `v3.4.0-legacy` (+12 no y2s, +11 no m21s) e
+  recebem `KernelSU_Next_v3.4.0_33294-release.apk` (sha256 `50339a93…`), o
+  mesmo que já funcionava com root no y2s.
+- O kernel do m21s precisa ser recompilado (a chave de cache mudou para
+  `ksu_manager=official-default`); um m21s com o kernel antigo só reconhece o
+  manager local.
