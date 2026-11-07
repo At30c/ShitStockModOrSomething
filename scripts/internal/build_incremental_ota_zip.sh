@@ -30,7 +30,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
 CHECK_HOST_TOOLS()
 {
-    local TOOLS="7z brotli bspatch img2sdat python3 unzip"
+    local TOOLS="7z brotli bspatch img2sdat python3 simg2img unzip"
     if ! $DEBUG || $ROM_IS_OFFICIAL; then
         TOOLS+=" signapk"
     fi
@@ -41,20 +41,6 @@ CHECK_HOST_TOOLS()
             exit 1
         fi
     done
-}
-
-CHECK_INPUT_ZIP()
-{
-    local FILE="$1"
-
-    if ! unzip -tq "$FILE" &> /dev/null; then
-        LOGE "File is corrupted: ${FILE//$SRC_DIR\//}"
-        exit 1
-    fi
-    if ! unzip -Z1 "$FILE" | grep -qx "build_info.txt" || unzip -Z1 "$FILE" | grep -q "^META-INF/"; then
-        LOGE "File not valid: ${FILE//$SRC_DIR\//}"
-        exit 1
-    fi
 }
 
 # CHECK_FREE_SPACE <bytes> <purpose>
@@ -610,7 +596,7 @@ VERIFY_SOURCE_COMPATIBILITY()
 # ]
 
 if [ "$#" != "3" ]; then
-    echo "Usage: build_incremental_ota_zip <file> <file> <output>" >&2
+    echo "Usage: build_incremental_ota_zip <source target-files> <target target-files> <output>" >&2
     exit 1
 fi
 
@@ -620,33 +606,44 @@ OUTPUT_FILE="$3"
 
 CHECK_HOST_TOOLS
 
+# Both inputs are fully verified before anything is staged or built.
 LOG "- Checking source and target files"
-CHECK_INPUT_ZIP "$SOURCE_ZIP"
-CHECK_INPUT_ZIP "$TARGET_ZIP"
-if cmp -s "$SOURCE_ZIP" "$TARGET_ZIP"; then
+VALIDATE_TARGET_FILES "$SOURCE_ZIP" "source" || exit 1
+VALIDATE_TARGET_FILES "$TARGET_ZIP" "target" || exit 1
+if [ "$(realpath "$SOURCE_ZIP")" == "$(realpath "$TARGET_ZIP")" ] || \
+        { [ -f "$SOURCE_ZIP" ] && [ -f "$TARGET_ZIP" ] && cmp -s "$SOURCE_ZIP" "$TARGET_ZIP"; }; then
     LOGE "Source and target are the same file"
     exit 1
 fi
+
+# Checked before staging anything: a refused pair used to cost the whole
+# zip test and extraction first.
+SOURCE_BUILD_INFO="$(READ_TARGET_FILES_BUILD_INFO "$SOURCE_ZIP")" || exit 1
+TARGET_BUILD_INFO="$(READ_TARGET_FILES_BUILD_INFO "$TARGET_ZIP")" || exit 1
+VERIFY_SOURCE_COMPATIBILITY
 
 [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR/META-INF/com/google/android" "$VERIFY_DIR"
 cp -a "$SRC_DIR/prebuilts/bootable/deprecated-ota/updater" "$TMP_DIR/META-INF/com/google/android/update-binary"
 
 # Both trees plus the generated payload, which is at most the target size.
-NEEDED_SPACE=0
-for z in "$SOURCE_ZIP" "$TARGET_ZIP" "$TARGET_ZIP"; do
-    NEEDED_SPACE=$((NEEDED_SPACE + $(unzip -Zt "$z" | awk '{print $3}')))
+# Directory inputs are hard linked and take no space of their own.
+TARGET_FILES_SIZE="$(GET_TARGET_FILES_SIZE "$TARGET_ZIP")"
+[ -d "$TARGET_ZIP" ] && TARGET_FILES_SIZE="$(du -sb "$TARGET_ZIP" | cut -f 1)"
+NEEDED_SPACE=$(($(GET_TARGET_FILES_SIZE "$SOURCE_ZIP") + $(GET_TARGET_FILES_SIZE "$TARGET_ZIP") + TARGET_FILES_SIZE))
+CHECK_FREE_SPACE "$NEEDED_SPACE" "staging the source and target files"
+
+LOG "- Staging source files"
+STAGE_TARGET_FILES "$SOURCE_ZIP" "$TMP_DIR/source" || exit 1
+
+LOG "- Staging target files"
+STAGE_TARGET_FILES "$TARGET_ZIP" "$TMP_DIR/target" || exit 1
+
+for p in $PARTITIONS_LIST; do
+    for d in source target; do
+        PREPARE_STAGED_IMAGE "$TMP_DIR/$d" "$p" "${TARGET_FILES_FORMAT["$d:$p"]}" || exit 1
+    done
 done
-CHECK_FREE_SPACE "$NEEDED_SPACE" "extracting the source and target files"
-
-LOG "- Extracting source files"
-EVAL "unzip -o \"$SOURCE_ZIP\" -d \"$TMP_DIR/source\"" || exit 1
-
-LOG "- Extracting target files"
-EVAL "unzip -o \"$TARGET_ZIP\" -d \"$TMP_DIR/target\"" || exit 1
-
-SOURCE_BUILD_INFO="$(cat "$TMP_DIR/source/build_info.txt")"
-TARGET_BUILD_INFO="$(cat "$TMP_DIR/target/build_info.txt")"
 
 TARGET_CODENAME="$(grep "^device" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s)"
 if [ ! -d "$SRC_DIR/target/$TARGET_CODENAME" ]; then
@@ -660,16 +657,6 @@ if [[ "$TARGET_USE_DYNAMIC_PARTITIONS" != "true" && "$TARGET_USE_DYNAMIC_PARTITI
     exit 1
 fi
 
-VERIFY_SOURCE_COMPATIBILITY
-
-for p in $PARTITIONS_LIST; do
-    for d in source target; do
-        if [ -f "$TMP_DIR/$d/$p.img" ] && [ ! -f "$TMP_DIR/$d/$p.map" ]; then
-            LOGE "$d files have $p.img without its block map"
-            exit 1
-        fi
-    done
-done
 
 if $TARGET_USE_DYNAMIC_PARTITIONS; then
     LOG "- Generating dynamic_partitions_op_list"
@@ -685,14 +672,45 @@ for p in $PARTITIONS_LIST; do
         if ! cmp -s "$TMP_DIR/source/$p.img" "$TMP_DIR/target/$p.img"; then
             _CHECK_NON_EMPTY_PARAM "TARGET_CACHE_PARTITION_SIZE" "${TARGET_CACHE_PARTITION_SIZE//none/}" || exit 1
             LOG "- Generating $p.img block diff"
-            EVAL "img2sdat -o \"$TMP_DIR\" -c \"$TARGET_CACHE_PARTITION_SIZE\" --src-image \"$TMP_DIR/source/$p.img\" --src-block-map \"$TMP_DIR/source/$p.map\" --tgt-block-map \"$TMP_DIR/target/$p.map\" \"$TMP_DIR/target/$p.img\"" || exit 1
+            # blockimgdiff writes each bsdiff/imgdiff source, target and patch
+            # through tempfile. /tmp is a small tmpfs on the build host, and a
+            # full one makes bsdiff fail with "Writing extra_data", so keep
+            # these files on the build disk.
+            mkdir -p "$TMP_DIR/blockdiff-tmp"
+            if [ -f "$TMP_DIR/source/$p.map" ] && [ -f "$TMP_DIR/target/$p.map" ]; then
+                SRC_MAP="$TMP_DIR/source/$p.map"
+                TGT_MAP="$TMP_DIR/target/$p.map"
+            else
+                # No per-file map on one side (an image rebuilt from new.dat,
+                # or an .img shipped without its .map). blockimgdiff only
+                # pairs ranges with the same name, so both sides must be raw
+                # images, split as __ZERO/__NONZERO and diffed in fixed
+                # chunks. Correct, but the package is much larger than with
+                # file maps.
+                LOGW "$p has no block map on both sides; using a map-less diff (larger package)"
+                for d in source target; do
+                    if [ "$(od -An -tx1 -N4 "$TMP_DIR/$d/$p.img" | tr -d " \n")" == "3aff26ed" ]; then
+                        # New file, then rename: never write through a hard link.
+                        EVAL "simg2img \"$TMP_DIR/$d/$p.img\" \"$TMP_DIR/$d/$p.raw\"" || exit 1
+                        mv -f "$TMP_DIR/$d/$p.raw" "$TMP_DIR/$d/$p.img"
+                    fi
+                done
+                # img2sdat insists on map paths with --src-image, but raw
+                # images (FileImage) never read them.
+                : > "$TMP_DIR/.unused.map"
+                SRC_MAP="$TMP_DIR/.unused.map"
+                TGT_MAP="$TMP_DIR/.unused.map"
+            fi
+            EVAL "TMPDIR=\"$TMP_DIR/blockdiff-tmp\" img2sdat -o \"$TMP_DIR\" -c \"$TARGET_CACHE_PARTITION_SIZE\" --src-image \"$TMP_DIR/source/$p.img\" --src-block-map \"$SRC_MAP\" --tgt-block-map \"$TGT_MAP\" \"$TMP_DIR/target/$p.img\"" || exit 1
             VERIFY_BLOCK_UPDATE "$p" "$TMP_DIR/source/$p.img"
         fi
         rm -f "$TMP_DIR/source/$p.img" "$TMP_DIR/source/$p.map" \
             "$TMP_DIR/target/$p.img" "$TMP_DIR/target/$p.map"
     else
         LOG "- Converting $p.img to $p.new.dat"
-        EVAL "img2sdat -o \"$TMP_DIR\" --tgt-block-map \"$TMP_DIR/target/$p.map\" \"$TMP_DIR/target/$p.img\"" || exit 1
+        TGT_MAP_ARG=""
+        [ -f "$TMP_DIR/target/$p.map" ] && TGT_MAP_ARG="--tgt-block-map \"$TMP_DIR/target/$p.map\""
+        EVAL "img2sdat -o \"$TMP_DIR\" $TGT_MAP_ARG \"$TMP_DIR/target/$p.img\"" || exit 1
         VERIFY_BLOCK_UPDATE "$p"
         rm -f "$TMP_DIR/target/$p.img" "$TMP_DIR/target/$p.map"
 
@@ -757,7 +775,7 @@ GENERATE_OTA_METADATA
 
 if [ -d "$SRC_DIR/target/$TARGET_CODENAME/installer/root" ]; then
     LOG "- Copying target custom install files"
-    EVAL "cp -a \"$SRC_DIR/target/$TARGET_CODENAME/installer/root/\"* \"$TMP_DIR\"" || exit 1
+    EVAL "cp -a --remove-destination \"$SRC_DIR/target/$TARGET_CODENAME/installer/root/\"* \"$TMP_DIR\"" || exit 1
 fi
 
 if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/customize.sh" ]; then

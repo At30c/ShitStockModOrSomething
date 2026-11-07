@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # [
-source "$SRC_DIR/scripts/utils/build_utils.sh" || exit 1
+source "$SRC_DIR/scripts/utils/install_utils.sh" || exit 1
 
 INCREMENTAL=false
 SOURCE_ZIP=""
@@ -39,13 +39,13 @@ PREPARE_SCRIPT()
     if [ ! "$TARGET_ZIP" ]; then
         PRINT_USAGE
         exit 1
-    elif [ ! -f "$TARGET_ZIP" ]; then
+    elif [ ! -e "$TARGET_ZIP" ]; then
         LOGE "File not found: ${TARGET_ZIP//$SRC_DIR\//}"
         exit 1
     fi
 
     if [ "$SOURCE_ZIP" ]; then
-        if [ ! -f "$SOURCE_ZIP" ]; then
+        if [ ! -e "$SOURCE_ZIP" ]; then
             LOGE "File not found: ${SOURCE_ZIP//$SRC_DIR\//}"
             exit 1
         fi
@@ -54,8 +54,7 @@ PREPARE_SCRIPT()
     if [ ! "$OUTPUT_FILE" ]; then
         local TARGET_BUILD_INFO
 
-        EVAL "unzip -p \"$TARGET_ZIP\" \"build_info.txt\"" || exit 1
-        TARGET_BUILD_INFO="$(unzip -p "$TARGET_ZIP" "build_info.txt")"
+        TARGET_BUILD_INFO="$(READ_TARGET_FILES_BUILD_INFO "$TARGET_ZIP")" || exit 1
 
         OUTPUT_FILE="$OUT_DIR/UN1CA_"
         OUTPUT_FILE+="$(grep "^version" <<< "$TARGET_BUILD_INFO" | cut -d "=" -f 2 -s)"
@@ -66,8 +65,7 @@ PREPARE_SCRIPT()
         if $INCREMENTAL; then
             local SOURCE_BUILD_INFO
 
-            EVAL "unzip -p \"$SOURCE_ZIP\" \"build_info.txt\"" || exit 1
-            SOURCE_BUILD_INFO="$(unzip -p "$SOURCE_ZIP" "build_info.txt")"
+            SOURCE_BUILD_INFO="$(READ_TARGET_FILES_BUILD_INFO "$SOURCE_ZIP")" || exit 1
 
             OUTPUT_FILE+="-INCREMENTAL_"
             OUTPUT_FILE+="$(grep "^timestamp" <<< "$SOURCE_BUILD_INFO" | cut -d "=" -f 2 -s)"
@@ -81,8 +79,8 @@ PREPARE_SCRIPT()
 
 PRINT_USAGE()
 {
-    echo "Usage: build_flashable_zip [options] <file>" >&2
-    echo " -i, --incremental : Generate an incremental zip using the given target-files zip as source" >&2
+    echo "Usage: build_flashable_zip [options] <target-files zip or dir>" >&2
+    echo " -i, --incremental : Generate an incremental zip using the given target-files zip or dir as source" >&2
     echo " -o, --output : Specify the output zip path, defaults to $OUT_DIR" >&2
 }
 # ]

@@ -43,6 +43,11 @@ ROM_COMMIT="$COMMIT"
 SET_PROP "system" "ro.unica.commit" "$ROM_COMMIT"
 ADD_PROPERTY_CONTEXT "ro.unica.commit"
 
+# A reused work dir keeps the timestamp of the build that created it, so the
+# next incremental OTA was refused ("Target build is not newer than the
+# source build") and a full ZIP had to be built instead.
+SET_PROP "system" "ro.unica.timestamp" "$(date +%s)"
+
 # unica/<device>:<MAJOR.MINOR.PATCH>/<commit><.dirty>/<timestamp>:<user|userdebug>/<release|test>-keys
 FINGERPRINT="unica/${TARGET_CODENAME}:"
 FINGERPRINT+="$(grep -o "^[0-9]\+\.[0-9]\+\.[0-9]\+" <<< "$ROM_VERSION")/"

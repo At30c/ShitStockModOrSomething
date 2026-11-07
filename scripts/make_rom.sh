@@ -36,8 +36,13 @@ APK_DECODE_CACHE_DIR="$OUT_DIR/target/$TARGET_CODENAME/apk_decode_cache"
 APK_BUILD_LIST="$OUT_DIR/target/$TARGET_CODENAME/tmp/apk-cache-build.list"
 APK_CACHE_FORMAT="unica-apk-cache-v2"
 INCREMENTAL_DIR="$OUT_DIR/target/$TARGET_CODENAME/incremental"
-INCREMENTAL_BASE="$INCREMENTAL_DIR/base-target-files.zip"
-INCREMENTAL_TARGET="$INCREMENTAL_DIR/target-files.zip"
+# Target files are stored as directories of images (see install_utils.sh).
+# A base-target-files.zip from older builds is still used once as the source.
+INCREMENTAL_BASE="$INCREMENTAL_DIR/base-target-files"
+INCREMENTAL_PREV="$INCREMENTAL_DIR/base-target-files.prev"
+INCREMENTAL_TARGET="$INCREMENTAL_DIR/target-files"
+INCREMENTAL_LEGACY_BASE="$INCREMENTAL_DIR/base-target-files.zip"
+INCREMENTAL_LEGACY_PREV="$INCREMENTAL_DIR/base-target-files.prev.zip"
 
 GET_PATCHED_APK_HASH()
 {
@@ -373,16 +378,23 @@ fi
 if $BUILD_ZIP; then
     if $BUILD_INCREMENTAL; then
         mkdir -p "$INCREMENTAL_DIR"
-        rm -f "$INCREMENTAL_TARGET"
+        rm -rf "$INCREMENTAL_TARGET" "$INCREMENTAL_DIR/target-files.zip"
+
+        INCREMENTAL_SOURCE=""
+        if [ -d "$INCREMENTAL_BASE" ]; then
+            INCREMENTAL_SOURCE="$INCREMENTAL_BASE"
+        elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
+            INCREMENTAL_SOURCE="$INCREMENTAL_LEGACY_BASE"
+        fi
 
         LOG_STEP_IN true "Creating incremental target-files"
         "$SRC_DIR/scripts/internal/create_target_files_zip.sh" "$INCREMENTAL_TARGET" || exit 1
         LOG_STEP_OUT
 
         LOG_STEP_IN true "Creating incremental ROM zip"
-        if [ -f "$INCREMENTAL_BASE" ]; then
+        if [ "$INCREMENTAL_SOURCE" ]; then
             "$SRC_DIR/scripts/build_flashable_zip.sh" \
-                --incremental "$INCREMENTAL_BASE" "$INCREMENTAL_TARGET" || exit 1
+                --incremental "$INCREMENTAL_SOURCE" "$INCREMENTAL_TARGET" || exit 1
         else
             LOGW "No incremental base exists; creating a full ZIP and establishing the baseline"
             "$SRC_DIR/scripts/build_flashable_zip.sh" "$INCREMENTAL_TARGET" || exit 1
@@ -394,8 +406,12 @@ if $BUILD_ZIP; then
         # The previous baseline is kept: if the ZIP just built is never
         # installed, the next one can be rebuilt against it with
         # build_flashable_zip.sh -i.
-        if [ -f "$INCREMENTAL_BASE" ]; then
-            mv -f "$INCREMENTAL_BASE" "$INCREMENTAL_DIR/base-target-files.prev.zip"
+        if [ -d "$INCREMENTAL_BASE" ]; then
+            rm -rf "$INCREMENTAL_PREV"
+            rm -f "$INCREMENTAL_LEGACY_PREV" "$INCREMENTAL_LEGACY_BASE"
+            mv -f "$INCREMENTAL_BASE" "$INCREMENTAL_PREV"
+        elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
+            mv -f "$INCREMENTAL_LEGACY_BASE" "$INCREMENTAL_LEGACY_PREV"
         fi
         mv -f "$INCREMENTAL_TARGET" "$INCREMENTAL_BASE"
         LOG "- Updated incremental baseline: ${INCREMENTAL_BASE//$SRC_DIR\//}"

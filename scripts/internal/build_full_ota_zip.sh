@@ -41,14 +41,19 @@ GENERATE_OP_LIST()
         echo "# Add group $SUPER_GROUP_NAME with maximum size $SUPER_GROUP_SIZE"
         echo "add_group $SUPER_GROUP_NAME $SUPER_GROUP_SIZE"
         for p in $PARTITIONS_LIST; do
-            if [ -f "$TMP_DIR/$p.img" ]; then
+            if [ "${TARGET_FILES_FORMAT["target:$p"]}" ]; then
                 echo "# Add partition $p to group $SUPER_GROUP_NAME"
                 echo "add $p $SUPER_GROUP_NAME"
             fi
         done
         for p in $PARTITIONS_LIST; do
-            if [ -f "$TMP_DIR/$p.img" ]; then
-                PARTITION_SIZE="$(GET_IMAGE_SIZE "$TMP_DIR/$p.img")"
+            if [ "${TARGET_FILES_FORMAT["target:$p"]}" ]; then
+                if [ "${TARGET_FILES_FORMAT["target:$p"]}" == "dat" ]; then
+                    # A full payload writes every block of the image.
+                    PARTITION_SIZE="$(python3 -I "$SRC_DIR/scripts/internal/sdat2img.py" --check "$TMP_DIR/$p.transfer.list")" || exit 1
+                else
+                    PARTITION_SIZE="$(GET_IMAGE_SIZE "$TMP_DIR/$p.img")"
+                fi
                 echo "# Grow partition $p from 0 to $PARTITION_SIZE"
                 echo "resize $p $PARTITION_SIZE"
                 OCCUPIED_SPACE=$((OCCUPIED_SPACE + PARTITION_SIZE))
@@ -218,17 +223,18 @@ fi
 TARGET_ZIP="$1"
 OUTPUT_FILE="$2"
 
-if ! unzip -l "$TARGET_ZIP" | grep -q "build_info.txt" || unzip -l "$TARGET_ZIP" | grep -q "META-INF"; then
-    LOGE "File not valid: ${TARGET_ZIP//$SRC_DIR\//}"
-    exit 1
-fi
+# Verified before anything is staged. Partitions come as .img (converted
+# here) or as a full block payload (packaged as is); .img wins when both exist.
+VALIDATE_TARGET_FILES "$TARGET_ZIP" "target" || exit 1
 
 [ -d "$TMP_DIR" ] && rm -rf "$TMP_DIR"
 mkdir -p "$TMP_DIR/META-INF/com/google/android"
 cp -a "$SRC_DIR/prebuilts/bootable/deprecated-ota/updater" "$TMP_DIR/META-INF/com/google/android/update-binary"
 
-LOG "- Extracting target files"
-EVAL "unzip -o \"$TARGET_ZIP\" -d \"$TMP_DIR\"" || exit 1
+LOG "- Staging target files"
+STAGE_TARGET_FILES "$TARGET_ZIP" "$TMP_DIR/.target-files" || exit 1
+EVAL "find \"$TMP_DIR/.target-files\" -mindepth 1 -maxdepth 1 -exec mv -t \"$TMP_DIR\" {} +" || exit 1
+rmdir "$TMP_DIR/.target-files"
 
 BUILD_INFO="$(cat "$TMP_DIR/build_info.txt")"
 rm -f "$TMP_DIR/build_info.txt"
@@ -247,15 +253,36 @@ if $TARGET_USE_DYNAMIC_PARTITIONS; then
 fi
 
 for p in $PARTITIONS_LIST; do
-    if [ ! -f "$TMP_DIR/$p.img" ]; then
-        continue
-    fi
+    case "${TARGET_FILES_FORMAT["target:$p"]}" in
+        img|img-nomap)
+            # Staged files are hard links to the stored target files and
+            # img2sdat writes <p>.transfer.list/.new.dat/.patch.dat here: drop
+            # any staged payload for this partition first so it never writes
+            # through a link.
+            rm -f "$TMP_DIR/$p.transfer.list" "$TMP_DIR/$p.new.dat" \
+                "$TMP_DIR/$p.new.dat.br" "$TMP_DIR/$p.patch.dat"
 
-    LOG "- Converting $p.img to $p.new.dat"
-    EVAL "img2sdat -o \"$TMP_DIR\" --tgt-block-map \"$TMP_DIR/$p.map\" \"$TMP_DIR/$p.img\"" || exit 1
-    rm -f "$TMP_DIR/$p.img" "$TMP_DIR/$p.map"
+            LOG "- Converting $p.img to $p.new.dat"
+            TGT_MAP_ARG=""
+            [ -f "$TMP_DIR/$p.map" ] && TGT_MAP_ARG="--tgt-block-map \"$TMP_DIR/$p.map\""
+            EVAL "img2sdat -o \"$TMP_DIR\" $TGT_MAP_ARG \"$TMP_DIR/$p.img\"" || exit 1
+            rm -f "$TMP_DIR/$p.img" "$TMP_DIR/$p.map"
+            ;;
+        dat)
+            LOG "- Using the $p block payload from the target files"
+            if [ -f "$TMP_DIR/$p.new.dat.br" ]; then
+                rm -f "$TMP_DIR/$p.new.dat"
+            fi
+            if [ ! -f "$TMP_DIR/$p.patch.dat" ]; then
+                : > "$TMP_DIR/$p.patch.dat"
+            fi
+            ;;
+        *)
+            continue
+            ;;
+    esac
 
-    if ! $DEBUG; then
+    if ! $DEBUG && [ -f "$TMP_DIR/$p.new.dat" ]; then
         LOG "- Compressing $p.new.dat"
         # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#3585
         EVAL "brotli --quality=6 --output=\"$TMP_DIR/$p.new.dat.br\" \"$TMP_DIR/$p.new.dat\"" || exit 1
@@ -274,7 +301,7 @@ GENERATE_OTA_METADATA
 
 if [ -d "$SRC_DIR/target/$TARGET_CODENAME/installer/root" ]; then
     LOG "- Copying target custom install files"
-    EVAL "cp -a \"$SRC_DIR/target/$TARGET_CODENAME/installer/root/\"* \"$TMP_DIR\"" || exit 1
+    EVAL "cp -a --remove-destination \"$SRC_DIR/target/$TARGET_CODENAME/installer/root/\"* \"$TMP_DIR\"" || exit 1
 fi
 
 if [ -f "$SRC_DIR/target/$TARGET_CODENAME/installer/customize.sh" ]; then

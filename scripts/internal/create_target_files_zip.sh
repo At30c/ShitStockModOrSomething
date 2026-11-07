@@ -107,7 +107,7 @@ GET_SUPER_GROUP_SIZE()
 # ]
 
 if [ "$#" != "1" ]; then
-    echo "Usage: create_target_files_zip <output>" >&2
+    echo "Usage: create_target_files_zip <output.zip|output dir>" >&2
     exit 1
 fi
 
@@ -163,6 +163,16 @@ fi
 
 LOG "- Generating build_info.txt"
 GENERATE_BUILD_INFO
+
+if [[ "$OUTPUT_FILE" != *".zip" ]]; then
+    # Directory output: the images are kept as built, so the OTA scripts hard
+    # link them instead of compressing, testing and extracting ~9 GB.
+    LOG "- Storing target files in ${OUTPUT_FILE//$SRC_DIR\//}"
+    rm -rf "$OUTPUT_FILE"
+    mkdir -p "$(dirname "$OUTPUT_FILE")"
+    EVAL "mv \"$TMP_DIR\" \"$OUTPUT_FILE\"" || exit 1
+    exit 0
+fi
 
 LOG "- Creating zip"
 rm -f "$OUTPUT_FILE"

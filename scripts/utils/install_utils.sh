@@ -237,3 +237,178 @@ SIGN_IMAGE_WITH_AVB()
         EVAL "$CMD" || return 1
     fi
 }
+
+# Target files are a directory or a zip holding build_info.txt, the kernel
+# images and, per partition, either <p>.img (+ <p>.map) or a full block
+# payload (<p>.transfer.list + <p>.new.dat[.br]), so a full flashable ZIP can
+# also serve as an OTA source. The directory form skips compressing ~9 GB of
+# images that deflate only ~16%, and testing and extracting them again for
+# every package.
+
+# _LIST_TARGET_FILES <path>
+_LIST_TARGET_FILES()
+{
+    if [ -d "$1" ]; then
+        find "$1" -mindepth 1 -maxdepth 1 -printf '%f\n'
+    else
+        unzip -Z1 "$1"
+    fi
+}
+
+# IS_TARGET_FILES <path>
+# Succeeds when <path> is a target-files directory or zip.
+IS_TARGET_FILES()
+{
+    [ -e "$1" ] || return 1
+    _LIST_TARGET_FILES "$1" 2> /dev/null | grep -qx "build_info.txt"
+}
+
+# READ_TARGET_FILES_BUILD_INFO <path>
+# Prints build_info.txt from a target-files directory or zip.
+READ_TARGET_FILES_BUILD_INFO()
+{
+    if [ -d "$1" ]; then
+        cat "$1/build_info.txt"
+    else
+        unzip -p "$1" "build_info.txt"
+    fi
+}
+
+# GET_TARGET_FILES_SIZE <path>
+# Prints the bytes needed to stage <path>; 0 for a directory, which is
+# staged with hard links.
+GET_TARGET_FILES_SIZE()
+{
+    if [ -d "$1" ]; then
+        echo 0
+    else
+        unzip -Zt "$1" | awk '{print $3}'
+    fi
+}
+
+# VALIDATE_TARGET_FILES <path> <label> [img]
+# Checks <path> before anything is staged and fills the associative array
+# TARGET_FILES_FORMAT with "<label>:<partition>" -> img | img-nomap | dat.
+# .img always wins over a block payload for the same partition. Passing
+# "img" as third argument refuses block payloads.
+declare -A TARGET_FILES_FORMAT
+VALIDATE_TARGET_FILES()
+{
+    local FILE="$1"
+    local LABEL="$2"
+    local ONLY_IMG="$3"
+    local ENTRIES
+    local SUMMARY=""
+    local p
+
+    if ! IS_TARGET_FILES "$FILE"; then
+        LOGE "$LABEL is not valid target files: ${FILE//$SRC_DIR\//}"
+        return 1
+    fi
+    if [ -f "$FILE" ]; then
+        LOG "- Testing $LABEL zip"
+        if ! unzip -tq "$FILE" &> /dev/null; then
+            LOGE "File is corrupted: ${FILE//$SRC_DIR\//}"
+            return 1
+        fi
+    fi
+
+    ENTRIES="$(_LIST_TARGET_FILES "$FILE")"
+    _HAS() { grep -qxF "$1" <<< "$ENTRIES"; }
+
+    for p in $PARTITIONS_LIST; do
+        if _HAS "$p.img"; then
+            if _HAS "$p.map"; then
+                TARGET_FILES_FORMAT["$LABEL:$p"]="img"
+            else
+                TARGET_FILES_FORMAT["$LABEL:$p"]="img-nomap"
+            fi
+        elif _HAS "$p.transfer.list" && { _HAS "$p.new.dat" || _HAS "$p.new.dat.br"; }; then
+            if [ "$ONLY_IMG" == "img" ]; then
+                LOGE "$LABEL has $p only as a block payload; an image is required here"
+                return 1
+            fi
+            local CHECK
+            if [ -d "$FILE" ]; then
+                CHECK="$(python3 -I "$SRC_DIR/scripts/internal/sdat2img.py" --check "$FILE/$p.transfer.list" 2>&1)"
+            else
+                CHECK="$(unzip -p "$FILE" "$p.transfer.list" | \
+                    python3 -I "$SRC_DIR/scripts/internal/sdat2img.py" --check - 2>&1)"
+            fi
+            # shellcheck disable=SC2181
+            if [ "$?" != "0" ]; then
+                LOGE "$LABEL $p.transfer.list: ${CHECK##*: }"
+                return 1
+            fi
+            TARGET_FILES_FORMAT["$LABEL:$p"]="dat"
+        elif _HAS "$p.new.dat" || _HAS "$p.new.dat.br" || _HAS "$p.transfer.list" || _HAS "$p.map"; then
+            LOGE "$LABEL has an incomplete $p (no $p.img, and no transfer.list + new.dat)"
+            return 1
+        else
+            continue
+        fi
+        SUMMARY+=" $p=${TARGET_FILES_FORMAT["$LABEL:$p"]}"
+    done
+    unset -f _HAS
+
+    if [ ! "$SUMMARY" ]; then
+        LOGE "$LABEL has no partition images"
+        return 1
+    fi
+    LOG "- $LABEL:$SUMMARY"
+}
+
+# STAGE_TARGET_FILES <path> <destination>
+# Makes the target files available in <destination>, which must not exist.
+# A directory is hard linked, so the OTA scripts may delete staged files but
+# must never write into one in place: that would change the stored base.
+# Run VALIDATE_TARGET_FILES first. Files a flashable ZIP carries that the OTA
+# scripts regenerate (META-INF, dynamic_partitions_op_list) are dropped, so
+# they are never rewritten through a link.
+STAGE_TARGET_FILES()
+{
+    local SRC="$1"
+    local DST="$2"
+
+    if [ -e "$DST" ]; then
+        LOGE "Staging destination already exists: ${DST//$SRC_DIR\//}"
+        return 1
+    fi
+
+    if [ -d "$SRC" ]; then
+        mkdir -p "$(dirname "$DST")"
+        if ! cp -al "$SRC" "$DST" 2> /dev/null; then
+            # Different file system: hard links are impossible, so copy.
+            rm -rf "$DST"
+            EVAL "cp -a --reflink=auto \"$SRC\" \"$DST\"" || return 1
+        fi
+    else
+        EVAL "unzip -o \"$SRC\" -x \"META-INF/*\" -d \"$DST\"" || return 1
+    fi
+    rm -rf "$DST/META-INF"
+    rm -f "$DST/dynamic_partitions_op_list"
+}
+
+# PREPARE_STAGED_IMAGE <staged dir> <partition> <format>
+# Leaves <dir>/<p>.img for a staged partition, rebuilding it from its full
+# block payload when the format is "dat" (the image then has no block map).
+PREPARE_STAGED_IMAGE()
+{
+    local DIR="$1"
+    local PARTITION="$2"
+    local FORMAT="$3"
+
+    [ "$FORMAT" == "dat" ] || return 0
+
+    LOG "- Rebuilding $PARTITION.img from its block payload"
+    local CMD
+    if [ -f "$DIR/$PARTITION.new.dat.br" ]; then
+        CMD="brotli -d -c \"$DIR/$PARTITION.new.dat.br\" | "
+        CMD+="python3 -I \"$SRC_DIR/scripts/internal/sdat2img.py\" \"$DIR/$PARTITION.transfer.list\" - \"$DIR/$PARTITION.img\""
+    else
+        CMD="python3 -I \"$SRC_DIR/scripts/internal/sdat2img.py\" \"$DIR/$PARTITION.transfer.list\" \"$DIR/$PARTITION.new.dat\" \"$DIR/$PARTITION.img\""
+    fi
+    EVAL "set -o pipefail; $CMD" || return 1
+    rm -f "$DIR/$PARTITION.new.dat" "$DIR/$PARTITION.new.dat.br" \
+        "$DIR/$PARTITION.transfer.list" "$DIR/$PARTITION.patch.dat" "$DIR/$PARTITION.map"
+}
