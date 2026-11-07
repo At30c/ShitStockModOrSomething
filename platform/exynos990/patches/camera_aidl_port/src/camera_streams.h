@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -71,7 +73,16 @@ class Camera3Streams final {
     void clear();
 
   private:
-    std::vector<SamsungCamera3Stream> streams_;
+    // Drops the per-configuration views but keeps the persistent stream
+    // objects, which the HAL still references through their priv pointers.
+    void resetConfiguration();
+
+    // Camera3 contract (and the AOSP/Samsung HIDL session's mStreamMap): a
+    // stream kept across configure_streams() calls must be passed with the
+    // same camera3_stream_t, including the priv pointer the HAL filled in.
+    // Only new streams start with priv == NULL. Keyed by AIDL stream id.
+    std::map<int32_t, std::unique_ptr<SamsungCamera3Stream>> persistent_;
+    std::vector<SamsungCamera3Stream*> streams_;
     std::vector<camera3_stream_t*> pointers_;
     std::vector<std::string> physicalIds_;
     std::vector<int32_t> ids_;

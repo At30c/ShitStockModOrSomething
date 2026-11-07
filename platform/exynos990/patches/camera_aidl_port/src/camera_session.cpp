@@ -943,11 +943,30 @@ void CameraSession::handleResult(const camera3_capture_result_t* native) {
             result.outputBuffers.push_back(std::move(buffer));
         }
     }
-    // Não use FMQ até que a fila e a ordem de escrita estejam implementadas.
-    // O retorno Binder preserva metadata e ownership da release fence.
-    std::vector<aidl_device::CaptureResult> results;
-    results.push_back(std::move(result));
-    (void)callback->processCaptureResult(results);
+    // A partial result number only makes sense together with metadata.
+    if (result.result.metadata.empty()) result.partialResult = 0;
+
+    // Após um flush/reconfiguração (troca de proporção), o backend devolve o
+    // primeiro frame descartado com ERROR_REQUEST e depois um resultado sem
+    // metadata e cujos buffers não pertencem mais à configuração atual
+    // (takeReturned os rejeita). Um CaptureResult sem metadata, sem buffers e
+    // sem metadata física é inválido para o Camera3Device ("No result data
+    // provided by HAL") e derruba o dispositivo com ERROR_CAMERA_DEVICE. Depois
+    // de ERROR_REQUEST o framework não espera resultado algum para o frame, então
+    // descarte esse resultado vazio. A contabilidade de frames pendentes abaixo
+    // continua usando os dados nativos.
+    const bool emptyResult = result.result.metadata.empty() && result.outputBuffers.empty() &&
+            result.physicalCameraMetadata.empty();
+    if (emptyResult) {
+        ALOGI("CameraSession: dropping empty capture result camera=%d frame=%u (native buffers=%u)",
+              cameraId_, native->frame_number, native->num_output_buffers);
+    } else {
+        // Não use FMQ até que a fila e a ordem de escrita estejam implementadas.
+        // O retorno Binder preserva metadata e ownership da release fence.
+        std::vector<aidl_device::CaptureResult> results;
+        results.push_back(std::move(result));
+        (void)callback->processCaptureResult(results);
+    }
     if (native->num_output_buffers > 0) {
         // Não espere o mutex Binder durante flush. A chamada nativa ainda
         // pode estar usando o array persistente; processCaptureRequest()

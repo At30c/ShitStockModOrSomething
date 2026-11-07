@@ -9,7 +9,9 @@ for token in 'camera3_stream_t' 'configure_streams' 'physical_camera_id' 'max_bu
              'sessionParams.metadata.empty' 'streams_.clear'; do
     rg -Fq "$token" "$SOURCE" "$HEADER" || fail "contrato de stream ausente: $token"
 done
-rg -Fq 'std::vector<SamsungCamera3Stream>' "$HEADER" || fail 'lifetime do stream não é persistente'
+rg -Fq 'std::map<int32_t, std::unique_ptr<SamsungCamera3Stream>> persistent_' "$HEADER" || fail 'lifetime do stream não é persistente'
+# Streams mantidos entre configure_streams() precisam conservar o priv do HAL.
+rg -Fq 'if (!retained) native.priv = nullptr;' "$SOURCE" || fail 'priv de stream retido não é preservado'
 rg -Fq 'std::vector<camera3_stream_t*>' "$HEADER" || fail 'ponteiro Camera3 persistente ausente'
 rg -Fq 'streamConfigCounter_' "$HEADER" || fail 'geração AIDL de stream ausente'
 rg -Fq 'maximum-resolution stream' "$SOURCE" || fail 'modo máximo não é protegido'

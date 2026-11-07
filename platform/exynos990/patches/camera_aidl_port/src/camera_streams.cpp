@@ -290,7 +290,7 @@ bool rotation(aidl_device::StreamRotation input, int* output) {
 
 }  // namespace
 
-void Camera3Streams::clear() {
+void Camera3Streams::resetConfiguration() {
     if (sessionParameters_) {
         free_camera_metadata(sessionParameters_);
         sessionParameters_ = nullptr;
@@ -303,10 +303,15 @@ void Camera3Streams::clear() {
     streams_.clear();
 }
 
+void Camera3Streams::clear() {
+    resetConfiguration();
+    persistent_.clear();
+}
+
 camera3_stream_t* Camera3Streams::find(int32_t streamId) {
     for (size_t index = 0; index < ids_.size(); ++index) {
         if (ids_[index] == streamId) {
-            return reinterpret_cast<camera3_stream_t*>(&streams_[index]);
+            return reinterpret_cast<camera3_stream_t*>(streams_[index]);
         }
     }
     return nullptr;
@@ -315,7 +320,7 @@ camera3_stream_t* Camera3Streams::find(int32_t streamId) {
 bool Camera3Streams::idFor(const camera3_stream_t* stream, int32_t* streamId) const {
     if (!stream || !streamId) return false;
     for (size_t index = 0; index < streams_.size(); ++index) {
-        if (reinterpret_cast<const camera3_stream_t*>(&streams_[index]) == stream) {
+        if (reinterpret_cast<const camera3_stream_t*>(streams_[index]) == stream) {
             *streamId = ids_[index];
             return true;
         }
@@ -419,7 +424,14 @@ int Camera3Streams::configure(camera3_device_t* device,
               input.sessionParams.metadata.size(), allocatedSize, compactSize);
     }
 
-    clear();
+    resetConfiguration();
+    // Streams created by this call. If the configuration is rejected they are
+    // dropped again, while objects of the still-active configuration stay.
+    std::vector<int32_t> created;
+    const auto abortConfigure = [&]() {
+        for (int32_t id : created) persistent_.erase(id);
+        resetConfiguration();
+    };
     streams_.resize(input.streams.size());
     physicalIds_.resize(input.streams.size());
     pointers_.resize(input.streams.size());
@@ -427,19 +439,38 @@ int Camera3Streams::configure(camera3_device_t* device,
     useCases_.resize(input.streams.size());
     for (size_t index = 0; index < input.streams.size(); ++index) {
         const auto& source = input.streams[index];
-        SamsungCamera3Stream& native = streams_[index];
+        int nativeType = 0;
+        int nativeRotation = CAMERA3_STREAM_ROTATION_0;
         if (!validateDocumentedStream(source, index, input.streams) ||
-            !streamType(source.streamType, &native.stream_type) ||
-            !rotation(source.rotation, &native.rotation)) {
-            clear();
+            !streamType(source.streamType, &nativeType) ||
+            !rotation(source.rotation, &nativeRotation)) {
+            abortConfigure();
             return -EINVAL;
         }
         for (size_t previous = 0; previous < index; ++previous) {
             if (ids_[previous] == source.id) {
-                clear();
+                abortConfigure();
                 return -EINVAL;
             }
         }
+        // Reuse the object of a stream that stays configured; CameraService
+        // keeps the AIDL id only for an unchanged stream, so the geometry
+        // check is a safety net. New (or changed) streams get a fresh object
+        // with priv == NULL, as the HAL expects.
+        auto existing = persistent_.find(source.id);
+        const bool retained = existing != persistent_.end() &&
+                existing->second->stream_type == nativeType &&
+                existing->second->width == static_cast<uint32_t>(source.width) &&
+                existing->second->height == static_cast<uint32_t>(source.height) &&
+                existing->second->format == static_cast<int>(source.format);
+        if (!retained) {
+            persistent_[source.id] = std::make_unique<SamsungCamera3Stream>();
+            created.push_back(source.id);
+        }
+        SamsungCamera3Stream& native = *persistent_[source.id];
+        streams_[index] = &native;
+        native.stream_type = nativeType;
+        native.rotation = nativeRotation;
         ids_[index] = source.id;
         useCases_[index] = static_cast<int64_t>(source.useCase);
         native.width = static_cast<uint32_t>(source.width);
@@ -454,7 +485,7 @@ int Camera3Streams::configure(camera3_device_t* device,
         const int64_t useCase = static_cast<int64_t>(source.useCase);
         uint32_t samsungOption = 0;
         if (!mapSamsungStreamOption(useCase, &samsungOption)) {
-            clear();
+            abortConfigure();
             return -EINVAL;
         }
         // The original Samsung wrapper writes the private stream selector to
@@ -473,10 +504,12 @@ int Camera3Streams::configure(camera3_device_t* device,
         native.reserved[3] = nullptr;
         native.reserved[4] = nullptr;
         native.reserved[5] = nullptr;
-        // Samsung's convertFromHidl() clears priv and the HAL creates its own
-        // ExynosCameraStream owner. The 0x98-byte block seen in the HIDL
-        // wrapper is the std::map<int, Camera3Stream> node, not a stream owner.
-        native.priv = nullptr;
+        // Samsung's convertFromHidl() clears priv only for a new stream; the
+        // HAL then stores its own ExynosCameraStream owner there. A retained
+        // stream keeps that pointer, otherwise the HAL treats every stream of
+        // a reconfiguration (aspect-ratio switch) as new, reuses its frame
+        // factories with stale buffer managers and the preview stalls.
+        if (!retained) native.priv = nullptr;
         // Keep the public Android data-space unchanged. The Samsung option is
         // carried separately in reserved[0] above.
         native.data_space = static_cast<android_dataspace_t>(source.dataSpace);
@@ -493,7 +526,7 @@ int Camera3Streams::configure(camera3_device_t* device,
               index, static_cast<uint32_t>(native.data_space),
               static_cast<uint32_t>(source.dataSpace), samsungOption,
               reinterpret_cast<unsigned long>(native.reserved[0]),
-              native.priv ? "self" : "null");
+              native.priv ? (retained ? "retained" : "self") : "null");
         physicalIds_[index] = source.physicalCameraId;
         // AIDL represents an absent physical-camera association as an empty
         // String. The Samsung Exynos Camera3 blob dereferences this legacy
@@ -510,7 +543,7 @@ int Camera3Streams::configure(camera3_device_t* device,
             // This is a diagnostic boundary test only. The native Exynos 990
             // manager can configure preview and JPEG directly; the YUV
             // ImageReader streams need a separate Samsung extra-stream bridge.
-            if (streams_[index].format == 34 || streams_[index].format == 33) {
+            if (streams_[index]->format == 34 || streams_[index]->format == 33) {
                 nativePointers.push_back(pointers_[index]);
             }
         }
@@ -542,15 +575,15 @@ int Camera3Streams::configure(camera3_device_t* device,
           nativePointers.size(), configuration.operation_mode, result);
     if (result == -EINVAL) {
         bool hasNonZeroRotation = false;
-        for (const auto& stream : streams_) {
-            hasNonZeroRotation |= stream.rotation != CAMERA3_STREAM_ROTATION_0;
+        for (const auto* stream : streams_) {
+            hasNonZeroRotation |= stream->rotation != CAMERA3_STREAM_ROTATION_0;
         }
         if (hasNonZeroRotation) {
             // The Android Camera3 contract permits 90/180/270 degrees, but
             // this Exynos 990 blob rejects any non-zero rotation in
             // m_enumStreamInfo(). Retry the identical stream set at zero and
             // let CameraService/Samsung metadata perform display orientation.
-            for (auto& stream : streams_) stream.rotation = CAMERA3_STREAM_ROTATION_0;
+            for (auto* stream : streams_) stream->rotation = CAMERA3_STREAM_ROTATION_0;
             result = device->ops->configure_streams(device, &configuration);
             ALOGI("Camera3Streams: zero-rotation compatibility retry result=%d", result);
         }
@@ -559,7 +592,7 @@ int Camera3Streams::configure(camera3_device_t* device,
         bool allPhysicalIdsEmpty = true;
         for (const auto& id : physicalIds_) allPhysicalIdsEmpty &= id.empty();
         if (allPhysicalIdsEmpty) {
-            for (auto& stream : streams_) stream.physical_camera_id = kEmptyPhysicalCameraId;
+            for (auto* stream : streams_) stream->physical_camera_id = kEmptyPhysicalCameraId;
             result = device->ops->configure_streams(device, &configuration);
             ALOGI("Camera3Streams: legacy empty physical id retry result=%d", result);
         }
@@ -570,8 +603,16 @@ int Camera3Streams::configure(camera3_device_t* device,
             ownedSessionParameters = nullptr;
         }
         ALOGE("Camera3Streams: HAL rejected stream configuration result=%d", result);
-        clear();
+        abortConfigure();
         return result;
+    }
+    // The HAL has released its owners for streams absent from this
+    // configuration; drop our objects for them as well.
+    for (auto it = persistent_.begin(); it != persistent_.end();) {
+        if (std::find(ids_.begin(), ids_.end(), it->first) == ids_.end())
+            it = persistent_.erase(it);
+        else
+            ++it;
     }
     // A StreamConfiguration generation becomes visible only after the
     // corresponding Camera3 configuration succeeds.  Otherwise a failed
@@ -580,7 +621,7 @@ int Camera3Streams::configure(camera3_device_t* device,
     streamConfigCounter_ = input.streamConfigCounter;
     ALOGI("Camera3Streams: accepted AIDL streamConfigCounter=%d", streamConfigCounter_);
     for (size_t index = 0; index < streams_.size(); ++index) {
-        const auto& stream = streams_[index];
+        const auto& stream = *streams_[index];
         ALOGI("Camera3Streams: HAL stream[%zu] id=%d %ux%u format=%d dataSpace=0x%x max=%u priv=%p",
               index, ids_[index], stream.width, stream.height, stream.format,
               static_cast<uint32_t>(stream.data_space), stream.max_buffers, stream.priv);
@@ -597,7 +638,7 @@ int Camera3Streams::configure(camera3_device_t* device,
     output->reserve(input.streams.size());
     for (size_t index = 0; index < input.streams.size(); ++index) {
         const auto& source = input.streams[index];
-        const SamsungCamera3Stream& native = streams_[index];
+        const SamsungCamera3Stream& native = *streams_[index];
         aidl_device::HalStream hal;
         hal.id = source.id;
         hal.overrideFormat = static_cast<aidl_graphics::PixelFormat>(native.format);
