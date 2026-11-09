@@ -31,7 +31,18 @@ system/lib64/libGeoTrans10.so
 system/lib64/vendor.samsung_slsi.hardware.geoTransService@1.0.so
 system/lib64/libSwIsp_core.camera.samsung.so
 system/lib64/libSwIsp_wrapper_v1.camera.samsung.so
+system/lib64/libBestComposition.polarr.so
+system/lib64/libFeature.polarr.so
+system/lib64/libPolarrSnap.polarr.so
+system/lib64/libTracking.polarr.so
+system/lib64/libYuv.polarr.so
 "
+# Polarr: the camera-feature keeps SUPPORT_COMPOSITION_GUIDE and
+# AutoBeautyPhotoMaker always builds PolarrCompositionGuideNode, but the source
+# firmware ships no Polarr libraries, so the app died with UnsatisfiedLinkError
+# (PolarrSmartCrop.useGPU) when photo or video mode started. With
+# libFeature.polarr.so present the app takes the v2 API, whose natives these
+# stock libraries export, and reads its databases from system/saiv.
 for blob in $BLOBS_LIST
 do
     ADD_TO_WORK_DIR "$TARGET_FIRMWARE" "system" "$blob" 0 0 644 "u:object_r:system_lib_file:s0" &
