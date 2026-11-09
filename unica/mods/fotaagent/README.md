@@ -68,6 +68,8 @@ uma instalação feita pelo app, o arquivo não existe e a linha não faz nada.
 | 0016 | A retomada no boot mantém jobs sem DM Exec |
 | 0017 | Fecha o job sem esperar a sessão DM de relatório que o 0002 bloqueia: apaga o pacote e roda o `IDMFumoTaskDmFinish`, o mesmo encerramento de quando o servidor responde `FINISH`. Ele tira a notificação "Conectando ao servidor" e manda `SCHEDULE_FINISH`. O `FINISH_AND_EXECUTE` (0x3f5), usado antes, esperava um próximo pacote e deixava o job aberto |
 | 0018 | `io.unica.fota.UpdateChecker`: manifesto da ROM no lugar da Samsung, no polling e no botão. `io.unica.fota.PartProxy`: pacotes em partes servidos como um arquivo em 127.0.0.1 |
+| 0019 | Falha de download fecha o job como no 0017, em vez da sessão DM que reporta a falha. O 0002 bloqueia essa sessão, que repetia para sempre com "Conectando ao servidor" na tela, e o job pendente fazia o UpdateChecker ignorar novas buscas |
+| 0020 | O `HttpURLConnection` define o `Host`. O DlAgent fixava o `Host` da primeira URL também depois do redirecionamento, e o CDN dos arquivos de release do GitHub responde 500 a `Host: github.com` |
 
 Nunca desative este módulo enquanto o FotaAgent estiver na ROM: o app sem
 patch registra o aparelho na Samsung no primeiro boot.
@@ -343,5 +345,11 @@ em 4 partes, baixada, verificada e instalada pelo app. Depois da instalação,
 o job agora fecha (pacote apagado, `SCHEDULE_FINISH`, sem a notificação
 "Conectando ao servidor" presa).
 
-Falta validar: incremental pela release do GitHub e a hospedagem no Google
-Drive.
+Em 2026-11-09, incremental de 163 MB pela release do GitHub. O DlAgent sem o
+0020 recebia 500 no 302 do link da release (o `Host: github.com:443` ia junto
+para o CDN) e a falha travava em "Conectando ao servidor" (corrigido pelo
+0019). O `fota_release.py` agora lista o zip sem divisão como uma parte, então
+o pacote passa pelo PartProxy, que segue o redirecionamento sozinho, também
+nas builds sem o 0020. Baixado pelo app com o manifesto corrigido.
+
+Falta validar: a hospedagem no Google Drive.

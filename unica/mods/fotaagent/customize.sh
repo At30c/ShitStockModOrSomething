@@ -37,6 +37,13 @@
 #        and for the Settings "check for updates" button.
 #        io.unica.fota.PartProxy serves packages published in parts (over
 #        the 2 GiB GitHub release asset limit) as one file on 127.0.0.1
+#   0019 after a failed download, finish the job the same way as 0017
+#        instead of the DM session that reports the failure (blocked by 0002,
+#        it retried forever behind "connecting to server" and the pending job
+#        made UpdateChecker skip every new check)
+#   0020 let HttpURLConnection set the Host header: the DlAgent pinned the
+#        Host of the first URL across redirects, and the GitHub release asset
+#        CDN answers "Host: github.com" with 500
 #
 # Update manifest (ro.unica.ota.manifest, JSON; see UpdateChecker.java):
 #   { "device": "y2s", "builds": [

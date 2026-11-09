@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Mon, 9 Nov 2026 16:14:03 -0300
+Subject: [PATCH] FotaAgent: let HttpURLConnection set the Host header
+
+idmMakeHttpHeader set Host to host:port of the first URL. Request
+properties survive redirects, so the download of a GitHub release asset
+(302 to release-assets.githubusercontent.com) carried Host: github.com:443
+to the asset CDN, which answers 500 "unknown domain": the DlAgent failed
+the descriptor download with IDM_ABORT_NETWORK_HEADER_FAIL. Packages in
+parts were not hit because PartProxy follows the redirect itself.
+---
+ .../networkinfo/IDMNetworkInfoAdapter.smali   | 52 ++-----------------
+ 1 file changed, 5 insertions(+), 47 deletions(-)
+
+diff --git a/smali/com/idm/adapter/networkinfo/IDMNetworkInfoAdapter.smali b/smali/com/idm/adapter/networkinfo/IDMNetworkInfoAdapter.smali
+index ddba742..e4d5916 100644
+--- a/smali/com/idm/adapter/networkinfo/IDMNetworkInfoAdapter.smali
++++ b/smali/com/idm/adapter/networkinfo/IDMNetworkInfoAdapter.smali
+@@ -410,53 +410,11 @@
+     invoke-virtual {p2, p0, p3}, Ljava/net/URLConnection;->setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V
+ 
+     :cond_6
+-    invoke-virtual {p2}, Ljava/net/URLConnection;->getURL()Ljava/net/URL;
+-
+-    move-result-object p0
+-
+-    invoke-virtual {p0}, Ljava/net/URL;->getPort()I
+-
+-    move-result p1
+-
+-    const/4 p3, -0x1
+-
+-    if-ne p1, p3, :cond_7
+-
+-    invoke-virtual {p0}, Ljava/net/URL;->getDefaultPort()I
+-
+-    move-result p1
+-
+-    goto :goto_2
+-
+-    :cond_7
+-    invoke-virtual {p0}, Ljava/net/URL;->getPort()I
+-
+-    move-result p1
+-
+-    :goto_2
+-    new-instance p3, Ljava/lang/StringBuilder;
+-
+-    invoke-direct {p3}, Ljava/lang/StringBuilder;-><init>()V
+-
+-    invoke-virtual {p0}, Ljava/net/URL;->getHost()Ljava/lang/String;
+-
+-    move-result-object p0
+-
+-    invoke-virtual {p3, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+-
+-    const-string p0, ":"
+-
+-    invoke-virtual {p3, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {p3, p1}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
+-
+-    invoke-virtual {p3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
+-
+-    move-result-object p0
+-
+-    const-string p1, "Host"
+-
+-    invoke-virtual {p2, p1, p0}, Ljava/net/URLConnection;->setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V
++    # UN1CA: do not set Host by hand. HttpURLConnection keeps request
++    # properties across redirects, so a GitHub release link (302 to
++    # release-assets.githubusercontent.com) sent "Host: github.com:443"
++    # to the asset CDN, which answers 500 (unknown domain). The connection
++    # sets the right Host for every request on its own.
+ 
+     return-void
+ .end method

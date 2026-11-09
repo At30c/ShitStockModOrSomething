@@ -296,8 +296,14 @@ def prepare(args):
         if incremental:
             entry["base_timestamp"] = info["incremental"]
         entry["dd"] = base + dd_name
+        # Always list parts, a single one for an unsplit zip: UpdateChecker
+        # then serves the package through PartProxy on 127.0.0.1, which
+        # follows redirects itself. The stock DlAgent pins the Host header of
+        # the first URL across the 302 of a GitHub release link, and the
+        # asset CDN answers that with 500 (fixed by FotaAgent patch 0020,
+        # but builds without it still need the proxy).
+        entry["parts"] = []
         if parts:
-            entry["parts"] = []
             left = size
             for part in parts:
                 part_len = min(args.part_size, left)
@@ -306,6 +312,8 @@ def prepare(args):
                                        "size": part_len})
                 uploads.append(os.path.join(out_dir, part))
         else:
+            entry["parts"].append({"url": base + urllib.parse.quote(name),
+                                   "size": size})
             uploads.append(os.path.abspath(path))
 
         manifest["builds"] = [e for e in manifest["builds"]
@@ -519,7 +527,8 @@ def upload(args):
     if args.publish and rel.get("draft"):
         print(f"- Publishing {tag}")
         gh("release", "edit", tag, "-R", args.repo, "--draft=false", "--latest")
-        rel["draft"] = False
+        # Publishing moves the release from its untagged draft URL to the tag.
+        rel = find_release(args.repo, tag) or dict(rel, draft=False)
     state = "draft" if rel.get("draft") else "published"
     print(f"\nRelease {tag} ({state}): {rel['html_url']}")
     if rel.get("draft"):
