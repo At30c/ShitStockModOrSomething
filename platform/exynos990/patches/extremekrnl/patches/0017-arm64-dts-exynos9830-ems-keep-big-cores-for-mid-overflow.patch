@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ats0c <ats0c@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 22:00:00 -0300
+Subject: [PATCH] arm64: dts: exynos9830-ems: keep big cores for mid overflow
+
+EMS ontime migration moves a task from the mid cluster (Cortex-A76) to
+the big cluster (Mongoose M5) once its runnable load reaches the mid
+domain's upper boundary, and back when it falls below the big domain's
+lower boundary.  The stock boundaries (586 and 205 out of 1024) send any
+task that uses a little over half of a mid core to the big cores, which
+are the least efficient cores of the SoC.
+
+Raise the mid upper boundary to 820 and the big lower boundary to 500 in
+the everyday modes (normal, power-scenario, balance, light-video and
+pinned), so only tasks that nearly saturate a mid core migrate to the big
+cluster, and they return once the load drops.  Sets without their own
+ontime block (such as "normal med boost", used while scrolling) inherit
+these values from their mode's default set.
+
+The big boost sets (app launch and heavy load boosts) and the
+performance, light-game and game modes keep the stock boundaries.
+---
+ arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi | 28 +++++++++++-----------
+ 1 file changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+--- a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
++++ b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+@@ -301,11 +301,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+@@ -573,11 +573,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+@@ -1403,11 +1403,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+@@ -1673,11 +1673,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+@@ -1948,11 +1948,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+@@ -2063,11 +2063,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+@@ -2146,11 +2146,11 @@
+ 						domain1 {
+ 							cpus = "4-5";
+ 							lower-boundary = <106>;
+-							upper-boundary = <586>;
++							upper-boundary = <820>;
+ 						};
+ 						domain2 {
+ 							cpus = "6-7";
+-							lower-boundary = <205>;
++							lower-boundary = <500>;
+ 							upper-boundary = <1024>;
+ 						};
+ 					};
+-- 
+2.43.0
+

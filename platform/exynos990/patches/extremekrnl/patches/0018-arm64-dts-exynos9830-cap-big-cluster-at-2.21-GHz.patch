@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ats0c <ats0c@users.noreply.github.com>
+Date: Sun, 8 Nov 2026 22:05:00 -0300
+Subject: [PATCH] arm64: dts: exynos9830: cap big cluster at 2.21 GHz
+
+The Mongoose M5 cores spend most of their power in the top frequency
+steps for little extra performance.  Lower the big cluster cpufreq
+domain's max-freq from 2730000 to 2210000: exynos-acme drops the higher
+entries from the frequency table, so no PM QoS request, governor boost
+or user limit can select them.
+
+2210000 is also the highest big frequency whose MIF constraint is
+2288000 instead of 2535000, so memory can stay one step lower under big
+cluster load.
+---
+ arch/arm64/boot/dts/exynos/exynos9830.dts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/exynos/exynos9830.dts b/arch/arm64/boot/dts/exynos/exynos9830.dts
+--- a/arch/arm64/boot/dts/exynos/exynos9830.dts
++++ b/arch/arm64/boot/dts/exynos/exynos9830.dts
+@@ -863,7 +863,7 @@
+ 			dm-type = <DM_CPU_CL2>;
+ 			need-awake;
+ 
+-			max-freq = <2730000>;
++			max-freq = <2210000>;
+ 			min-freq = <546000>;
+ 
+ 			/* PM QoS Class ID*/
+-- 
+2.43.0
+
