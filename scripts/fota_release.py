@@ -6,6 +6,7 @@
         [--tag <tag>] [--changelog <file>] [--summary <text>]
         [--repo owner/name | --base-url <url>] [--merge <ota json>]
         [--part-size <bytes>] [--out <dir>]
+        [--no-upload] [--clobber] [--keep] [--publish]
 
 Without zips, takes from out/ the newest build (highest build_info.txt
 timestamp) and every incremental zip to it. The tag defaults to
@@ -16,16 +17,28 @@ output directory (default out/fota/<tag>):
   <zip>.001 ...       parts, for zips bigger than --part-size
   ota-<device>.json   update manifest read by io.unica.fota.UpdateChecker
   upload.txt          the files to attach to the release, one path per line
-Nothing goes to the network.
+  checksums.txt       SHA-256 and size of each of those files
+Then it runs upload on that directory (not with --base-url or --no-upload).
 
-    fota_release.py upload [--repo owner/name] [--clobber] [out dir]
+    fota_release.py upload [--repo owner/name] [--clobber] [--keep]
+        [--publish] [out dir]
 
-Without a directory, uses the last one prepare wrote. Attaches the files in upload.txt to the release <tag> (created as a draft if
-missing) with Content-Type application/octet-stream: DlAgent only accepts a
-package whose Content-Type equals the descriptor <type>, and GitHub serves
-each asset with the type given at upload time ("gh release upload" picks it
-from the extension, application/zip for a zip). Publish the draft afterwards;
-the manifest URL (releases/latest/download/...) only sees published releases.
+Without a directory, uses the last one prepare wrote. Needs gh logged in
+(gh auth login). Attaches the files in upload.txt to the release <tag>
+(created as a draft if missing) with Content-Type application/octet-stream:
+DlAgent only accepts a package whose Content-Type equals the descriptor
+<type>, and GitHub serves each asset with the type given at upload time.
+
+Each file is checked against checksums.txt before it is sent, and the asset
+is accepted only if GitHub's own SHA-256 digest and size match; otherwise the
+asset is deleted and the run stops. Verified files are then removed locally
+(keep them with --keep); a later run recognises them on the release by their
+digest. The gh token reaches curl through stdin, never the command line, and
+only over HTTPS to uploads.github.com without redirects.
+
+The release stays a draft unless --publish is given: the manifest URL
+(releases/latest/download/...) only sees published releases, so publishing
+is what offers the update to devices.
 """
 
 import argparse
@@ -204,6 +217,8 @@ def entry_key(entry):
 
 
 def prepare(args):
+    if not args.base_url and not args.no_upload:
+        check_gh()
     if args.zips:
         builds = []
         for path in args.zips:
@@ -320,11 +335,20 @@ def prepare(args):
         f.write(f"tag={args.tag}\n")
         f.writelines(p + "\n" for p in uploads)
 
+    print("- Recording SHA-256 checksums")
+    write_checksums(os.path.join(out_dir, "checksums.txt"),
+                    {os.path.basename(p): (sha256_file(p), os.path.getsize(p))
+                     for p in uploads})
+
     with open(os.path.join(FOTA_DIR, "last"), "w", encoding="utf-8") as f:
         f.write(out_dir + "\n")
 
     print(f"\nWritten to {out_dir}")
-    print("Next: scripts/fota_release.py upload")
+    if args.base_url or args.no_upload:
+        print("Next: scripts/fota_release.py upload")
+        return
+    args.dir = out_dir
+    upload(args)
 
 
 def gh(*args, capture=True):
@@ -332,6 +356,53 @@ def gh(*args, capture=True):
     if r.returncode != 0:
         die(f"gh {' '.join(args)} failed: {(r.stderr or '').strip()}")
     return r.stdout
+
+
+def check_gh():
+    if shutil.which("gh") is None:
+        die("gh not found")
+    if subprocess.run(["gh", "auth", "status", "--hostname", "github.com"],
+                      capture_output=True).returncode != 0:
+        die("gh is not logged in to github.com; run: gh auth login")
+    if shutil.which("curl") is None:
+        die("curl not found")
+
+
+def sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(CHUNK)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def read_checksums(path):
+    sums = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 3 and re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+                    sums[parts[2]] = (parts[0], int(parts[1]))
+    return sums
+
+
+def write_checksums(path, sums):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for name in sorted(sums):
+            f.write(f"{sums[name][0]} {sums[name][1]} {name}\n")
+    os.replace(tmp, path)
+
+
+def asset_matches(asset, sha256, size):
+    return (asset.get("state") == "uploaded"
+            and asset.get("size") == size
+            and asset.get("content_type") == PACKAGE_TYPE
+            and asset.get("digest") == f"sha256:{sha256}")
 
 
 def find_release(repo, tag):
@@ -343,6 +414,21 @@ def find_release(repo, tag):
         if line.strip():
             return json.loads(line)
     return None
+
+
+def curl_upload(token, url, path):
+    # The token goes through stdin as curl config, never through argv, so it
+    # is not visible in ps or /proc/<pid>/cmdline. HTTPS only, TLS >= 1.2,
+    # no redirects (a redirect could carry the header elsewhere).
+    config = (f'header = "Authorization: Bearer {token}"\n'
+              f'header = "Content-Type: {PACKAGE_TYPE}"\n'
+              'header = "Accept: application/vnd.github+json"\n'
+              'header = "X-GitHub-Api-Version: 2022-11-28"\n')
+    return subprocess.run(
+        ["curl", "--config", "-", "--fail-with-body", "-sS",
+         "--proto", "=https", "--tlsv1.2", "--max-redirs", "0",
+         "-X", "POST", "-T", path, url],
+        input=config, capture_output=True, text=True)
 
 
 def upload(args):
@@ -358,11 +444,26 @@ def upload(args):
     if not lines or not lines[0].startswith("tag="):
         die("upload.txt has no tag line; run prepare again")
     tag, files = lines[0][4:], lines[1:]
+    check_gh()
+
+    # Checksums recorded by prepare; files without one are hashed now, before
+    # anything is sent, so a file changed afterwards is caught.
+    sums_path = os.path.join(args.dir, "checksums.txt")
+    sums = read_checksums(sums_path)
     for path in files:
-        if not os.path.isfile(path):
+        name = os.path.basename(path)
+        if not ASSET_NAME.match(name):
+            die(f"unexpected asset name: {name}")
+        if os.path.isfile(path):
+            size = os.path.getsize(path)
+            if name not in sums:
+                print(f"- Hashing {name}")
+                sums[name] = (sha256_file(path), size)
+                write_checksums(sums_path, sums)
+            elif sums[name][1] != size:
+                die(f"{name}: size differs from checksums.txt; run prepare again")
+        elif name not in sums:
             die(f"missing file: {path}")
-    if shutil.which("curl") is None:
-        die("curl not found")
 
     rel = find_release(args.repo, tag)
     if rel is None:
@@ -373,39 +474,56 @@ def upload(args):
                             "-f", f"tag_name={tag}", "-f", f"name={tag}",
                             "-f", "body=", "-F", "draft=true"))
     assets = {a["name"]: a for a in rel["assets"]}
-    token = gh("auth", "token").strip()
     upload_url = rel["upload_url"].split("{")[0]
+    if not upload_url.startswith("https://uploads.github.com/"):
+        die(f"unexpected upload URL: {upload_url}")
+    token = gh("auth", "token").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", token):
+        die("unexpected token format from gh auth token")
 
     for path in files:
         name = os.path.basename(path)
-        size = os.path.getsize(path)
+        sha256, size = sums[name]
         old = assets.get(name)
-        if old:
-            if not args.clobber and old["size"] == size and old["content_type"] == PACKAGE_TYPE:
-                print(f"- {name}: already uploaded")
-                continue
-            if not args.clobber:
-                die(f"{name} already exists with another size or type; "
-                    "use --clobber to replace it")
-            gh("api", "-X", "DELETE", f"repos/{args.repo}/releases/assets/{old['id']}")
-        print(f"- Uploading {name} ({size} bytes)")
-        r = subprocess.run(
-            ["curl", "--fail-with-body", "-sS", "-X", "POST",
-             "-H", f"Authorization: Bearer {token}",
-             "-H", f"Content-Type: {PACKAGE_TYPE}",
-             "-H", "Accept: application/vnd.github+json",
-             "-T", path, f"{upload_url}?name={urllib.parse.quote(name)}"],
-            capture_output=True, text=True)
-        if r.returncode != 0:
-            die(f"upload of {name} failed: {r.stdout.strip()} {r.stderr.strip()}")
-        asset = json.loads(r.stdout)
-        if asset.get("name") != name or asset.get("content_type") != PACKAGE_TYPE:
-            die(f"{name} uploaded as {asset.get('name')} ({asset.get('content_type')})")
+        if old and asset_matches(old, sha256, size) and not args.clobber:
+            print(f"- {name}: already uploaded, SHA-256 verified")
+        elif not os.path.isfile(path):
+            die(f"{name}: deleted locally but the release has no verified copy; "
+                "run prepare again")
+        else:
+            if sha256_file(path) != sha256:
+                die(f"{name}: content changed since it was hashed; run prepare again")
+            if old:
+                if not args.clobber and old.get("state") == "uploaded":
+                    die(f"{name} already exists with another content; "
+                        "use --clobber to replace it")
+                # A failed or mismatching earlier attempt.
+                gh("api", "-X", "DELETE", f"repos/{args.repo}/releases/assets/{old['id']}")
+            print(f"- Uploading {name} ({size} bytes)")
+            r = curl_upload(token, f"{upload_url}?name={urllib.parse.quote(name)}", path)
+            if r.returncode != 0:
+                die(f"upload of {name} failed: {r.stdout.strip()} {r.stderr.strip()}")
+            asset = json.loads(r.stdout)
+            if asset.get("name") != name or not asset_matches(asset, sha256, size):
+                if asset.get("id"):
+                    gh("api", "-X", "DELETE",
+                       f"repos/{args.repo}/releases/assets/{asset['id']}")
+                die(f"{name}: GitHub reports {asset.get('digest')} / "
+                    f"{asset.get('size')} bytes, expected sha256:{sha256} / {size}; "
+                    "the asset was removed")
+            print(f"  SHA-256 verified on GitHub: {sha256}")
+        if not args.keep and os.path.isfile(path):
+            os.remove(path)
+            print(f"  removed local {name}")
 
+    if args.publish and rel.get("draft"):
+        print(f"- Publishing {tag}")
+        gh("release", "edit", tag, "-R", args.repo, "--draft=false", "--latest")
+        rel["draft"] = False
     state = "draft" if rel.get("draft") else "published"
     print(f"\nRelease {tag} ({state}): {rel['html_url']}")
     if rel.get("draft"):
-        print(f"Publish it with: gh release edit {tag} -R {args.repo} --draft=false --latest")
+        print(f"Publish it with: scripts/fota_release.py upload --publish {args.dir}")
 
 
 def main():
@@ -424,12 +542,23 @@ def main():
     pp.add_argument("--merge", help="existing ota-<device>.json to keep entries from")
     pp.add_argument("--part-size", type=int, default=DEFAULT_PART_SIZE)
     pp.add_argument("--out", help="output directory (default out/fota/<tag>)")
+    pp.add_argument("--no-upload", action="store_true",
+                    help="only write the files; do not upload them")
+    pp.add_argument("--clobber", action="store_true", help="replace existing assets")
+    pp.add_argument("--keep", action="store_true",
+                    help="keep the local files after a verified upload")
+    pp.add_argument("--publish", action="store_true",
+                    help="publish the release after the upload (devices see it)")
     pp.add_argument("zips", nargs="*", help="default: the newest build in out/")
     pp.set_defaults(func=prepare)
 
     up = sub.add_parser("upload", help="attach the prepared files to the release")
     up.add_argument("--repo", default=DEFAULT_REPO)
     up.add_argument("--clobber", action="store_true", help="replace existing assets")
+    up.add_argument("--keep", action="store_true",
+                    help="keep the local files after a verified upload")
+    up.add_argument("--publish", action="store_true",
+                    help="publish the release after the upload (devices see it)")
     up.add_argument("dir", nargs="?", help="default: the last prepared directory")
     up.set_defaults(func=upload)
 
