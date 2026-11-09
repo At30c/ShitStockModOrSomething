@@ -88,39 +88,10 @@ DECODE_APK_IN_APEX()
 
 EXTRACT_PAYLOAD()
 {
-    LOG_STEP_IN "- Unpacking apex_payload.img"
-
-    if ! sudo -n -v &> /dev/null; then
-        LOG "\033[0;33m! Asking user for sudo password\033[0m"
-        if ! sudo -v 2> /dev/null; then
-            ABORT "Root permissions are required to unpack APEX image"
-        fi
-    fi
-
-    LOG_STEP_OUT
-
-    mkdir -p "$TMP_DIR/unknown/apex_payload"
-    mkdir -p "$TMP_DIR/tmp_out"
-    EVAL "sudo mount -o ro \"$TMP_DIR/unknown/apex_payload.img\" \"$TMP_DIR/tmp_out\""
-    EVAL "sudo cp -a -T \"$TMP_DIR/tmp_out\" \"$TMP_DIR/unknown/apex_payload\""
-    sudo chown -hR "$(whoami):$(whoami)" "$TMP_DIR/unknown/apex_payload"
-    if [ -d "$TMP_DIR/unknown/apex_payload/lost+found" ]; then
-        rm -rf "$TMP_DIR/unknown/apex_payload/lost+found"
-    fi
-
-    LOG "- Generating fs_config/file_context for apex_payload.img"
-
-    EVAL "sudo find \"$TMP_DIR/tmp_out\" | sudo xargs -I \"{}\" -P \"$(nproc)\" stat -c \"%n %u %g %a capabilities=0x0\" \"{}\" > \"$TMP_DIR/unknown/fs_config-apex_payload\""
-    EVAL "sudo find \"$TMP_DIR/tmp_out\" | sudo xargs -I \"{}\" -P \"$(nproc)\" sh -c 'echo \"\$1 \$(getfattr -n security.selinux --only-values -h --absolute-names \"\$1\")\"' \"sh\" \"{}\" > \"$TMP_DIR/unknown/file_context-apex_payload\""
-    sort -o "$TMP_DIR/unknown/file_context-apex_payload" "$TMP_DIR/unknown/file_context-apex_payload"
-    sort -o "$TMP_DIR/unknown/fs_config-apex_payload" "$TMP_DIR/unknown/fs_config-apex_payload"
-    sed -i -e "s|$TMP_DIR/tmp_out |/ |g" -e "s|$TMP_DIR/tmp_out||g" "$TMP_DIR/unknown/file_context-apex_payload"
-    sed -i -e "s|\.|\\\.|g" -e "s|\+|\\\+|g" -e "s|\[|\\\[|g" \
-        -e "s|\]|\\\]|g" -e "s|\*|\\\*|g" "$TMP_DIR/unknown/file_context-apex_payload"
-    sed -i -e "s|$TMP_DIR/tmp_out | |g" -e "s|$TMP_DIR/tmp_out/||g" "$TMP_DIR/unknown/fs_config-apex_payload"
-
-    EVAL "sudo umount \"$TMP_DIR/tmp_out\""
-    rm -rf "$TMP_DIR/tmp_out" "$TMP_DIR/unknown/apex_payload.img"
+    LOG "- Unpacking apex_payload.img"
+    EXTRACT_EXT4_IMAGE "$TMP_DIR/unknown/apex_payload.img" "$TMP_DIR/unknown/apex_payload" \
+        "$TMP_DIR/unknown/fs_config-apex_payload" "$TMP_DIR/unknown/file_context-apex_payload" || return 1
+    rm -f "$TMP_DIR/unknown/apex_payload.img"
 }
 
 LOG_MISSING_PATCHES()
@@ -168,7 +139,7 @@ if [ -d "$TMP_DIR" ]; then
 fi
 
 DECODE_APEX "$WORK_DIR/system/system/apex/com.android.bt.apex"
-EXTRACT_PAYLOAD
+EXTRACT_PAYLOAD || return 1
 
 # The Bluetooth app directory includes the platform build ID and changes
 # between firmware releases (for example BP2A... and BP4A...).  Resolve it

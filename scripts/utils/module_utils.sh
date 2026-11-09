@@ -73,6 +73,106 @@ DECODE_APK()
     return 0
 }
 
+# EXTRACT_EXT4_IMAGE <image> <output dir> <fs_config> <file_contexts>
+# Extracts an ext4 image (e.g. an APEX payload) without mounting it, so no
+# root is required. The tree is written to <output dir> without lost+found;
+# the metadata files describe every inode of the image (lost+found included)
+# in the format build_fs_image.sh consumes: fs_config paths are relative with
+# the root as an empty path, file_contexts paths are absolute and escaped.
+EXTRACT_EXT4_IMAGE()
+{
+    _CHECK_NON_EMPTY_PARAM "IMAGE" "$1" || return 1
+    _CHECK_NON_EMPTY_PARAM "OUTPUT" "$2" || return 1
+    _CHECK_NON_EMPTY_PARAM "FS_CONFIG" "$3" || return 1
+    _CHECK_NON_EMPTY_PARAM "FILE_CONTEXTS" "$4" || return 1
+
+    local IMAGE="$1"
+    local OUTPUT="$2"
+    local FS_CONFIG="$3"
+    local FILE_CONTEXTS="$4"
+    local CMD_FILE="$OUTPUT.debugfs"
+    local METADATA="$OUTPUT.metadata"
+    local PATHS
+
+    if [ ! -f "$IMAGE" ]; then
+        LOGE "File not found: ${IMAGE//$SRC_DIR\//}"
+        return 1
+    fi
+
+    # debugfs only reads ext2/3/4; erofs payloads would need fsck.erofs.
+    if ! dumpe2fs -h "$IMAGE" &> /dev/null; then
+        LOGE "Not an ext4 image: ${IMAGE//$SRC_DIR\//}"
+        return 1
+    fi
+
+    rm -rf "${OUTPUT:?}"
+    mkdir -p "$OUTPUT"
+    # rdump keeps modes and symlinks; restoring ownership needs root and
+    # fails per file, which is harmless as ownership comes from fs_config.
+    debugfs -R "rdump / \"$OUTPUT\"" "$IMAGE" &> /dev/null
+    if [ -z "$(ls -A "$OUTPUT")" ]; then
+        LOGE "Failed to extract ${IMAGE//$SRC_DIR\//}"
+        return 1
+    fi
+
+    {
+        echo 'stat "/"'
+        find "$OUTPUT" -mindepth 1 | sed "s|^$OUTPUT/||" | LC_ALL=C sort | \
+            sed 's|^\(.*\)$|stat "/\1"|'
+    } > "$CMD_FILE"
+    PATHS="$(wc -l < "$CMD_FILE")"
+
+    debugfs -f "$CMD_FILE" "$IMAGE" 2> /dev/null | awk '
+        function flush() {
+            if (path != "")
+                printf "%s\t%s\t%s\t%s\t%s\n", path, uid, gid, mode, label
+        }
+        /^debugfs: stat "/ {
+            flush()
+            path = $0
+            sub(/^debugfs: stat "/, "", path)
+            sub(/"$/, "", path)
+            uid = gid = mode = label = ""
+            next
+        }
+        / Mode: / {
+            mode = $0
+            sub(/.* Mode: +/, "", mode)
+            sub(/ .*/, "", mode)
+            sub(/^0+/, "", mode)
+            if (mode == "") mode = "0"
+        }
+        /^User: / { uid = $2; gid = $4 }
+        /^  security\.selinux / {
+            label = $0
+            sub(/^[^"]*"/, "", label)
+            sub(/"$/, "", label)
+            sub(/\\000$/, "", label)
+        }
+        END { flush() }
+    ' > "$METADATA"
+    rm -f "$CMD_FILE"
+
+    if [ "$(wc -l < "$METADATA")" != "$PATHS" ] || \
+            awk -F '\t' '$2 == "" || $3 == "" || $4 == "" || $5 == "" { bad = 1 } END { exit !bad }' "$METADATA"; then
+        LOGE "Failed to read metadata from ${IMAGE//$SRC_DIR\//}"
+        rm -f "$METADATA"
+        return 1
+    fi
+
+    awk -F '\t' '{
+        rel = substr($1, 2)
+        printf "%s %s %s %s capabilities=0x0\n", rel, $2, $3, $4
+    }' "$METADATA" | sort > "$FS_CONFIG"
+    awk -F '\t' '{ printf "%s %s\n", $1, $5 }' "$METADATA" | \
+        sed -e 's|\.|\\.|g' -e 's|+|\\+|g' -e 's|\[|\\[|g' \
+            -e 's|\]|\\]|g' -e 's|\*|\\*|g' | sort > "$FILE_CONTEXTS"
+    rm -f "$METADATA"
+
+    rm -rf "$OUTPUT/lost+found"
+    return 0
+}
+
 # GET_GALAXY_STORE_DOWNLOAD_URL "<package name/id>"
 # Returns a URL to download the desired app from Samsung servers.
 GET_GALAXY_STORE_DOWNLOAD_URL()

@@ -70,7 +70,6 @@ ADD_TARGET_VNDK_APEX() {
 PATCH_VNDK_CGROUP_RUNTIME() {
     local PATCH_ROOT="$TMP_DIR/vndk-cgroup-runtime"
     local DECODED="$PATCH_ROOT/decoded"
-    local MOUNT_DIR="$PATCH_ROOT/mnt"
     local PAYLOAD="$DECODED/unknown/apex_payload"
     local ORIGINAL_APEX="$PATCH_ROOT/original.apex"
     local FS_CONFIG="$PATCH_ROOT/fs_config"
@@ -95,16 +94,8 @@ PATCH_VNDK_CGROUP_RUNTIME() {
         return 1
     fi
 
-    if ! sudo -n -v &> /dev/null && ! sudo -v; then
-        LOGE "Root permissions are required to rebuild the VNDK APEX"
-        return 1
-    fi
-
-    if mountpoint -q "$MOUNT_DIR"; then
-        sudo umount "$MOUNT_DIR" || return 1
-    fi
-    sudo rm -rf "$PATCH_ROOT"
-    mkdir -p "$PATCH_ROOT" "$MOUNT_DIR"
+    rm -rf "$PATCH_ROOT"
+    mkdir -p "$PATCH_ROOT"
 
     LOG "- Extracting VNDK v$TARGET_VNDK_VERSION APEX"
     if unzip -l "$VNDK_APEX" original_apex 2> /dev/null | grep -q "original_apex"; then
@@ -119,62 +110,27 @@ PATCH_VNDK_CGROUP_RUNTIME() {
 
     LOG "- Decoding VNDK v$TARGET_VNDK_VERSION APEX payload"
     EVAL "apktool d -j \"$(nproc)\" -o \"$DECODED\" -r \"$ORIGINAL_APEX\""
-    mkdir -p "$PAYLOAD"
-    if ! sudo mount -o ro "$DECODED/unknown/apex_payload.img" "$MOUNT_DIR"; then
-        LOGE "Failed to mount the VNDK APEX payload"
-        return 1
-    fi
-    if ! sudo cp -a -T "$MOUNT_DIR" "$PAYLOAD"; then
-        sudo umount "$MOUNT_DIR" || true
-        LOGE "Failed to copy the VNDK APEX payload"
-        return 1
-    fi
+    EXTRACT_EXT4_IMAGE "$DECODED/unknown/apex_payload.img" "$PAYLOAD" \
+        "$FS_CONFIG" "$FILE_CONTEXTS" || return 1
 
     # An incremental build may already contain this repair.  Avoid rebuilding
     # and resigning a valid APEX a second time.
     if [ -f "$PAYLOAD/lib/libcgrouprc.so" ] && \
             [ -f "$PAYLOAD/lib64/libcgrouprc.so" ]; then
-        sudo umount "$MOUNT_DIR" || return 1
-        sudo rm -rf "$PATCH_ROOT"
+        rm -rf "$PATCH_ROOT"
         LOG "  - VNDK v$TARGET_VNDK_VERSION already contains both cgroup clients"
         return 0
     fi
 
-    # Preserve the original payload metadata before adding files that do not
-    # carry SELinux xattrs in the host filesystem.
-    if ! sudo find "$MOUNT_DIR" \
-            -exec stat -c "%n %u %g %a capabilities=0x0" "{}" \; > "$FS_CONFIG"; then
-        sudo umount "$MOUNT_DIR" || true
-        LOGE "Failed to record VNDK APEX fs_config metadata"
-        return 1
-    fi
-    if ! sudo find "$MOUNT_DIR" -exec sh -c '
-            for path do
-                label="$(getfattr -n security.selinux --only-values -h --absolute-names "$path")" || exit 1
-                printf "%s %s\n" "$path" "$label"
-            done
-        ' sh "{}" + > "$FILE_CONTEXTS"; then
-        sudo umount "$MOUNT_DIR" || true
-        LOGE "Failed to record VNDK APEX SELinux contexts"
-        return 1
-    fi
-    sudo umount "$MOUNT_DIR" || return 1
-
-    sed -i -e "s|$MOUNT_DIR |/ |g" -e "s|$MOUNT_DIR||g" "$FILE_CONTEXTS"
-    sed -i -e "s|$MOUNT_DIR | |g" -e "s|$MOUNT_DIR/||g" "$FS_CONFIG"
-    sed -i -e 's|\.|\\.|g' -e 's|+|\\+|g' -e 's|\[|\\[|g' \
-        -e 's|\]|\\]|g' -e 's|\*|\\*|g' "$FILE_CONTEXTS"
-
     LOG "- Adding target VNDK v30-compatible libcgrouprc.so to both payload ABIs"
-    sudo install -o 1000 -g 1000 -m 0644 "$DONOR32" "$PAYLOAD/lib/libcgrouprc.so"
-    sudo install -o 1000 -g 1000 -m 0644 "$DONOR64" "$PAYLOAD/lib64/libcgrouprc.so"
+    install -m 0644 "$DONOR32" "$PAYLOAD/lib/libcgrouprc.so"
+    install -m 0644 "$DONOR64" "$PAYLOAD/lib64/libcgrouprc.so"
     printf 'lib/libcgrouprc.so 1000 1000 644 capabilities=0x0\n' >> "$FS_CONFIG"
     printf 'lib64/libcgrouprc.so 1000 1000 644 capabilities=0x0\n' >> "$FS_CONFIG"
     printf '/lib/libcgrouprc\\.so u:object_r:system_lib_file:s0\n' >> "$FILE_CONTEXTS"
     printf '/lib64/libcgrouprc\\.so u:object_r:system_lib_file:s0\n' >> "$FILE_CONTEXTS"
     sort -u -o "$FS_CONFIG" "$FS_CONFIG"
     sort -u -o "$FILE_CONTEXTS" "$FILE_CONTEXTS"
-    sudo chown -hR "$(id -u):$(id -g)" "$PATCH_ROOT"
 
     rm -f "$DECODED/unknown/apex_payload.img"
     "$SRC_DIR/scripts/build_fs_image.sh" ext4 --no-avb \
@@ -208,7 +164,7 @@ PATCH_VNDK_CGROUP_RUNTIME() {
             return 1
         fi
     done
-    sudo rm -rf "$PATCH_ROOT"
+    rm -rf "$PATCH_ROOT"
     LOG "  - VNDK v$TARGET_VNDK_VERSION payload now exports both LIBCGROUPRC_30 clients"
 }
 
