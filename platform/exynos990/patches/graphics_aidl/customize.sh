@@ -242,6 +242,14 @@ INSTALL_COMPOSER3()
                 >> "$VENDOR_SERVICE_CONTEXTS"
     fi
 
+    # Hand the camera preview layers to the bridge's MPP path. Without it the
+    # bridge converts every preview frame on the CPU (private 0x11d format ->
+    # NV21 -> RGBA, capped by camera_convert_fps), which loads a core and
+    # makes the preview stutter. Validated on y2s on 06/11/2026. The value is
+    # read once when the Composer3 service starts; a persist override set on
+    # the device still wins (setprop ... 0 and reboot to compare).
+    SET_PROP "vendor" "persist.vendor.exynos990.camera_mpp" "1" || return 1
+
     LOG "- Installed Composer3 AIDL V5 bridge over stock Exynos 990 HWC2"
 }
 
