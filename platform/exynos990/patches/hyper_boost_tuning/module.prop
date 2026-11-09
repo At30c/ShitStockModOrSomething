@@ -1,0 +1,4 @@
+id=hyper_boost_tuning
+name=Hyper boost durations closer to the S26+
+author=At30c
+description=Shortens the app launch, scroll and wakeup CPU boosts of the Samsung hyper-service.

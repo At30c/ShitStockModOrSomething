@@ -76,7 +76,7 @@
     <components>
 
         <component name="AP" tempType="LRP" >
-            <limiter name="CPUFreqMax" step="0" temp="350:380:450:470" value="-1:1687587:1687587:1271689" />
+            <limiter name="CPUFreqMax" step="0" temp="350:380:450:470" value="-1:1690000:1690000:1274000" />
             <limiter name="GPUFreqMax" step="0" temp="350:380:450:470" value="-1:377000:377000:260000"  />
             <limiter name="AppInstallDelay" value="5000" />
             <limiter name="BackgroundCpuset" temp="360" gap="20" value="-1:100:200:300" />
@@ -104,22 +104,22 @@
         </scenario>
 
         <scenario name="SIPStart" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1687587"         />
+            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1690000"         />
             <limiter name="GPUFreqMax" cond="for_temporary" temp="450"     value="-1:377000"          />
         </scenario>
 
         <scenario name="AppStart" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1687587"         />
+            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1690000"         />
             <limiter name="GPUFreqMax" cond="for_temporary" temp="450"     value="-1:377000"          />
         </scenario>
 
         <scenario name="Badge" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1687587"         />
+            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1690000"         />
             <limiter name="GPUFreqMax" cond="for_temporary" temp="450"     value="-1:377000"          />
         </scenario>
 
         <scenario name="WakeUp" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1687587"         />
+            <limiter name="CPUFreqMax" cond="for_temporary" temp="450"     value="-1:1690000"         />
             <limiter name="GPUFreqMax" cond="for_temporary" temp="450"     value="-1:377000"          />
         </scenario>
 
@@ -149,11 +149,11 @@
         </scenario>
 
         <scenario name="MultiWindow" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" step="0" temp="360" value="-1:1687587:1687587:959765" />
+            <limiter name="CPUFreqMax" step="0" temp="360" value="-1:1690000:1690000:962000" />
         </scenario>
 
         <scenario name="Dex" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" step="0" temp="360" value="-1:1687587:1687587:959765" />
+            <limiter name="CPUFreqMax" step="0" temp="360" value="-1:1690000:1690000:962000" />
         </scenario>
 
         <scenario name="DexStabilizerMode" tempType="LRP" priority="4">
@@ -161,7 +161,7 @@
         </scenario>
 
         <scenario name="Heavyuser" tempType="LRP" priority="1" >
-            <limiter name="CPUFreqMax" cond="for_temporary" temp="450:480:500" value="-1:1687587:1271689" />
+            <limiter name="CPUFreqMax" cond="for_temporary" temp="450:480:500" value="-1:1690000:1274000" />
             <limiter name="GPUFreqMax" cond="for_temporary" temp="420:450:480:500" value="-1:702000:702000:260000" />
         </scenario>
 
@@ -170,7 +170,7 @@
         </scenario>
 
         <scenario name="CameraNight!Camera_night" tempType="LRP">
-            <limiter name="CPUFreqMax" temp="450:480:500" value="-1:1687587:1271689" />
+            <limiter name="CPUFreqMax" temp="450:480:500" value="-1:1690000:1274000" />
             <limiter name="GPUFreqMax" temp="420:450:500" value="-1:702000:260000" />
         </scenario>
 
@@ -185,7 +185,7 @@
         </scenario>
 
         <scenario name="LowTemp" tempType="BAT" priority="3">
-            <limiter name="CPUFreqMax" temp="-150:-70" value="1687587:-1" />
+            <limiter name="CPUFreqMax" temp="-150:-70" value="1690000:-1" />
             <limiter name="GPUFreqMax" temp="-150:-70" value="377000:-1"  />
             <limiter name="Brightness" temp="-150:-70" value="147:-1"      />
         </scenario> 
@@ -195,11 +195,11 @@
         </scenario>
 
         <scenario name="SpayClockLimit" tempType="LRP" priority="2" >
-             <limiter name="CPUFreqMax" temp="350:380" value="2103486:1687587" />
+             <limiter name="CPUFreqMax" temp="350:380" value="2106000:1690000" />
         </scenario>
 
         <scenario name="PowerSharing" tempType="LRP" priority="3" >
-             <limiter name="CPUFreqMax" temp="350:380" value="1844882:1687587" />
+             <limiter name="CPUFreqMax" temp="350:380" value="1844882:1690000" />
              <limiter name="GPUFreqMax" value="377000" />
         </scenario> 
 
@@ -215,14 +215,14 @@
 
         <scenario_group name="GameThermalCpuControl" tempType="LRP" >
             <scenario id="-7"  limiter="CPUFreqMax"                     value="703828" />
-            <scenario id="-6"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1687587:703828"  />
-            <scenario id="-5"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1687587:1170380" />
-            <scenario id="-4"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1687587:1410322" />
-            <scenario id="-3"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1687587:1479638" />
-            <scenario id="-2"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1687587:1583613" />
-            <scenario id="-1"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1687587:1599609" />
-            <scenario id="0"   limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1791562:1687587" />
-            <scenario id="1"   limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1844882:1791562" />
+            <scenario id="-6"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1690000:703828"  />
+            <scenario id="-5"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1690000:1170380" />
+            <scenario id="-4"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1690000:1410322" />
+            <scenario id="-3"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1690000:1482000" />
+            <scenario id="-2"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1690000:1586000" />
+            <scenario id="-1"  limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1690000:1599609" />
+            <scenario id="0"   limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1794000:1690000" />
+            <scenario id="1"   limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1844882:1794000" />
             <scenario id="2"   limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:1930195:1844882" />
             <scenario id="3"   limiter="CPUFreqMax" step="0" temp="370:380:400" value="-1:2002177:1930195" />
             <scenario id="4"   limiter="CPUFreqMax"                             value="-1"                 />

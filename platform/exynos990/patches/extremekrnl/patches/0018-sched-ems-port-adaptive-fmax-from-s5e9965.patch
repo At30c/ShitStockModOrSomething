@@ -1,0 +1,386 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: port adaptive fmax from the S5E9965 EMS
+
+The Galaxy S26+ EMS keeps each cluster below its maximum frequency in the
+everyday emstune sets and lifts the ceiling in the boost and game sets
+(adaptive fmax). Port the idea to the Exynos 990 emstune: a set may carry
+an fmax node with one ceiling per coregroup, in kHz (0 = none). Sets that
+do not override it inherit the mode's default set, like every other field.
+
+The ceiling is applied as a PM QoS max request on PM_QOS_CLUSTER0..2_FREQ_MAX
+from a work item, since sets can change with emstune_mode_lock held and PM
+QoS may sleep. Thermal and other max requests still combine with it.
+/sys/kernel/ems/emstune/fmax_enabled turns it off at runtime and cur_set
+shows the active ceilings.
+
+Replace the fixed 2.21 GHz cap of the Mongoose cluster (DT max-freq) with
+this: normal, power-scenario, light-video, balance and pinned cap the big
+cluster at 2.21 GHz in their default, med and touch boost sets; their big
+boost sets (app launch/switch) and the performance, light-game and
+game-mode modes run up to 2.73 GHz again.
+---
+--- a/kernel/sched/ems/ems.h
++++ b/kernel/sched/ems/ems.h
+@@ -231,6 +231,16 @@
+ 	struct kobject kobj;
+ };
+ 
++/*
++ * emstune - adaptive fmax: per-coregroup frequency ceiling of the set,
++ * in kHz, 0 = no ceiling (ported from the S5E9965 EMS adaptive fmax).
++ */
++struct emstune_fmax {
++	bool overriding;
++	unsigned int max_freq[NR_CPUS];
++	struct kobject kobj;
++};
++
+ struct emstune_set {
+ 	int				idx;
+ 	const char			*desc;
+@@ -248,6 +258,7 @@
+ 	struct emstune_init_util	init_util;
+ 	struct emstune_frt		frt;
+ 	struct emstune_migov		migov;
++	struct emstune_fmax		fmax;
+ 
+ 	struct kobject	  		kobj;
+ };
+--- a/kernel/sched/ems/tune.c
++++ b/kernel/sched/ems/tune.c
+@@ -12,6 +12,8 @@
+ #include <linux/miscdevice.h>
+ #include <linux/uaccess.h>
+ #include <linux/string.h>
++#include <linux/pm_qos.h>
++#include <linux/workqueue.h>
+ 
+ #include <trace/events/ems.h>
+ #include <trace/events/ems_debug.h>
+@@ -63,6 +65,8 @@
+ 	return raw_notifier_chain_unregister(&emstune_mode_chain, nb);
+ }
+ 
++static void emstune_fmax_schedule(void);
++
+ #define default_set cur_mode->sets[0]
+ #define update_cur_set_field(_member)					\
+ 	if (next_set->_member.overriding)				\
+@@ -91,8 +95,10 @@
+ 	update_cur_set_field(init_util);
+ 	update_cur_set_field(frt);
+ 	update_cur_set_field(migov);
++	update_cur_set_field(fmax);
+ 
+ 	emstune_notify_mode_update();
++	emstune_fmax_schedule();
+ }
+ 
+ static struct mutex emstune_mode_lock;
+@@ -1094,6 +1100,144 @@
+ }
+ 
+ /******************************************************************************
++ * adaptive fmax							      *
++ *									      *
++ * Each set may cap the frequency of every coregroup, like the adaptive fmax  *
++ * of the S5E9965 EMS: everyday sets keep the big cluster below its maximum   *
++ * and the boost/game sets lift the ceiling. The ceiling is a PM QoS max      *
++ * request per cluster, so thermal and other max requests still combine with  *
++ * it (the lowest wins). Coregroups map to PM_QOS_CLUSTER0..2_FREQ_MAX in     *
++ * order, matching the exynos-acme pm_qos-max-class of each domain.	      *
++ ******************************************************************************/
++#define FMAX_MAX_GROUPS	3
++
++static const int fmax_qos_class[FMAX_MAX_GROUPS] = {
++	PM_QOS_CLUSTER0_FREQ_MAX,
++	PM_QOS_CLUSTER1_FREQ_MAX,
++	PM_QOS_CLUSTER2_FREQ_MAX,
++};
++static struct pm_qos_request fmax_qos[FMAX_MAX_GROUPS];
++static int fmax_group_cpu[FMAX_MAX_GROUPS];
++static int fmax_group_count;
++static bool fmax_ready;
++static int fmax_enabled = 1;
++
++static void emstune_fmax_work_fn(struct work_struct *work)
++{
++	unsigned int freq[FMAX_MAX_GROUPS];
++	int i;
++
++	if (!READ_ONCE(fmax_ready))
++		return;
++
++	mutex_lock(&emstune_mode_lock);
++	for (i = 0; i < fmax_group_count; i++)
++		freq[i] = fmax_enabled ?
++			cur_set.fmax.max_freq[fmax_group_cpu[i]] : 0;
++	mutex_unlock(&emstune_mode_lock);
++
++	for (i = 0; i < fmax_group_count; i++)
++		pm_qos_update_request(&fmax_qos[i],
++			freq[i] ? (s32)freq[i] : PM_QOS_DEFAULT_VALUE);
++}
++static DECLARE_WORK(emstune_fmax_work, emstune_fmax_work_fn);
++
++/* May run with emstune_mode_lock held: PM QoS can sleep, so defer. */
++static void emstune_fmax_schedule(void)
++{
++	if (READ_ONCE(fmax_ready))
++		schedule_work(&emstune_fmax_work);
++}
++
++static void __init emstune_fmax_init(void)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu) {
++		if (cpu != cpumask_first(cpu_coregroup_mask(cpu)))
++			continue;
++		if (fmax_group_count == FMAX_MAX_GROUPS) {
++			pr_warn("emstune: adaptive fmax supports %d clusters\n",
++				FMAX_MAX_GROUPS);
++			break;
++		}
++		fmax_group_cpu[fmax_group_count] = cpu;
++		pm_qos_add_request(&fmax_qos[fmax_group_count],
++			fmax_qos_class[fmax_group_count], PM_QOS_DEFAULT_VALUE);
++		fmax_group_count++;
++	}
++
++	WRITE_ONCE(fmax_ready, true);
++	emstune_fmax_schedule();
++}
++
++static int
++parse_fmax(struct device_node *dn, struct emstune_set *set)
++{
++	struct emstune_fmax *fmax = &set->fmax;
++	int cpu, cursor, cnt, groups = 0;
++	u32 val[NR_CPUS];
++
++	if (!dn)
++		return 0;
++
++	for_each_possible_cpu(cpu)
++		if (cpu == cpumask_first(cpu_coregroup_mask(cpu)))
++			groups++;
++
++	cnt = of_property_count_u32_elems(dn, "max-freq");
++	if (cnt != groups ||
++	    of_property_read_u32_array(dn, "max-freq", val, cnt)) {
++		pr_err("emstune: set %s: fmax needs one max-freq per cluster\n",
++			set->desc);
++		of_node_put(dn);
++		return -EINVAL;
++	}
++
++	cnt = 0;
++	for_each_possible_cpu(cpu) {
++		if (cpu != cpumask_first(cpu_coregroup_mask(cpu)))
++			continue;
++
++		for_each_cpu(cursor, cpu_coregroup_mask(cpu))
++			fmax->max_freq[cursor] = val[cnt];
++
++		cnt++;
++	}
++
++	fmax->overriding = true;
++
++	of_node_put(dn);
++
++	return 0;
++}
++
++static ssize_t
++show_fmax_enabled(struct kobject *k, struct kobj_attribute *attr, char *buf)
++{
++	return sprintf(buf, "%d\n", fmax_enabled);
++}
++
++static ssize_t
++store_fmax_enabled(struct kobject *k, struct kobj_attribute *attr,
++		const char *buf, size_t count)
++{
++	int val;
++
++	if (kstrtoint(buf, 10, &val))
++		return -EINVAL;
++
++	mutex_lock(&emstune_mode_lock);
++	fmax_enabled = !!val;
++	mutex_unlock(&emstune_mode_lock);
++	emstune_fmax_schedule();
++
++	return count;
++}
++static struct kobj_attribute fmax_enabled_attr =
++__ATTR(fmax_enabled, 0644, show_fmax_enabled, store_fmax_enabled);
++
++/******************************************************************************
+  * show mode	                                                              *
+  ******************************************************************************/
+ static struct emstune_mode_request emstune_user_req;
+@@ -1359,6 +1503,13 @@
+ 
+ 	ret += sprintf(buf + ret, "[multi ip gov]\n");
+ 	ret += sprintf(buf + ret, "migov_en: %d\n", cur_set.migov.migov_en);
++	ret += sprintf(buf + ret, "\n");
++
++	ret += sprintf(buf + ret, "[fmax] (kHz, 0 = no ceiling, enabled=%d)\n",
++			fmax_enabled);
++	for_each_possible_cpu(cpu)
++		ret += sprintf(buf + ret, "cpu%d: %u\n",
++				cpu, cur_set.fmax.max_freq[cpu]);
+ 
+ 	ret += sprintf(buf + ret, "\n");
+ 
+@@ -1892,6 +2043,7 @@
+ 	parse(init_util);
+ 	parse(frt);
+ 	parse(migov);
++	parse(fmax);
+ 
+ 	return 0;
+ }
+@@ -1995,6 +2147,9 @@
+ 	if (sysfs_create_file(emstune_kobj, &hungry_attr.attr))
+ 		return -ENOMEM;
+ 
++	if (sysfs_create_file(emstune_kobj, &fmax_enabled_attr.attr))
++		return -ENOMEM;
++
+ 	return 0;
+ }
+ 
+@@ -2018,6 +2173,7 @@
+ 	register_emstune_mode_misc();
+ 
+ 	emstune_initialized = true;
++	emstune_fmax_init();
+ 
+ 	emstune_add_request(&emstune_user_req);
+ 	emstune_boost_timeout(&emstune_user_req, 40 * USEC_PER_SEC);
+--- a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
++++ b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+@@ -236,6 +236,11 @@
+ 				idx = <0>;
+ 				desc = "normal default";
+ 
++				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
++				fmax {
++					max-freq = <0 0 2210000>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_EFF		/* fg */
+@@ -420,6 +425,11 @@
+ 				idx = <3>;
+ 				desc = "normal big boost";
+ 
++				/* adaptive fmax: no ceiling while boosting */
++				fmax {
++					max-freq = <0 0 0>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_PERF		/* fg */
+@@ -508,6 +518,11 @@
+ 				idx = <4>;
+ 				desc = "power-scenario default";
+ 
++				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
++				fmax {
++					max-freq = <0 0 2210000>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_ENERGY		/* root */
+ 						   SCHED_POLICY_ENERGY		/* fg */
+@@ -693,6 +708,11 @@
+ 				idx = <7>;
+ 				desc = "power-scenario big boost";
+ 
++				/* adaptive fmax: no ceiling while boosting */
++				fmax {
++					max-freq = <0 0 0>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_PERF		/* fg */
+@@ -1338,6 +1358,11 @@
+ 				idx = <16>;
+ 				desc = "light-video default";
+ 
++				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
++				fmax {
++					max-freq = <0 0 2210000>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_EFF		/* fg */
+@@ -1521,6 +1546,11 @@
+ 				idx = <19>;
+ 				desc = "light-video big boost";
+ 
++				/* adaptive fmax: no ceiling while boosting */
++				fmax {
++					max-freq = <0 0 0>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_PERF		/* fg */
+@@ -1608,6 +1638,11 @@
+ 				idx = <20>;
+ 				desc = "balance default";
+ 
++				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
++				fmax {
++					max-freq = <0 0 2210000>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_EFF		/* fg */
+@@ -1797,6 +1832,11 @@
+ 				idx = <23>;
+ 				desc = "balance big boost";
+ 
++				/* adaptive fmax: no ceiling while boosting */
++				fmax {
++					max-freq = <0 0 0>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_PERF		/* fg */
+@@ -1883,6 +1923,11 @@
+ 				idx = <24>;
+ 				desc = "pinned default";
+ 
++				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
++				fmax {
++					max-freq = <0 0 2210000>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_EFF		/* fg */
+@@ -2183,6 +2228,11 @@
+ 				idx = <27>;
+ 				desc = "pinned big boost";
+ 
++				/* adaptive fmax: no ceiling while boosting */
++				fmax {
++					max-freq = <0 0 0>;
++				};
++
+ 				sched_policy {
+ 					policy  = <SCHED_POLICY_EFF		/* root */
+ 						   SCHED_POLICY_PERF		/* fg */
