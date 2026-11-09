@@ -1,0 +1,139 @@
+From: At30c <173511395+At30c@users.noreply.github.com>
+Subject: [PATCH] kernel: append the init rc on a short read at EOF
+
+The init.rc proxy appended the KernelSU rc only when the original read
+returned 0. Android 17 init stopped issuing that extra read(2), so the
+rc never reached init and ksud never ran post-fs-data, services or
+boot-completed: modules were never mounted.
+
+Append in the same read when the file ends inside it and there is room
+left, proxy every init.rc descriptor until the rc has been delivered
+(stopping on the first read of a second descriptor also lost it), and log
+the first init.rc reads.
+
+---
+diff --git a/kernel/runtime/ksud_integration.c b/kernel/runtime/ksud_integration.c
+index 744d6952..4b32c0b3 100644
+--- a/kernel/runtime/ksud_integration.c
++++ b/kernel/runtime/ksud_integration.c
+@@ -397,6 +397,29 @@ static struct file_operations fops_proxy;
+ static ssize_t ksu_rc_pos = 0;
+ const size_t ksu_rc_len = sizeof(KERNEL_SU_RC) - 1;
+ 
++/*
++ * Every rc byte (ksu rc and module rc) has been handed to init.
++ */
++static bool ksu_rc_append_done(void)
++{
++	return ksu_rc_pos >= (ssize_t)ksu_rc_len &&
++	       module_rc_pos >= (ssize_t)module_rc_len;
++}
++
++/*
++ * The original read returned data. Decide whether the file ended inside
++ * this read and there is still room to append the rc in the same call.
++ * Newer init builds stop reading once they got st_size bytes and never
++ * issue the read(2) that returns 0, so waiting for EOF alone loses the rc.
++ */
++static bool ksu_rc_short_read_at_eof(struct file *file, loff_t pos,
++				     size_t room)
++{
++	if (!room || ksu_rc_append_done())
++		return false;
++	return pos >= i_size_read(file_inode(file));
++}
++
+ // https://cs.android.com/android/platform/superproject/main/+/main:system/core/init/parser.cpp;l=144;drc=61197364367c9e404c7da6900658f1b16c42d0da
+ // https://cs.android.com/android/platform/superproject/main/+/main:system/libbase/file.cpp;l=241-243;drc=61197364367c9e404c7da6900658f1b16c42d0da
+ // The system will read init.rc file until EOF, whenever read() returns 0,
+@@ -417,13 +440,18 @@ static ssize_t read_proxy(struct file *file, char __user *buf, size_t count,
+ 		goto append_module_rc;
+ 
+ 	ret = orig_read(file, buf, count, pos);
+-	if (ret != 0) {
+-		return ret;
+-	}
+-	if (ksu_rc_pos >= ksu_rc_len && module_rc_pos >= (ssize_t)module_rc_len) {
++	if (ret < 0)
+ 		return ret;
++	if (ret > 0) {
++		if (!ksu_rc_short_read_at_eof(file, *pos, count - ret))
++			return ret;
++		pr_info("read_proxy: short read at EOF (%zd/%zu), append rc\n",
++			ret, count);
++	} else {
++		if (ksu_rc_append_done())
++			return ret;
++		pr_info("read_proxy: orig read finished, start append rc\n");
+ 	}
+-	pr_info("read_proxy: orig read finished, start append rc\n");
+ 
+ append_ksu_rc:
+ 	if (ksu_rc_pos < ksu_rc_len) {
+@@ -479,13 +507,19 @@ static ssize_t read_iter_proxy(struct kiocb *iocb, struct iov_iter *to)
+ 		goto append_module_rc;
+ 
+ 	ret = orig_read_iter(iocb, to);
+-	if (ret != 0) {
+-		return ret;
+-	}
+-	if (ksu_rc_pos >= ksu_rc_len && module_rc_pos >= (ssize_t)module_rc_len) {
++	if (ret < 0)
+ 		return ret;
++	if (ret > 0) {
++		if (!ksu_rc_short_read_at_eof(iocb->ki_filp, iocb->ki_pos,
++					      iov_iter_count(to)))
++			return ret;
++		pr_info("read_iter_proxy: short read at EOF (%zd), append rc\n",
++			ret);
++	} else {
++		if (ksu_rc_append_done())
++			return ret;
++		pr_info("read_iter_proxy: orig read finished, start append rc\n");
+ 	}
+-	pr_info("read_iter_proxy: orig read finished, start append rc\n");
+ 
+ append_ksu_rc:
+ 	if (ksu_rc_pos < ksu_rc_len) {
+@@ -580,16 +614,17 @@ static bool is_init_rc(struct file *fp)
+ 
+ static void ksu_apply_init_rc_proxy(struct file *file)
+ {
+-    // we only process the first read
+-    // READ_ONCE/WRITE_ONCE: this runs from the read(2) path and can be
+-    // entered concurrently on two descriptors of init.rc.
+-    static bool rc_hooked = false;
+-    if (READ_ONCE(rc_hooked)) {
+-        // we don't need these kprobe, unregister it!
++    // Later reads on an already proxied descriptor need nothing.
++    if (file->f_op == &fops_proxy)
++        return;
++
++    // Stop hooking only once init has received the rc. Stopping on the
++    // first read of any other descriptor lost the rc whenever the first
++    // proxied descriptor was not the one read to its end.
++    if (ksu_rc_append_done()) {
+         stop_init_rc_hook();
+         return;
+     }
+-    WRITE_ONCE(rc_hooked, true);
+ 
+     // now we can sure that the init process is reading
+     // `/system/etc/init/init.rc`
+@@ -950,6 +985,16 @@ int __maybe_unused ksu_handle_vfs_read(struct file **file_ptr, char __user **buf
+     if (IS_ERR_OR_NULL(file)) return 0;
+ 
+     if (is_init_rc(file)) {
++        static int logged;
++
++        // Record how init reads init.rc (a few reads only).
++        if (logged < 8) {
++            logged++;
++            pr_info("init.rc vfs_read: count=%zu pos=%lld size=%lld proxied=%d\n",
++                    *count_ptr, *pos ? (long long)**pos : -1LL,
++                    (long long)i_size_read(file_inode(file)),
++                    file->f_op == &fops_proxy);
++        }
+         ksu_apply_init_rc_proxy(file);
+     }
+ 

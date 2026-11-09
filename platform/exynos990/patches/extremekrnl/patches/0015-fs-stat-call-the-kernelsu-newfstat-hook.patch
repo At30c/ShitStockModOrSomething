@@ -1,0 +1,35 @@
+From: At30c <173511395+At30c@users.noreply.github.com>
+Subject: [PATCH] fs: stat: call the KernelSU newfstat hook
+
+KernelSU grows the st_size that init sees for init.rc by the length of the
+rc it appends, so a reader that stops after st_size bytes still asks for
+the appended part. The manual hook integration only covered vfs_read(),
+and without this hook the KernelSU rc (ksud post-fs-data, services and
+boot-completed) never reached init on Android 17.
+
+---
+diff --git a/fs/stat.c b/fs/stat.c
+index c4027f08abcd..986f84548b88 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -374,6 +374,9 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+ }
+ #endif
+ 
++#ifdef CONFIG_KSU
++extern void ksu_handle_newfstat_ret(unsigned int *fd, struct stat __user **statbuf_ptr);
++#endif
+ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+ {
+ 	struct kstat stat;
+@@ -381,6 +384,10 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+ 
+ 	if (!error)
+ 		error = cp_new_stat(&stat, statbuf);
++#ifdef CONFIG_KSU
++	if (!error)
++		ksu_handle_newfstat_ret(&fd, &statbuf);
++#endif
+ 
+ 	return error;
+ }
