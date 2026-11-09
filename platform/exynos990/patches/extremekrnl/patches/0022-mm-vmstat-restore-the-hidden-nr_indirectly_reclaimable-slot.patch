@@ -1,0 +1,39 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] mm: vmstat: restore the hidden nr_indirectly_reclaimable slot
+
+Upstream 7aaf77272358 ("mm: don't show nr_indirectly_reclaimable in
+/proc/vmstat") kept NR_INDIRECTLY_RECLAIMABLE_BYTES in enum
+node_stat_item, gave it an empty name in vmstat_text and made
+vmstat_show() skip empty names. A later merge in this tree dropped both
+the empty name and the skip, so from nr_kernel_misc_reclaimable on every
+/proc/vmstat name showed the value of the next counter: "pswpout" read
+the swap-ins (it matched the zram reads), "pgalloc_normal" the
+swap-outs, "pgmajfault" was larger than "pgfault", and so on. lmkd,
+Chimera (PerProcessNandswap/QuickSwap) and any tool reading /proc/vmstat
+by name got the wrong counters.
+
+Restore the empty slot and the skip.
+---
+diff --git a/mm/vmstat.c b/mm/vmstat.c
+index 234a2e7..70a4389 100644
+--- a/mm/vmstat.c
++++ b/mm/vmstat.c
+@@ -1170,6 +1170,7 @@ const char * const vmstat_text[] = {
+ 	"zero_page_alloc_total",
+ 	"zero_page_alloc_prezero",
+ #endif
++	"", /* nr_indirectly_reclaimable */
+ 	"nr_kernel_misc_reclaimable",
+ 	"nr_unreclaimable_pages",
+ 
+@@ -1738,6 +1739,10 @@ static int vmstat_show(struct seq_file *m, void *arg)
+ 	unsigned long *l = arg;
+ 	unsigned long off = l - (unsigned long *)m->private;
+ 
++	/* Skip hidden vmstat items. */
++	if (*vmstat_text[off] == '\0')
++		return 0;
++
+ 	seq_puts(m, vmstat_text[off]);
+ 	seq_put_decimal_ull(m, " ", *l);
+ 	seq_putc(m, '\n');

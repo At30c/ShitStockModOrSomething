@@ -13120,3 +13120,42 @@ Requisitos e garantias:
   O UpdateChecker usa o maior entre `ro.unica.timestamp` e
   `ro.boot.unica.timestamp`; o `build_info.txt` do `-k` guarda
   `system_timestamp` para encadear vários `-k`.
+
+## ECS dinâmico do S26+, `/proc/vmstat` e lock YUV do mapper (09/11/2026, noite)
+
+* **Patch 0021 (ECS dinâmico):** substitui o modo `saving` fixo do 0020 pelo
+  governor `ecs_dynamic` do S5E9965, reescrito sobre o EMS do 990 a partir do
+  `ecs_dynamic.c` do código aberto do SM-S947B (Samsung Open Source,
+  `exynos/soc-series/common/kernel/sched/ems/`). Cada domínio (little 0-3,
+  mid 4-5, big 6-7) recebe a cada tick as CPUs que precisa: CPUs ocupadas +
+  tarefas que sobram nos domínios menores (+1 se todos ocupados; nenhuma se
+  algum ainda tem CPU poupada) + misfit acima de `help-misfit-thr`. Domínio
+  com CPU poupada nunca conta como ocupado. A fila média vem de média móvel
+  por tick (`rq->nr_running`, misfit do load balancer) no lugar do MLT do
+  S26+; nada entra no enqueue/dequeue. Diferença de layout: misfit do little
+  acorda o mid e só o misfit do mid acorda o Mongoose. Parâmetros por set no
+  nó `ecs` do emstune (`dynamic-busy-ratio`, `dynamic-nr-run-up-ratio`,
+  `dynamic-help-misfit-thr`, `min-cpus`). Estado em
+  `/sys/kernel/ems/ecs/dynamic`; traces `ecs_dynamic_cpu_info/domain_info`.
+  Validado no y2slte (kernel #47/#48): repouso em `0-3`, carga média em
+  `0-6` (um Mongoose só), picos em `0-7`.
+* **Patch 0022 (`/proc/vmstat`):** um merge perdeu o nome vazio de
+  `nr_indirectly_reclaimable` e o pulo no `vmstat_show()`; de
+  `nr_kernel_misc_reclaimable` em diante cada nome mostrava o valor seguinte
+  (`pswpout` eram os swap-ins, `pgmajfault` > `pgfault`). Afetava lmkd,
+  Chimera e qualquer diagnóstico. Conferir: `pswpin/pswpout` batem com as
+  leituras/escritas de `/sys/block/zram0/stat`.
+* **Load average ~16 em repouso:** 16 kthreads dormem em estado D
+  (`tz_worker_thread` x8, `tz_iwlog`, `tz_iwsock`, `ree_time` do TEEgris,
+  `exynos_gmc_thread`, `ksu_selinux_pol`). Não é carga; use PSI
+  (`/proc/pressure/cpu`) e `nr_running`.
+* **Mapper (`mapper.exynos990_compat.so`):** o lock recusava (BAD_VALUE)
+  qualquer bit de usage fora de CPU. `AImage` trava com o usage do
+  `ImageReader`; o FaceTec (liveness de bancos/Mercado Pago) usa
+  `CPU_READ_OFTEN | RENDERSCRIPT` (0x100003), então todo quadro YUV falhava
+  e a prévia (GPU) seguia normal. Agora só os bits de CPU do pedido contam,
+  como no gralloc de fábrica. Sintoma no log do app:
+  `Gralloc5: lock(...) failed: 3` e `RenderScript: YuvToRGB executed without
+  data`.
+* **Aparelho de teste do usuário: y2slte (G985F).** Kernel de teste:
+  `build.sh -m y2slte -k y -r n`; a ROM/OTA continua com o alvo y2s.

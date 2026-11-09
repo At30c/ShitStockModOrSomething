@@ -1,0 +1,903 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: port the ecs dynamic governor from s5e9965
+
+Replace the fixed saving mode of the core sparing governor with the ecs
+dynamic governor of the S5E9965 EMS (ecs_dynamic.c of the S947B kernel
+source, rewritten on the Exynos 990 EMS). Every tick each ECS domain
+gets the number of cpus it needs: its busy cpus, plus the tasks that
+overflow the smaller domains that help it (nr-help, +1 when all of them
+are busy), plus their misfit tasks above help-misfit-thr (misfit-help).
+A domain with a spared cpu is never busy and gives no nr help while it
+can still grow, so the smaller clusters fill first. Cpus are taken one
+at a time, so a single Mongoose core can serve one heavy thread, which
+the old mode could not give before all six little/mid cpus were busy.
+
+The S5E9965 reads runnable and misfit averages from its multi load
+tracker (time weighted over each 4 ms tick); here they are moving
+averages sampled once per tick from rq->nr_running and the load
+balancer misfit status, so nothing is added to the enqueue/dequeue
+path. Cpu capacity follows the policy max, as the energy table is
+rebuilt on thermal/SIOP limits.
+
+The emstune ecs node takes the S5E9965 per-set parameters
+(dynamic-busy-ratio, dynamic-nr-run-up-ratio, dynamic-help-misfit-thr,
+min-cpus); -1 or absent keeps the /ems/ecs/dynamic defaults. Med boost
+sets keep the mid cores. Unlike the S5E9965 layout, little misfit tasks
+wake a mid core and only mid misfit tasks wake a Mongoose one.
+/sys/kernel/ems/ecs/dynamic shows the state; ecs_dynamic_cpu_info and
+ecs_dynamic_domain_info trace it with the S5E9965 format.
+---
+diff --git a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+index 82bb357..d8ccfc3 100644
+--- a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
++++ b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+@@ -37,10 +37,12 @@
+ 		};
+ 
+ 		/*
+-		 * Core sparing, switched per emstune set (S5E9965-style): in the
+-		 * saving mode tasks stay on cpus 0-5 and the Mongoose cluster can
+-		 * power down, until all six of them are busy. Capacities from the
+-		 * energy model: little 251, mid 814, big 1024.
++		 * Core sparing, switched per emstune set, with the ecs dynamic
++		 * governor of the S5E9965 EMS: each domain gets the cpus it needs
++		 * (its busy cpus + the tasks that overflow the smaller domains +
++		 * their misfit tasks), one core at a time. Capacities from the
++		 * energy model: little 251, mid 814, big 1024. mode0 is the state
++		 * while the governor is off.
+ 		 */
+ 		ecs {
+ 			enabled = <1>;
+@@ -52,30 +54,36 @@
+ 					enabled = <1>;
+ 					mode = <NORMAL>;
+ 				};
+-				mode1 {
+-					mode-name = "saving";
+-					cpus = "0-5";
+-					enabled = <1>;
+-					mode = <SAVING>;
+-				};
+ 			};
+ 
+-			ecs-domains {
+-				domain0 {
+-					domain-name = "little";
++			dynamic {
++				min-cpus = "0-3";
++
++				domain0 {	/* little */
+ 					cpus = "0-3";
+-					role = <TRIGGER>;
+-					cpu-heavy-thr = <225>;
+-					cpu-busy-thr = <175>;
+-					cpu-nr-running-thr = <2>;
+-				};
+-				domain1 {
+-					domain-name = "mid";
++					busy-ratio = <50>;
++					nr-run-up-ratio = <700>;
++				};
++				/*
++				 * Unlike the S5E9965, little misfit tasks wake a mid
++				 * core and only mid misfit tasks wake a Mongoose one:
++				 * a task too big for the little cores fits the mid ones.
++				 */
++				domain1 {	/* mid */
+ 					cpus = "4-5";
+-					role = <TRIGGER>;
+-					cpu-heavy-thr = <730>;
+-					cpu-busy-thr = <570>;
+-					cpu-nr-running-thr = <2>;
++					busy-ratio = <50>;
++					nr-run-up-ratio = <700>;
++					help-misfit-thr = <0>;
++					nr-help = "0-3";
++					misfit-help = "0-3";
++				};
++				domain2 {	/* big (Mongoose) */
++					cpus = "6-7";
++					busy-ratio = <80>;
++					nr-run-up-ratio = <700>;
++					help-misfit-thr = <0>;
++					nr-help = "0-3", "4-5";
++					misfit-help = "4-5";
+ 				};
+ 			};
+ 		};
+@@ -281,7 +289,7 @@
+ 				idx = <0>;
+ 				desc = "normal default";
+ 
+-				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				/* core sparing: ecs dynamic with the domain defaults */
+ 				ecs {
+ 					enabled = <1>;
+ 				};
+@@ -406,9 +414,10 @@
+ 				idx = <1>;
+ 				desc = "normal med boost";
+ 
+-				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				/* core sparing: ecs dynamic, mid cores always available */
+ 				ecs {
+ 					enabled = <1>;
++					min-cpus = "0-5";
+ 				};
+ 
+ 				/* weight (%) applied to active cpu's efficiency */
+@@ -443,7 +452,7 @@
+ 				idx = <2>;
+ 				desc = "normal touch boost";
+ 
+-				/* core sparing off: touch/launch may use the Mongoose cores */
++				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+ 				};
+@@ -485,7 +494,7 @@
+ 				idx = <3>;
+ 				desc = "normal big boost";
+ 
+-				/* core sparing off: touch/launch may use the Mongoose cores */
++				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+ 				};
+@@ -583,7 +592,7 @@
+ 				idx = <4>;
+ 				desc = "power-scenario default";
+ 
+-				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				/* core sparing: ecs dynamic with the domain defaults */
+ 				ecs {
+ 					enabled = <1>;
+ 				};
+@@ -709,9 +718,10 @@
+ 				idx = <5>;
+ 				desc = "power-scenario med boost";
+ 
+-				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				/* core sparing: ecs dynamic, mid cores always available */
+ 				ecs {
+ 					enabled = <1>;
++					min-cpus = "0-5";
+ 				};
+ 
+ 				/* weight (%) applied to active cpu's efficiency */
+@@ -746,7 +756,7 @@
+ 				idx = <6>;
+ 				desc = "power-scenario touch boost";
+ 
+-				/* core sparing off: touch/launch may use the Mongoose cores */
++				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+ 				};
+@@ -788,7 +798,7 @@
+ 				idx = <7>;
+ 				desc = "power-scenario big boost";
+ 
+-				/* core sparing off: touch/launch may use the Mongoose cores */
++				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+ 				};
+@@ -1443,7 +1453,7 @@
+ 				idx = <16>;
+ 				desc = "light-video default";
+ 
+-				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				/* core sparing: ecs dynamic with the domain defaults */
+ 				ecs {
+ 					enabled = <1>;
+ 				};
+@@ -1569,9 +1579,10 @@
+ 				idx = <17>;
+ 				desc = "light-video med boost";
+ 
+-				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				/* core sparing: ecs dynamic, mid cores always available */
+ 				ecs {
+ 					enabled = <1>;
++					min-cpus = "0-5";
+ 				};
+ 
+ 				/* weight (%) applied to active cpu's efficiency */
+@@ -1605,7 +1616,7 @@
+ 				idx = <18>;
+ 				desc = "light-video touch boost";
+ 
+-				/* core sparing off: touch/launch may use the Mongoose cores */
++				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+ 				};
+@@ -1646,7 +1657,7 @@
+ 				idx = <19>;
+ 				desc = "light-video big boost";
+ 
+-				/* core sparing off: touch/launch may use the Mongoose cores */
++				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+ 				};
+diff --git a/include/trace/events/ems_debug.h b/include/trace/events/ems_debug.h
+index f5baa5e..bfb29a4 100644
+--- a/include/trace/events/ems_debug.h
++++ b/include/trace/events/ems_debug.h
+@@ -651,6 +651,74 @@ TRACE_EVENT(ecs_update,
+ 		__entry->heavy_cpus, __entry->busy_cpus, __entry->cpus)
+ );
+ 
++/*
++ * Tracepoints for the ecs dynamic governor (same format as the S5E9965 EMS)
++ */
++TRACE_EVENT(ecs_dynamic_cpu_info,
++
++	TP_PROTO(int cpu, unsigned long util, unsigned long cap,
++		 unsigned long busy_ratio, int curr_nr, int avg_nr, int avg_misfit),
++
++	TP_ARGS(cpu, util, cap, busy_ratio, curr_nr, avg_nr, avg_misfit),
++
++	TP_STRUCT__entry(
++		__field(	int,		cpu			)
++		__field(	unsigned long,	util			)
++		__field(	unsigned long,	cap			)
++		__field(	unsigned long,	busy_ratio		)
++		__field(	int,		curr_nr			)
++		__field(	int,		avg_nr			)
++		__field(	int,		avg_misfit		)
++	),
++
++	TP_fast_assign(
++		__entry->cpu			= cpu;
++		__entry->util			= util;
++		__entry->cap			= cap;
++		__entry->busy_ratio		= busy_ratio;
++		__entry->curr_nr		= curr_nr;
++		__entry->avg_nr			= avg_nr;
++		__entry->avg_misfit		= avg_misfit;
++	),
++
++	TP_printk("cpu=%1d, util=%lu, cap=%lu, busy_ratio=%lu, curr_nr=%1d, avg_nr=%1d, avg_misfit=%1d",
++		__entry->cpu, __entry->util, __entry->cap, __entry->busy_ratio,
++		__entry->curr_nr, __entry->avg_nr, __entry->avg_misfit)
++);
++
++TRACE_EVENT(ecs_dynamic_domain_info,
++
++	TP_PROTO(int domain, int required_cpus, int busy, int nr_run,
++		 int nr_misfit, int nr_busy_cpus, int nr_help),
++
++	TP_ARGS(domain, required_cpus, busy, nr_run, nr_misfit, nr_busy_cpus, nr_help),
++
++	TP_STRUCT__entry(
++		__field(	int,		domain			)
++		__field(	int,		required_cpus		)
++		__field(	int,		busy			)
++		__field(	int,		nr_run			)
++		__field(	int,		nr_misfit		)
++		__field(	int,		nr_busy_cpus		)
++		__field(	int,		nr_help			)
++	),
++
++	TP_fast_assign(
++		__entry->domain			= domain;
++		__entry->required_cpus		= required_cpus;
++		__entry->busy			= busy;
++		__entry->nr_run			= nr_run;
++		__entry->nr_misfit		= nr_misfit;
++		__entry->nr_busy_cpus		= nr_busy_cpus;
++		__entry->nr_help		= nr_help;
++	),
++
++	TP_printk("domain=%1d, required_cpus=%1d, busy=%d, nr_run=%1d, nr_misfit=%1d, nr_busy_cpus=%1d, nr_help=%1d",
++		__entry->domain, __entry->required_cpus, __entry->busy,
++		__entry->nr_run, __entry->nr_misfit, __entry->nr_busy_cpus,
++		__entry->nr_help)
++);
++
+ /*
+  * Tracepoint for frequency boost
+  */
+diff --git a/kernel/sched/ems/ems.h b/kernel/sched/ems/ems.h
+index 7a49991..79efed8 100644
+--- a/kernel/sched/ems/ems.h
++++ b/kernel/sched/ems/ems.h
+@@ -128,7 +128,8 @@ extern unsigned int get_diff_num_levels(int cpu, unsigned int freq1, unsigned in
+ 
+ /* core sparing */
+ extern struct cpumask *ecs_cpus_allowed(void);
+-extern void ecs_emstune_update(bool enable);
++struct emstune_ecs;
++extern void ecs_emstune_update(bool enable, const struct emstune_ecs *ecs);
+ 
+ /* EMSTune */
+ enum stune_group {
+@@ -242,10 +243,21 @@ struct emstune_fmax {
+ 	struct kobject kobj;
+ };
+ 
+-/* emstune - core sparing (ECS): spare the cpus outside the saving mode */
++/*
++ * emstune - core sparing (ECS). With the ecs dynamic governor (ported from
++ * the S5E9965 EMS), a set may also tune it per ECS domain; -1 (or an absent
++ * min-cpus) keeps the default of the /ems/ecs/dynamic DT node.
++ */
++#define ECS_DYN_MAX_DOMAINS	4
++
+ struct emstune_ecs {
+ 	bool overriding;
+ 	int enabled;
++	int busy_ratio[ECS_DYN_MAX_DOMAINS];
++	int nr_run_up_ratio[ECS_DYN_MAX_DOMAINS];
++	int help_misfit_thr[ECS_DYN_MAX_DOMAINS];
++	bool has_min_cpus;
++	struct cpumask min_cpus;
+ 	struct kobject kobj;
+ };
+ 
+diff --git a/kernel/sched/ems/sparing.c b/kernel/sched/ems/sparing.c
+index 78b6be4..d584154 100644
+--- a/kernel/sched/ems/sparing.c
++++ b/kernel/sched/ems/sparing.c
+@@ -61,6 +61,234 @@ struct ecs_governor {
+ 
+ static DEFINE_SPINLOCK(ecs_lock);
+ static DEFINE_RAW_SPINLOCK(ecs_load_lock);
++
++/**********************************************************************************
++ *			ECS dynamic governor (from the S5E9965 EMS)		  *
++ *										  *
++ * Port of ecs_dynamic.c (S947B kernel source). Instead of fixed modes, every	  *
++ * tick each ECS domain gets the number of cpus it					  *
++ * needs: its own busy cpus, plus the tasks that do not fit in the smaller	  *
++ * domains that help it (nr-help: tasks beyond their cpu count, +1 when all of	  *
++ * them are busy; none while one of them still has a spared cpu), plus their	  *
++ * misfit tasks above help-misfit-thr (misfit-help). A domain with a spared cpu	  *
++ * is never busy.									  *
++ * Cpus are taken in order inside a domain, so one Mongoose core can be used	  *
++ * without the other. min-cpus are always available. Busy: util above		  *
++ * busy-ratio % of the cpu capacity (which follows the thermal/SIOP policy max)	  *
++ * or about three runnable tasks. Runnable and misfit counts are averages in	  *
++ * 1/1000 task, rounded up by nr-run-up-ratio (700: 0.3 task counts as one).	  *
++ * The S5E9965 reads them from its multi load tracker; here they are moving	  *
++ * averages sampled once per tick, from rq->nr_running and the misfit status	  *
++ * of the load balancer. The emstune set (ecs node) tunes the parameters.	  *
++ **********************************************************************************/
++#define ECS_DYN_BUSY_NR_RUN	3000	/* x1000: about three runnable tasks */
++#define ECS_DYN_AVG_SHIFT	2	/* moving average over ~4 ticks */
++
++struct ecs_dyn_domain {
++	struct cpumask		cpus;
++	int			nr_cpus;
++
++	/* helper domains (indexes) */
++	int			nr_help[ECS_DYN_MAX_DOMAINS];
++	int			nr_nr_help;
++	int			misfit_help[ECS_DYN_MAX_DOMAINS];
++	int			nr_misfit_help;
++
++	/* defaults from DT and the values of the current emstune set */
++	unsigned int		def_busy_ratio;
++	unsigned int		def_nr_run_up_ratio;
++	unsigned int		def_help_misfit_thr;
++	unsigned int		busy_ratio;
++	unsigned int		nr_run_up_ratio;
++	unsigned int		help_misfit_thr;
++
++	/* state of the last update */
++	bool			has_spared_cpu;
++	unsigned int		ratio;
++	int			busy;
++	int			nr_run;
++	int			nr_misfit;
++	int			nr_busy_cpus;
++	int			nr_help_cpus;
++	int			required_cpus;
++};
++
++static struct {
++	bool			enabled;
++	int			nr_domains;
++	struct ecs_dyn_domain	domains[ECS_DYN_MAX_DOMAINS];
++	struct cpumask		def_min_cpus;
++	struct cpumask		min_cpus;
++	unsigned long		last_update;
++} ecs_dyn;
++
++static DEFINE_PER_CPU(unsigned int, ecs_dyn_avg_nr);
++static DEFINE_PER_CPU(unsigned int, ecs_dyn_avg_misfit);
++
++static inline void ecs_dyn_avg(unsigned int *avg, unsigned int sample)
++{
++	int diff = (int)sample - (int)*avg;
++
++	*avg += diff >> ECS_DYN_AVG_SHIFT;
++	/* the shift truncates toward minus infinity; let it reach zero */
++	if (!sample && *avg < (1 << ECS_DYN_AVG_SHIFT))
++		*avg = 0;
++}
++
++/* Called with ecs_load_lock held. */
++static void ecs_dynamic_set_params(const struct emstune_ecs *ecs)
++{
++	int i;
++
++	for (i = 0; i < ecs_dyn.nr_domains; i++) {
++		struct ecs_dyn_domain *dom = &ecs_dyn.domains[i];
++
++		dom->busy_ratio = (ecs && ecs->busy_ratio[i] >= 0) ?
++				ecs->busy_ratio[i] : dom->def_busy_ratio;
++		dom->nr_run_up_ratio = (ecs && ecs->nr_run_up_ratio[i] >= 0) ?
++				ecs->nr_run_up_ratio[i] : dom->def_nr_run_up_ratio;
++		dom->help_misfit_thr = (ecs && ecs->help_misfit_thr[i] >= 0) ?
++				ecs->help_misfit_thr[i] : dom->def_help_misfit_thr;
++	}
++
++	if (ecs && ecs->has_min_cpus)
++		cpumask_copy(&ecs_dyn.min_cpus, &ecs->min_cpus);
++	else
++		cpumask_copy(&ecs_dyn.min_cpus, &ecs_dyn.def_min_cpus);
++}
++
++static void ecs_dynamic_update_cpus(struct ecs_dyn_domain *dom)
++{
++	unsigned long util_sum = 0, cap_sum = 0;
++	int cpu;
++
++	dom->nr_run = dom->nr_misfit = dom->nr_busy_cpus = 0;
++
++	for_each_cpu(cpu, &dom->cpus) {
++		struct rq *rq = cpu_rq(cpu);
++		unsigned int *avg_nr = per_cpu_ptr(&ecs_dyn_avg_nr, cpu);
++		unsigned int *avg_misfit = per_cpu_ptr(&ecs_dyn_avg_misfit, cpu);
++		unsigned long util, cap, ratio;
++		unsigned int nr, misfit;
++
++		ecs_dyn_avg(avg_nr, READ_ONCE(rq->nr_running) * 1000);
++		ecs_dyn_avg(avg_misfit, READ_ONCE(rq->misfit_task_load) ? 1000 : 0);
++
++		/* only the cpus in use count, as in the S5E9965 */
++		if (!cpu_online(cpu) || !cpumask_test_cpu(cpu, &ecs_gov.cpus))
++			continue;
++
++		cap = capacity_cpu(cpu, USS);
++		util = min(ml_cpu_util(cpu), cap);
++		ratio = cap ? util * 100 / cap : 0;
++		nr = *avg_nr + dom->nr_run_up_ratio;
++		misfit = *avg_misfit + dom->nr_run_up_ratio;
++
++		util_sum += util;
++		cap_sum += cap;
++		dom->nr_run += nr / 1000;
++		dom->nr_misfit += misfit / 1000;
++		if (ratio >= dom->busy_ratio || nr >= ECS_DYN_BUSY_NR_RUN)
++			dom->nr_busy_cpus++;
++
++		trace_ecs_dynamic_cpu_info(cpu, util, cap, ratio,
++				READ_ONCE(rq->nr_running), nr / 1000, misfit / 1000);
++	}
++
++	/* a domain with a spared cpu is never busy: it can still grow */
++	dom->ratio = (dom->has_spared_cpu || !cap_sum) ? 0 : util_sum * 100 / cap_sum;
++	dom->busy = dom->ratio >= dom->busy_ratio;
++}
++
++static void ecs_dynamic_update_domain(int idx, struct cpumask *target)
++{
++	struct ecs_dyn_domain *dom = &ecs_dyn.domains[idx];
++	int i, cpu, nr_help = 0, nr_busy_helpers = 0, nr_misfit = 0, required;
++	bool helper_has_spared_cpu = false;
++
++	for (i = 0; i < dom->nr_nr_help; i++) {
++		struct ecs_dyn_domain *help = &ecs_dyn.domains[dom->nr_help[i]];
++
++		if (help->has_spared_cpu) {
++			helper_has_spared_cpu = true;
++			continue;
++		}
++
++		/* tasks that do not fit in an overpacked smaller domain */
++		nr_help += max(help->nr_run - help->nr_cpus, 0);
++		nr_busy_helpers += help->busy;
++	}
++	if (nr_busy_helpers > 0 && nr_busy_helpers == dom->nr_nr_help)
++		nr_help++;
++	/* a smaller domain uses its own spared cpus first */
++	if (helper_has_spared_cpu)
++		nr_help = 0;
++
++	for (i = 0; i < dom->nr_misfit_help; i++)
++		nr_misfit += ecs_dyn.domains[dom->misfit_help[i]].nr_misfit;
++	if (nr_misfit <= (int)dom->help_misfit_thr)
++		nr_misfit = 0;
++
++	dom->nr_help_cpus = nr_help + nr_misfit;
++
++	if (dom->nr_run >= dom->nr_cpus) {
++		required = dom->nr_cpus;
++	} else {
++		required = dom->nr_busy_cpus + dom->nr_help_cpus;
++		if (required < dom->nr_run)
++			required++;
++	}
++	dom->required_cpus = min(required, dom->nr_cpus);
++
++	required = dom->required_cpus;
++	for_each_cpu_and(cpu, &dom->cpus, cpu_online_mask) {
++		if (required-- <= 0)
++			break;
++		cpumask_set_cpu(cpu, target);
++	}
++
++	trace_ecs_dynamic_domain_info(cpumask_first(&dom->cpus),
++			dom->required_cpus, dom->busy, dom->nr_run, dom->nr_misfit,
++			dom->nr_busy_cpus, dom->nr_help_cpus);
++}
++
++/* Called with ecs_load_lock held. */
++static void ecs_dynamic_update(void)
++{
++	struct cpumask target;
++	unsigned long flags;
++	int i;
++
++	/* once per tick: enqueue and dequeue call ecs_update() too */
++	if (time_before(jiffies, ecs_dyn.last_update + 1))
++		return;
++	ecs_dyn.last_update = jiffies;
++
++	cpumask_andnot(&target, cpu_active_mask, &ecs_gov.cpus);
++	for (i = 0; i < ecs_dyn.nr_domains; i++) {
++		struct ecs_dyn_domain *dom = &ecs_dyn.domains[i];
++
++		dom->has_spared_cpu = cpumask_intersects(&dom->cpus, &target);
++		ecs_dynamic_update_cpus(dom);
++	}
++
++	cpumask_and(&target, &ecs_dyn.min_cpus, cpu_online_mask);
++	for (i = 0; i < ecs_dyn.nr_domains; i++)
++		ecs_dynamic_update_domain(i, &target);
++
++	if (cpumask_empty(&target))
++		cpumask_copy(&target, cpu_online_mask);
++
++	if (cpumask_equal(&target, &ecs_gov.cpus))
++		return;
++
++	spin_lock_irqsave(&ecs_lock, flags);
++	if (ecs_gov.enabled)
++		cpumask_copy(&ecs_gov.cpus, &target);
++	spin_unlock_irqrestore(&ecs_lock, flags);
++
++	trace_ecs_update(0, 0, *(unsigned int *)cpumask_bits(&target));
++}
+ /**********************************************************************************
+  *				   External API					  *
+  **********************************************************************************/
+@@ -168,6 +396,12 @@ void ecs_update(void)
+ 	if (!raw_spin_trylock_irqsave(&ecs_load_lock, flags))
+ 		return;
+ 
++	if (ecs_dyn.enabled) {
++		ecs_dynamic_update();
++		raw_spin_unlock_irqrestore(&ecs_load_lock, flags);
++		return;
++	}
++
+ 	/* update cpumask to judge needs to spare cpus */
+ 	updated = ecs_update_system_status();
+ 	if (!updated)
+@@ -307,10 +541,37 @@ ecs_mode_show(mode_enabled, enabled);
+  */
+ static bool ecs_ready;
+ static bool ecs_emstune_enabled;
++static struct emstune_ecs ecs_emstune_params;
++static bool ecs_emstune_has_params;
+ static int ecs_set_enable(bool enable);
+ 
+-void ecs_emstune_update(bool enable)
++static void ecs_apply_emstune_params(void)
++{
++	unsigned long flags;
++
++	if (!ecs_dyn.enabled)
++		return;
++
++	raw_spin_lock_irqsave(&ecs_load_lock, flags);
++	ecs_dynamic_set_params(ecs_emstune_has_params ? &ecs_emstune_params : NULL);
++	raw_spin_unlock_irqrestore(&ecs_load_lock, flags);
++}
++
++/* Called by emstune on every set change, under its mode lock. */
++void ecs_emstune_update(bool enable, const struct emstune_ecs *ecs)
+ {
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&ecs_load_lock, flags);
++	if (ecs) {
++		ecs_emstune_params = *ecs;
++		ecs_emstune_has_params = true;
++	}
++	if (ecs_dyn.enabled && READ_ONCE(ecs_ready))
++		ecs_dynamic_set_params(ecs_emstune_has_params ?
++					&ecs_emstune_params : NULL);
++	raw_spin_unlock_irqrestore(&ecs_load_lock, flags);
++
+ 	WRITE_ONCE(ecs_emstune_enabled, enable);
+ 	if (READ_ONCE(ecs_ready))
+ 		ecs_set_enable(enable);
+@@ -409,7 +670,34 @@ static ssize_t store(struct kobject *kobj, struct attribute *attr,
+ 	return ret;
+ }
+ 
++static ssize_t show_dynamic(struct kobject *kobj, char *buf)
++{
++	ssize_t ret = 0;
++	int i;
++
++	if (!ecs_dyn.enabled)
++		return sprintf(buf, "ecs dynamic governor not in use\n");
++
++	ret += sprintf(buf + ret, "enabled: %u, cpus: %*pbl, min-cpus: %*pbl\n",
++			ecs_gov.enabled, cpumask_pr_args(&ecs_gov.cpus),
++			cpumask_pr_args(&ecs_dyn.min_cpus));
++	for (i = 0; i < ecs_dyn.nr_domains; i++) {
++		struct ecs_dyn_domain *dom = &ecs_dyn.domains[i];
++
++		ret += sprintf(buf + ret,
++			"domain%d cpus=%*pbl busy-ratio=%u nr-run-up-ratio=%u help-misfit-thr=%u | ratio=%u busy=%d nr_run=%d nr_misfit=%d busy_cpus=%d help=%d required=%d\n",
++			i, cpumask_pr_args(&dom->cpus), dom->busy_ratio,
++			dom->nr_run_up_ratio, dom->help_misfit_thr, dom->ratio,
++			dom->busy, dom->nr_run, dom->nr_misfit,
++			dom->nr_busy_cpus, dom->nr_help_cpus,
++			dom->required_cpus);
++	}
++
++	return ret;
++}
++
+ ecs_attr_rw(enabled);
++ecs_attr_ro(dynamic);
+ 
+ ecs_attr_ro(domain_name);
+ ecs_attr_rw(cpu_heavy_thr);
+@@ -422,6 +710,7 @@ ecs_attr_rw(mode_enabled);
+ 
+ static struct attribute *ecs_attrs[] = {
+ 	&enabled.attr,
++	&dynamic.attr,
+ 	NULL
+ };
+ 
+@@ -535,6 +824,117 @@ free:
+ 	return -EINVAL;
+ }
+ 
++static int __init ecs_dyn_find_domain(const char *buf)
++{
++	struct cpumask mask;
++	int i;
++
++	if (cpulist_parse(buf, &mask))
++		return -EINVAL;
++
++	for (i = 0; i < ecs_dyn.nr_domains; i++)
++		if (cpumask_equal(&mask, &ecs_dyn.domains[i].cpus))
++			return i;
++
++	return -EINVAL;
++}
++
++static int __init ecs_dyn_parse_help(struct device_node *dn, const char *name,
++				     int *help, int *nr_help)
++{
++	const char *buf;
++	int i, cnt, idx;
++
++	*nr_help = 0;
++	cnt = of_property_count_strings(dn, name);
++	if (cnt <= 0)
++		return 0;
++
++	for (i = 0; i < cnt && i < ECS_DYN_MAX_DOMAINS; i++) {
++		if (of_property_read_string_index(dn, name, i, &buf))
++			return -EINVAL;
++		idx = ecs_dyn_find_domain(buf);
++		if (idx < 0) {
++			pr_warn("ECS: %s: no domain with cpus %s\n", name, buf);
++			return -EINVAL;
++		}
++		help[(*nr_help)++] = idx;
++	}
++
++	return 0;
++}
++
++/*
++ * /ems/ecs/dynamic: one child per domain, in ascending order of capacity:
++ *   cpus, busy-ratio, nr-run-up-ratio, help-misfit-thr (defaults),
++ *   nr-help / misfit-help (cpu lists of the smaller domains that help it).
++ */
++static int __init ecs_dyn_parse_dt(struct device_node *root)
++{
++	struct device_node *dn, *child;
++	const char *buf;
++	int i = 0;
++
++	dn = of_get_child_by_name(root, "dynamic");
++	if (!dn)
++		return 0;
++
++	if (of_property_read_string(dn, "min-cpus", &buf) ||
++	    cpulist_parse(buf, &ecs_dyn.def_min_cpus))
++		goto failure;
++
++	/* first pass: cpus, so that help lists can refer to any domain */
++	for_each_child_of_node(dn, child) {
++		struct ecs_dyn_domain *dom;
++
++		if (i >= ECS_DYN_MAX_DOMAINS)
++			goto failure;
++		dom = &ecs_dyn.domains[i++];
++
++		if (of_property_read_string(child, "cpus", &buf) ||
++		    cpulist_parse(buf, &dom->cpus) || cpumask_empty(&dom->cpus))
++			goto failure;
++		dom->nr_cpus = cpumask_weight(&dom->cpus);
++
++		if (of_property_read_u32(child, "busy-ratio", &dom->def_busy_ratio))
++			dom->def_busy_ratio = 50;
++		if (of_property_read_u32(child, "nr-run-up-ratio",
++					 &dom->def_nr_run_up_ratio))
++			dom->def_nr_run_up_ratio = 0;
++		if (of_property_read_u32(child, "help-misfit-thr",
++					 &dom->def_help_misfit_thr))
++			dom->def_help_misfit_thr = 0;
++	}
++	ecs_dyn.nr_domains = i;
++	if (!i)
++		goto failure;
++
++	i = 0;
++	for_each_child_of_node(dn, child) {
++		struct ecs_dyn_domain *dom = &ecs_dyn.domains[i++];
++
++		if (ecs_dyn_parse_help(child, "nr-help", dom->nr_help,
++				       &dom->nr_nr_help) ||
++		    ecs_dyn_parse_help(child, "misfit-help", dom->misfit_help,
++				       &dom->nr_misfit_help))
++			goto failure;
++	}
++
++	ecs_dynamic_set_params(NULL);
++	ecs_dyn.enabled = true;
++	of_node_put(dn);
++	pr_info("ECS: dynamic governor, %d domains, min-cpus %*pbl\n",
++		ecs_dyn.nr_domains, cpumask_pr_args(&ecs_dyn.def_min_cpus));
++
++	return 0;
++
++failure:
++	pr_warn("ECS: failed to parse the dynamic governor\n");
++	of_node_put(dn);
++	ecs_dyn.nr_domains = 0;
++	return -EINVAL;
++}
++
+ static int __init ecs_parse_dt(void)
+ {
+ 	struct device_node *root, *dn, *child;
+@@ -561,12 +961,15 @@ static int __init ecs_parse_dt(void)
+ 		if (ecs_parse_mode(child))
+ 			goto failure;
+ 
+-	/* parse ecs domains */
++	/* parse ecs domains (the stage governor; optional with ecs dynamic) */
+ 	INIT_LIST_HEAD(&ecs_gov.domains);
+ 
++	if (ecs_dyn_parse_dt(root))
++		goto failure;
++
+ 	dn = of_find_node_by_name(root, "ecs-domains");
+ 	if (!dn)
+-		goto failure;
++		return ecs_dyn.enabled ? 0 : -EINVAL;
+ 	for_each_child_of_node(dn, child)
+ 		if (ecs_parse_domain(child))
+ 			goto failure;
+@@ -667,6 +1070,7 @@ static int __init init_core_sparing(void)
+ 	/* Start in the base mode; emstune decides whether to spare cpus. */
+ 	ecs_set_enable(true);
+ 	WRITE_ONCE(ecs_ready, true);
++	ecs_apply_emstune_params();
+ 	ecs_set_enable(READ_ONCE(ecs_emstune_enabled));
+ 
+ 	return 0;
+diff --git a/kernel/sched/ems/tune.c b/kernel/sched/ems/tune.c
+index aa181d7..77406c1 100644
+--- a/kernel/sched/ems/tune.c
++++ b/kernel/sched/ems/tune.c
+@@ -1228,12 +1228,32 @@ static int ecs_allowed = 1;
+ /* Called with emstune_mode_lock held; ecs_emstune_update() only spins. */
+ static void emstune_ecs_apply(void)
+ {
+-	ecs_emstune_update(ecs_allowed && cur_set.ecs.enabled);
++	ecs_emstune_update(ecs_allowed && cur_set.ecs.enabled, &cur_set.ecs);
++}
++
++static void
++parse_ecs_domain_array(struct device_node *dn, const char *name, int *arr)
++{
++	u32 val[ECS_DYN_MAX_DOMAINS];
++	int i, cnt;
++
++	for (i = 0; i < ECS_DYN_MAX_DOMAINS; i++)
++		arr[i] = -1;
++
++	cnt = of_property_count_u32_elems(dn, name);
++	if (cnt <= 0)
++		return;
++	cnt = min(cnt, ECS_DYN_MAX_DOMAINS);
++	if (of_property_read_u32_array(dn, name, val, cnt))
++		return;
++	for (i = 0; i < cnt; i++)
++		arr[i] = val[i];
+ }
+ 
+ static int
+ parse_ecs(struct device_node *dn, struct emstune_set *set)
+ {
++	const char *buf;
+ 	u32 val;
+ 
+ 	if (!dn)
+@@ -1243,6 +1263,16 @@ parse_ecs(struct device_node *dn, struct emstune_set *set)
+ 		val = 0;
+ 
+ 	set->ecs.enabled = !!val;
++
++	/* ecs dynamic: per-domain parameters, as in the S5E9965 sets */
++	parse_ecs_domain_array(dn, "dynamic-busy-ratio", set->ecs.busy_ratio);
++	parse_ecs_domain_array(dn, "dynamic-nr-run-up-ratio",
++				set->ecs.nr_run_up_ratio);
++	parse_ecs_domain_array(dn, "dynamic-help-misfit-thr",
++				set->ecs.help_misfit_thr);
++	set->ecs.has_min_cpus = !of_property_read_string(dn, "min-cpus", &buf) &&
++				!cpulist_parse(buf, &set->ecs.min_cpus);
++
+ 	set->ecs.overriding = true;
+ 
+ 	of_node_put(dn);
+@@ -1398,7 +1428,7 @@ static ssize_t
+ show_cur_set(struct kobject *k, struct kobj_attribute *attr, char *buf)
+ {
+ 	int ret = 0;
+-	int cpu, group, class;
++	int cpu, group, class, i;
+ 
+ 	ret += sprintf(buf + ret, "current set: %d (%s)\n", cur_set.idx, cur_set.desc);
+ 	ret += sprintf(buf + ret, "\n");
+@@ -1575,6 +1605,20 @@ show_cur_set(struct kobject *k, struct kobj_attribute *attr, char *buf)
+ 				cpu, cur_set.fmax.max_freq[cpu]);
+ 	ret += sprintf(buf + ret, "\n[ecs] enabled: %d (allowed=%d)\n",
+ 			cur_set.ecs.enabled, ecs_allowed);
++	if (cur_set.ecs.has_min_cpus)
++		ret += sprintf(buf + ret, "min-cpus: %*pbl\n",
++				cpumask_pr_args(&cur_set.ecs.min_cpus));
++	for (i = 0; i < ECS_DYN_MAX_DOMAINS; i++) {
++		if (cur_set.ecs.busy_ratio[i] < 0 &&
++		    cur_set.ecs.nr_run_up_ratio[i] < 0 &&
++		    cur_set.ecs.help_misfit_thr[i] < 0)
++			continue;
++		ret += sprintf(buf + ret,
++			"domain%d: busy-ratio=%d nr-run-up-ratio=%d help-misfit-thr=%d (-1 = default)\n",
++			i, cur_set.ecs.busy_ratio[i],
++			cur_set.ecs.nr_run_up_ratio[i],
++			cur_set.ecs.help_misfit_thr[i]);
++	}
+ 
+ 	ret += sprintf(buf + ret, "\n");
+ 
