@@ -1,5 +1,42 @@
 # Current One UI 9 Port Handoff Instructions
 
+## FotaAgent como atualizador da ROM (2026-11-07)
+
+`unica/mods/fotaagent` mantém o FotaAgent de fábrica, corta todo contato com a
+Samsung (REST, OMA-DM, relatórios, Analytics, DiagMon, push) e faz o app
+atualizar a própria ROM: verifica um manifesto JSON
+(`ro.unica.ota.manifest`) 5 a 10 minutos depois de se registrar e depois uma
+vez por dia, e também pelo botão em Configurações. Baixa pelo download
+descriptor, confere MD5 e assinatura (`otacerts.zip` com o certificado da
+ROM), instala pelo TWRP via `openrecoveryscript` e lê o resultado em
+`/cache/fota/fota.status`. Os zips gravam esse resultado
+(`PRINT_FOTA_STATUS`): o incremental sempre, o completo com `make_rom.sh -u`.
+
+A ROM completa (~7,5 GB) passa do limite de 2 GiB por arquivo das releases do
+GitHub, então vai em partes: `io.unica.fota.PartProxy` serve as partes como um
+arquivo só em `127.0.0.1:47821` e o DlAgent de fábrica baixa sem mudança
+(progresso, retomada com `Range`, MD5). O proxy corta a transferência quando a
+rede muda, para não furar a opção "só Wi-Fi".
+
+Validado no y2s: download, instalação, `DONE`/`FAIL`, limpeza do pacote,
+polling automático, botão, redirecionamento 302 e pacote em 3 partes com duas
+quedas de Wi-Fi. `scripts/fota_release.py` gera os DDs, as partes e o
+manifesto a partir dos zips (`prepare`) e envia para uma release em rascunho
+(`upload`). O upload passa pela API com Content-Type
+`application/octet-stream`, porque o DlAgent compara esse cabeçalho com o
+`<type>` do DD e o `gh release upload` usaria `application/zip`.
+
+Validado em 2026-11-08 pela release do GitHub: ROM completa de 7,9 GB em 4
+partes, baixada e instalada pelo app. O patch 0017 fechava o job com
+`FINISH_AND_EXECUTE`, que espera um próximo pacote: o job ficava aberto e a
+notificação "Conectando ao servidor" presa. Agora ele roda o
+`IDMFumoTaskDmFinish` (`SCHEDULE_FINISH`). O `build_info.txt` do zip
+flashable usava o `ROM_BUILD_TIMESTAMP` do início do build, e não o
+`ro.unica.timestamp` gravado na imagem: os incrementais nunca bateriam com o
+`base_timestamp`. Pendente: incremental pela release e trocar a
+`aosp_testkey` por uma chave privada. Detalhes, formatos e comandos de
+teste em `unica/mods/fotaagent/README.md`.
+
 ## KnoxGuard no Exynos 990 (2026-10-19)
 
 O `y2s`/`y2slte` usa o kernel e a vendor do G985F/G986B. O framework Android
@@ -11303,7 +11340,14 @@ padrão: ele reduziu a CPU, porém o HWC2 não confirmou a interpretação do
 O bridge agora mantém o último buffer RGBA e limita a conversão a 30 fps por
 camada. A property `persist.vendor.exynos990.camera_convert_fps` permite
 ajustar o limite entre 5 e 60 fps; o valor padrão é 30. O primeiro frame de
-cada camada continua sendo convertido imediatamente. A mudança está em
+cada camada continua sendo convertido imediatamente.
+
+> **Atualização (06/11/2026):** `persist.vendor.exynos990.camera_mpp=1` passou
+> a vir no `vendor/build.prop` (módulo `graphics_aidl`, junto da instalação do
+> Composer3). Testado no y2s: sem ela o preview volta para a conversão na CPU e
+> sobrecarrega um núcleo; com ela o preview fica fluido. A prop é lida uma vez
+> quando o Composer3 sobe, então mudar exige reboot, e um `setprop` no
+> aparelho continua tendo prioridade para comparar (`0` + reboot). A mudança está em
 `platform/exynos990/patches/graphics_aidl/src/composer3_contract.cpp`.
 
 O prebuilt foi empacotado em uma vendor AVB e instalado pelo recovery com
@@ -12927,3 +12971,112 @@ hash embutido no kernel do m21s.
 - O kernel do m21s precisa ser recompilado (a chave de cache mudou para
   `ksu_manager=official-default`); um m21s com o kernel antigo só reconhece o
   manager local.
+
+## Apps recomendados do setup wizard: só o catálogo do sistema (06/11/2026)
+
+**Substitui** a remoção da etapa feita em 04/11 (seção "Setup Wizard: etapa do
+OMCAgent e ícones do UN1CA restaurados"). O catálogo
+`unica/mods/setupwizard/omcagent/unica_appres.json` e o patch do OMCAgent5
+tinham sido apagados por engano no commit `e88b4c8` (5 GHz), e o `customize.sh`
+seguia copiando um arquivo inexistente até 04/11.
+
+- A etapa `sequenceitem_omcagent_setup*` volta ao fluxo (o `sed` que a apagava
+  saiu). O mod copia o catálogo para `/system/etc/omcagent/unica_appres.json`
+  (7 apps: Relógio, Calendário, Galaxy Wearable, Samsung Health, Spotify,
+  Samsung Notes, Gravador de Voz; versão `STOCKMOD_OMC_FALLBACK_1`) e avisa no
+  log se o SecSetupWizard não tiver a etapa.
+- `smali/system/priv-app/OMCAgent5/OMCAgent5.apk/0001-Use-only-the-system-recommended-app-catalogue.patch`
+  (classe ofuscada `u7/c` do OMCAgent5 atual):
+  - `b(Context, boolean)`, usado pelo `SUWActivity` e pelo `ListChange`: depois
+    de o `m()` escolher entre o catálogo baixado e o da `/prism`, o resultado é
+    trocado pelo `d("/system/etc/omcagent", "unica_appres.json")`. Catálogo
+    regional e baixado são ignorados.
+  - `c(Context, int, boolean)` (catálogo por carrier ID): as leituras de
+    `<prism>/opt` e de `/omr/carrier` são zeradas; o `m()` trata nulos.
+  - Aplicado numa cópia decodificada do OMCAgent5 do work dir e recompilado com
+    o apktool sem erro.
+- Num aparelho que já rodou o OMCAgent, o `ListChange` troca a base porque a
+  versão do catálogo muda; se a lista antiga persistir, limpar os dados do
+  OMCAgent.
+
+## Game Booster: monitor de desempenho sem FPS/CPU/GPU (08/11/2026)
+
+O Game Tools pede os dados ao GOS (`perf_data_simple_request`), o GOS pede ao
+IPM/SPA nativo (`libipm.so`, SPA 3.46.32 no GOS 4.4.00.30) e recebia
+`fpsList=[] cpuLoadList=[] gpuLoadList=[]`; só a RAM aparecia (o Game Tools a
+lê sozinho). O consentimento `samsung_errorlog_agree` foi testado em 1 e não
+muda nada (ele só controla coleta de status e envio para a Samsung). Eram duas
+causas, e o IPM falha na primeira que encontra:
+
+1. **SELinux.** O GOS roda em `platform_app_36`. A vendor do y2s (API 30) dá a
+   `platform_app_30_0` leitura de `sysfs_thermal`, `sysfs_power`,
+   `sysfs_battery`, `sysfs_gpu` e `sysfs_sec`, mas o `mapping/30.0.cil`
+   importado do firmware antigo só lista `platform_app` (os mappings 31.0+ da
+   ROM incluem `platform_app_36` e `priv_app_36`). Sem as temperaturas o IPM
+   para em "SLSI temp heuristics fail"; sem `/sys/power/cpufreq_min_limit`, em
+   "Cannot initialize CPU controllers without unified CPU support".
+   Correção: `unica/patches/selinux/customize.sh` copia os domínios `_36` do
+   `31.0.cil` para o mapping da vendor. Isso devolve aos apps
+   `platform_app_36`/`priv_app_36` todas as regras da vendor escritas para os
+   domínios antigos; as regras manuais de FOD/SystemUI do mesmo script ficam
+   redundantes, mas inofensivas.
+2. **Tabela virtual da UFC.** O SPA casa as frequências de cada cluster
+   (divididas por 1, 2, 4… 128) com `/sys/power/cpufreq_table` e exige 60% de
+   acertos exatos; falhar no big é fatal ("Failed to match big cluster virtual
+   frequencies"). No DT do Exynos 990 as linhas do big usam valores ~2,5 MHz
+   abaixo da frequência real (2623359 em vez de 2626000…), só 2730000 bate.
+   Correção: patch de kernel `0016` troca os 21 valores pelas frequências
+   exatas nas 4 tabelas (todas continuam estritamente decrescentes).
+
+Validado ao vivo (regra temporária via `ksud sepolicy patch` + tabela corrigida
+em bind-mount): FPS ~60, CPU 35–70% e GPU ~23% no Clash Royale. As duas
+correções entram no próximo build. Restam erros não fatais do IPM: bateria
+(`/sys/devices/battery/...` não existe), `setaffinity` do cluster 2 e controle
+de bus.
+
+## Mongoose (big) limitado e só para excesso do mid (08/11/2026)
+
+* **Patch `0018`:** `max-freq` do `cpufreq_domain2` passa de 2730000 para
+  2210000. O exynos-acme descarta as entradas acima disso, então nenhum boost
+  ou pedido de QoS passa do teto. 2,21 GHz é também o maior degrau do big cuja
+  restrição de MIF é 2288 MHz (acima dele o mínimo é 2535 MHz). Testado ao
+  vivo via `scaling_max_freq`: sob carga o big ficou no teto e nunca acima.
+  A telemetria do GOS continua: todas as frequências até 2,21 GHz estão na
+  tabela virtual do `0016`.
+* **Patch `0017`:** no EMS, uma tarefa só migra do mid (A76) para o big quando
+  a carga passa do `upper-boundary` do mid (era 586/1024, agora 820) e volta
+  abaixo do `lower-boundary` do big (era 205, agora 500). Mudado nos modos
+  normal, power-scenario, balance, light-video e pinned; os conjuntos sem
+  bloco `ontime` (ex.: "normal med boost") herdam do default do modo. Os
+  conjuntos "big boost" e os modos performance, light-game e game-mode ficam
+  de fábrica.
+* **Modo do TikTok:** amostrado por 3 min com o app em primeiro plano, fica no
+  modo normal: "normal default" (~89%) e "normal med boost" ao rolar (~11%);
+  `light-video` não é acionado. Logo o `0017` vale para ele.
+* Ajuste ao vivo, para testar sem build: `echo "4 820 106" >
+  /sys/kernel/ems/ontime/uss` e `echo "6 1024 500" > .../uss` (só no conjunto
+  ativo; some ao trocar de modo ou no reboot).
+
+## Atualização só de kernel: `make_rom.sh -k` (08/11/2026)
+
+`source buildenv.sh y2s && ./scripts/make_rom.sh -k` reaproveita a work dir da
+última build, reaplica só os módulos com `kernel=true` no `module.prop`
+(`extremekrnl` no y2s, `kernel9611` no m21s), carimba um novo
+`ro.unica.timestamp` e gera uma incremental contra o baseline: leva o
+`boot.img`/`dtbo.img` novos e o diff mínimo do `build.prop` (sem o timestamp
+novo o FotaAgent ofereceria a mesma atualização para sempre). Depois é
+publicar com `scripts/fota_release.py prepare` + `upload`.
+
+Requisitos e garantias:
+* A work dir tem de ser a build do baseline (mesmo timestamp), senão o `-k`
+  aborta. Mudanças fora dos módulos de kernel ficam de fora (aviso no log) e o
+  `.completed` não é atualizado, então a próxima build normal as aplica.
+* Toda build gera target-files e os promove a baseline, inclusive a full
+  (antes a full deixava o baseline para trás e a incremental seguinte não
+  batia com o aparelho).
+* Imagens EROFS têm UUID fixo derivado do mount point (antes era aleatório):
+  duas gerações da `product` a partir da mesma work dir saíram idênticas byte
+  a byte.
+* A build full de 08/11 instalada no aparelho foi gerada antes disso (sem
+  baseline e com UUID aleatório), então o `-k` só vale a partir da próxima
+  build full.
