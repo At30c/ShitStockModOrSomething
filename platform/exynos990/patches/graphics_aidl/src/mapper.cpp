@@ -813,12 +813,14 @@ AIMapper_Error lockBuffer(buffer_handle_t buffer, uint64_t usage, ARect rect, in
     // Gralloc1 requires exactly one CPU access side. A write lock is a
     // producer operation (and also permits reads by the same CPU caller);
     // a read-only lock is a consumer operation.
+    // Clients lock with the usage the buffer was created with: an ImageReader
+    // made for RenderScript (CPU_READ_OFTEN | RENDERSCRIPT, as the FaceTec
+    // liveness SDK of banking apps does) passes 0x100003 through AImage. Like
+    // the stock gralloc, use only the CPU bits of a lock request; rejecting the
+    // others made every frame of those readers fail with BAD_VALUE.
     const uint64_t cpuMask = exynos990::graphics::kAidlCpuReadMask |
             exynos990::graphics::kAidlCpuWriteMask;
-    if (usage & ~cpuMask) {
-        if (fence >= 0) close(fence);
-        return AIMAPPER_ERROR_BAD_VALUE;
-    }
+    usage &= cpuMask;
     const uint64_t cpuReadUsage = usage & exynos990::graphics::kAidlCpuReadMask;
     const uint64_t cpuWriteUsage = usage & exynos990::graphics::kAidlCpuWriteMask;
     if (cpuReadUsage == 0 && cpuWriteUsage == 0) {
