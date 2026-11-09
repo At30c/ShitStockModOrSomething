@@ -1,0 +1,406 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: switch core sparing per emstune set
+
+The S5E9965 EMS sets the minimum active cpus per emstune set (ECS dynamic).
+The Exynos 990 has the ECS governor (sparing.c) but no DT node, so it never
+ran. Add the node with a saving mode on cpus 0-5, which keeps tasks off the
+Mongoose cluster until all six little/mid cpus are busy, and let each set
+turn it on with an ecs node. Sets without one inherit the mode's default
+set. emstune_ecs_apply() runs on every set change; ecs_emstune_update()
+keeps the request until init_core_sparing() is ready, since both are late
+initcalls. /sys/kernel/ems/emstune/ecs_enabled disables it at runtime.
+
+Normal, power-scenario and light-video spare the Mongoose cores in their
+default and med boost sets; touch and big boost (input, app launch) and
+every other mode keep all cpus.
+---
+--- a/kernel/sched/ems/sparing.c
++++ b/kernel/sched/ems/sparing.c
+@@ -300,6 +300,22 @@
+ ecs_mode_store(mode_enabled, enabled);
+ ecs_mode_show(mode_enabled, enabled);
+ 
++/*
++ * emstune turns the governor on and off per set. Its requests can arrive
++ * before init_core_sparing() (both are late initcalls) or when the DT has no
++ * ECS node; keep the last one and apply it once the governor is ready.
++ */
++static bool ecs_ready;
++static bool ecs_emstune_enabled;
++static int ecs_set_enable(bool enable);
++
++void ecs_emstune_update(bool enable)
++{
++	WRITE_ONCE(ecs_emstune_enabled, enable);
++	if (READ_ONCE(ecs_ready))
++		ecs_set_enable(enable);
++}
++
+ static int ecs_set_enable(bool enable)
+ {
+ 	struct ecs_mode *base_mode = ecs_get_base_mode();
+@@ -648,7 +664,10 @@
+ 	if (ecs_sysfs_init())
+ 		goto failure;
+ 
+-	ecs_gov.enabled = 1;
++	/* Start in the base mode; emstune decides whether to spare cpus. */
++	ecs_set_enable(true);
++	WRITE_ONCE(ecs_ready, true);
++	ecs_set_enable(READ_ONCE(ecs_emstune_enabled));
+ 
+ 	return 0;
+ 
+--- a/kernel/sched/ems/ems.h
++++ b/kernel/sched/ems/ems.h
+@@ -128,6 +128,7 @@
+ 
+ /* core sparing */
+ extern struct cpumask *ecs_cpus_allowed(void);
++extern void ecs_emstune_update(bool enable);
+ 
+ /* EMSTune */
+ enum stune_group {
+@@ -241,6 +242,13 @@
+ 	struct kobject kobj;
+ };
+ 
++/* emstune - core sparing (ECS): spare the cpus outside the saving mode */
++struct emstune_ecs {
++	bool overriding;
++	int enabled;
++	struct kobject kobj;
++};
++
+ struct emstune_set {
+ 	int				idx;
+ 	const char			*desc;
+@@ -259,6 +267,7 @@
+ 	struct emstune_frt		frt;
+ 	struct emstune_migov		migov;
+ 	struct emstune_fmax		fmax;
++	struct emstune_ecs		ecs;
+ 
+ 	struct kobject	  		kobj;
+ };
+--- a/kernel/sched/ems/tune.c
++++ b/kernel/sched/ems/tune.c
+@@ -66,6 +66,7 @@
+ }
+ 
+ static void emstune_fmax_schedule(void);
++static void emstune_ecs_apply(void);
+ 
+ #define default_set cur_mode->sets[0]
+ #define update_cur_set_field(_member)					\
+@@ -96,9 +97,11 @@
+ 	update_cur_set_field(frt);
+ 	update_cur_set_field(migov);
+ 	update_cur_set_field(fmax);
++	update_cur_set_field(ecs);
+ 
+ 	emstune_notify_mode_update();
+ 	emstune_fmax_schedule();
++	emstune_ecs_apply();
+ }
+ 
+ static struct mutex emstune_mode_lock;
+@@ -1212,6 +1215,66 @@
+ 	return 0;
+ }
+ 
++/******************************************************************************
++ * core sparing per set							      *
++ *									      *
++ * Like the per-set ECS of the S5E9965 EMS, a set may turn core sparing on:   *
++ * while few cpus are busy, tasks stay on the cpus of the ECS saving mode and *
++ * the other cluster can power down. Sets without an ecs node inherit the     *
++ * mode's default set; the ECS governor itself needs the /ems/ecs DT node.    *
++ ******************************************************************************/
++static int ecs_allowed = 1;
++
++/* Called with emstune_mode_lock held; ecs_emstune_update() only spins. */
++static void emstune_ecs_apply(void)
++{
++	ecs_emstune_update(ecs_allowed && cur_set.ecs.enabled);
++}
++
++static int
++parse_ecs(struct device_node *dn, struct emstune_set *set)
++{
++	u32 val;
++
++	if (!dn)
++		return 0;
++
++	if (of_property_read_u32(dn, "enabled", &val))
++		val = 0;
++
++	set->ecs.enabled = !!val;
++	set->ecs.overriding = true;
++
++	of_node_put(dn);
++
++	return 0;
++}
++
++static ssize_t
++show_ecs_enabled(struct kobject *k, struct kobj_attribute *attr, char *buf)
++{
++	return sprintf(buf, "%d\n", ecs_allowed);
++}
++
++static ssize_t
++store_ecs_enabled(struct kobject *k, struct kobj_attribute *attr,
++		const char *buf, size_t count)
++{
++	int val;
++
++	if (kstrtoint(buf, 10, &val))
++		return -EINVAL;
++
++	mutex_lock(&emstune_mode_lock);
++	ecs_allowed = !!val;
++	emstune_ecs_apply();
++	mutex_unlock(&emstune_mode_lock);
++
++	return count;
++}
++static struct kobj_attribute ecs_enabled_attr =
++__ATTR(ecs_enabled, 0644, show_ecs_enabled, store_ecs_enabled);
++
+ static ssize_t
+ show_fmax_enabled(struct kobject *k, struct kobj_attribute *attr, char *buf)
+ {
+@@ -1510,6 +1573,8 @@
+ 	for_each_possible_cpu(cpu)
+ 		ret += sprintf(buf + ret, "cpu%d: %u\n",
+ 				cpu, cur_set.fmax.max_freq[cpu]);
++	ret += sprintf(buf + ret, "\n[ecs] enabled: %d (allowed=%d)\n",
++			cur_set.ecs.enabled, ecs_allowed);
+ 
+ 	ret += sprintf(buf + ret, "\n");
+ 
+@@ -2044,6 +2109,7 @@
+ 	parse(frt);
+ 	parse(migov);
+ 	parse(fmax);
++	parse(ecs);
+ 
+ 	return 0;
+ }
+@@ -2150,6 +2216,9 @@
+ 	if (sysfs_create_file(emstune_kobj, &fmax_enabled_attr.attr))
+ 		return -ENOMEM;
+ 
++	if (sysfs_create_file(emstune_kobj, &ecs_enabled_attr.attr))
++		return -ENOMEM;
++
+ 	return 0;
+ }
+ 
+--- a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
++++ b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+@@ -13,6 +13,7 @@
+  *
+  */
+ #include <dt-bindings/soc/samsung/ems.h>
++#include <dt-bindings/soc/samsung/exynos-ecs.h>
+ 
+ / {
+ 	ems {
+@@ -35,6 +36,50 @@
+ 			};
+ 		};
+ 
++		/*
++		 * Core sparing, switched per emstune set (S5E9965-style): in the
++		 * saving mode tasks stay on cpus 0-5 and the Mongoose cluster can
++		 * power down, until all six of them are busy. Capacities from the
++		 * energy model: little 251, mid 814, big 1024.
++		 */
++		ecs {
++			enabled = <1>;
++
++			ecs-modes {
++				mode0 {
++					mode-name = "normal";
++					cpus = "0-7";
++					enabled = <1>;
++					mode = <NORMAL>;
++				};
++				mode1 {
++					mode-name = "saving";
++					cpus = "0-5";
++					enabled = <1>;
++					mode = <SAVING>;
++				};
++			};
++
++			ecs-domains {
++				domain0 {
++					domain-name = "little";
++					cpus = "0-3";
++					role = <TRIGGER>;
++					cpu-heavy-thr = <225>;
++					cpu-busy-thr = <175>;
++					cpu-nr-running-thr = <2>;
++				};
++				domain1 {
++					domain-name = "mid";
++					cpus = "4-5";
++					role = <TRIGGER>;
++					cpu-heavy-thr = <730>;
++					cpu-busy-thr = <570>;
++					cpu-nr-running-thr = <2>;
++				};
++			};
++		};
++
+ 		/* FRT Migration */
+ 		frt {
+ 			/* little cores */
+@@ -236,6 +281,11 @@
+ 				idx = <0>;
+ 				desc = "normal default";
+ 
++				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				ecs {
++					enabled = <1>;
++				};
++
+ 				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
+ 				fmax {
+ 					max-freq = <0 0 2210000>;
+@@ -356,6 +406,11 @@
+ 				idx = <1>;
+ 				desc = "normal med boost";
+ 
++				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				ecs {
++					enabled = <1>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <100 100 100 100 200 200  20  25>;
+@@ -388,6 +443,11 @@
+ 				idx = <2>;
+ 				desc = "normal touch boost";
+ 
++				/* core sparing off: touch/launch may use the Mongoose cores */
++				ecs {
++					enabled = <0>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <100 100 100 100 200 200  20  25>;
+@@ -425,6 +485,11 @@
+ 				idx = <3>;
+ 				desc = "normal big boost";
+ 
++				/* core sparing off: touch/launch may use the Mongoose cores */
++				ecs {
++					enabled = <0>;
++				};
++
+ 				/* adaptive fmax: no ceiling while boosting */
+ 				fmax {
+ 					max-freq = <0 0 0>;
+@@ -518,6 +583,11 @@
+ 				idx = <4>;
+ 				desc = "power-scenario default";
+ 
++				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				ecs {
++					enabled = <1>;
++				};
++
+ 				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
+ 				fmax {
+ 					max-freq = <0 0 2210000>;
+@@ -639,6 +709,11 @@
+ 				idx = <5>;
+ 				desc = "power-scenario med boost";
+ 
++				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				ecs {
++					enabled = <1>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <1280 1280 1280 1280 200 200  20  25>;
+@@ -671,6 +746,11 @@
+ 				idx = <6>;
+ 				desc = "power-scenario touch boost";
+ 
++				/* core sparing off: touch/launch may use the Mongoose cores */
++				ecs {
++					enabled = <0>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <1280 1280 1280 1280 200 200  20  25>;
+@@ -708,6 +788,11 @@
+ 				idx = <7>;
+ 				desc = "power-scenario big boost";
+ 
++				/* core sparing off: touch/launch may use the Mongoose cores */
++				ecs {
++					enabled = <0>;
++				};
++
+ 				/* adaptive fmax: no ceiling while boosting */
+ 				fmax {
+ 					max-freq = <0 0 0>;
+@@ -1358,6 +1443,11 @@
+ 				idx = <16>;
+ 				desc = "light-video default";
+ 
++				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				ecs {
++					enabled = <1>;
++				};
++
+ 				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
+ 				fmax {
+ 					max-freq = <0 0 2210000>;
+@@ -1479,6 +1569,11 @@
+ 				idx = <17>;
+ 				desc = "light-video med boost";
+ 
++				/* core sparing: Mongoose only when cpus 0-5 are all busy */
++				ecs {
++					enabled = <1>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <1280 1280 1280 1280 100 100  20  25>;
+@@ -1510,6 +1605,11 @@
+ 				idx = <18>;
+ 				desc = "light-video touch boost";
+ 
++				/* core sparing off: touch/launch may use the Mongoose cores */
++				ecs {
++					enabled = <0>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <1280 1280 1280 1280 100 100  20  25>;
+@@ -1546,6 +1646,11 @@
+ 				idx = <19>;
+ 				desc = "light-video big boost";
+ 
++				/* core sparing off: touch/launch may use the Mongoose cores */
++				ecs {
++					enabled = <0>;
++				};
++
+ 				/* adaptive fmax: no ceiling while boosting */
+ 				fmax {
+ 					max-freq = <0 0 0>;

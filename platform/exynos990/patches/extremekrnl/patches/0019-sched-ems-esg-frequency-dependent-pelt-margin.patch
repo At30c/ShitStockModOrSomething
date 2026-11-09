@@ -1,0 +1,158 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: esg: frequency-dependent PELT margin
+
+The energy step governor adds a fixed 25% margin to the PELT util before
+picking a frequency. The S5E9965 EMS lowers that margin as the frequency
+rises (step-pelt-margin 25/20/15/12%), so the cluster stops overshooting
+by a whole step in the hot top range. Port it: an esg domain may give
+pelt-margin and pelt-margin-freq (up to four steps, margin[i] applies from
+margin-freq[i] up, judged on the cluster's last target frequency). Without
+the table the margin stays 25%. coregroupN/margin_enabled in the esg sysfs
+falls back to 25% at runtime.
+
+Exynos 990: 25/20/15/12% from 0 and ~60/75/90% of each cluster's maximum.
+---
+--- a/kernel/sched/ems/energy_step.c
++++ b/kernel/sched/ems/energy_step.c
+@@ -41,6 +41,16 @@
+ 	s64			rate_delay_ns;
+ 	int			patient_mode;
+ 
++	/*
++	 * Frequency-dependent PELT margin (S5E9965 step-pelt-margin): from
++	 * margin_freq[i] up, margin[i] percent is added to the PELT util.
++	 */
++#define ESG_MARGIN_STEPS	4
++	unsigned int		margin_freq[ESG_MARGIN_STEPS];
++	int			margin[ESG_MARGIN_STEPS];
++	int			margin_cnt;
++	int			margin_enabled;
++
+ 	/* Tracking min max information */
+ 	int			min_cap;	/* allowed max capacity */
+ 	int			max_cap;	/* allowed min capacity */
+@@ -455,6 +465,10 @@
+ esg_store(patient_mode);
+ esg_attr_rw(patient_mode);
+ 
++esg_show(margin_enabled);
++esg_store(margin_enabled);
++esg_attr_rw(margin_enabled);
++
+ static ssize_t show(struct kobject *kobj, struct attribute *at, char *buf)
+ {
+ 	struct esg_attr *fvattr = container_of(at, struct esg_attr, attr);
+@@ -476,6 +490,7 @@
+ static struct attribute *esg_attrs[] = {
+ 	&step_attr.attr,
+ 	&patient_mode_attr.attr,
++	&margin_enabled_attr.attr,
+ 	NULL
+ };
+ 
+@@ -484,6 +499,25 @@
+ 	.default_attrs	= esg_attrs,
+ };
+ 
++
++static void esgov_parse_margin(struct device_node *dn,
++				struct esgov_policy *esg_policy)
++{
++	int cnt = of_property_count_u32_elems(dn, "pelt-margin");
++
++	esg_policy->margin_enabled = 1;
++	if (cnt <= 0)
++		return;
++	if (cnt > ESG_MARGIN_STEPS ||
++	    of_property_count_u32_elems(dn, "pelt-margin-freq") != cnt ||
++	    of_property_read_u32_array(dn, "pelt-margin", (u32 *)esg_policy->margin, cnt) ||
++	    of_property_read_u32_array(dn, "pelt-margin-freq", esg_policy->margin_freq, cnt)) {
++		pr_warn("esg: invalid pelt-margin table, using the fixed 25%% margin\n");
++		return;
++	}
++	esg_policy->margin_cnt = cnt;
++}
++
+ static struct esgov_policy *esgov_policy_alloc(struct cpufreq_policy *policy)
+ {
+ 	struct device_node *dn = NULL;
+@@ -521,6 +555,8 @@
+ 		goto free_allocation;
+ 	esg_policy->patient_mode = val;
+ 
++	esgov_parse_margin(dn, esg_policy);
++
+ 	esg_policy->rate_delay_ns = 4 * NSEC_PER_MSEC;
+ 
+ 	/* Init Sysfs */
+@@ -702,6 +738,29 @@
+ 	return clamp_val(freq, esg_policy->min, esg_policy->max);
+ }
+ 
++/*
++ * PELT margin for the current frequency of the cluster: 25% (the original
++ * fixed margin) unless the DT gives a pelt-margin table for this domain.
++ */
++static int esgov_pelt_margin(struct esgov_cpu *esg_cpu, int pelt_util)
++{
++	struct esgov_policy *esg_policy = per_cpu(esgov_policy, esg_cpu->cpu);
++	unsigned int freq;
++	int i, margin;
++
++	if (!esg_policy || !esg_policy->margin_cnt ||
++	    !READ_ONCE(esg_policy->margin_enabled))
++		return pelt_util >> 2;
++
++	freq = READ_ONCE(esg_policy->target_freq);
++	margin = esg_policy->margin[0];
++	for (i = 1; i < esg_policy->margin_cnt; i++)
++		if (freq >= esg_policy->margin_freq[i])
++			margin = esg_policy->margin[i];
++
++	return pelt_util * margin / 100;
++}
++
+ /* return the max_util of this cpu */
+ static unsigned int esgov_calc_cpu_target_util(struct esgov_cpu *esg_cpu,
+ 			int max, int org_pelt_util, int pelt_util_diff, int nr_running)
+@@ -722,7 +781,7 @@
+ 	pelt_util = max(pelt_util, 0);
+ 
+ 	if (!esg_apply_migov)
+-		pelt_util = pelt_util + (pelt_util >> 2);
++		pelt_util = pelt_util + esgov_pelt_margin(esg_cpu, pelt_util);
+ 	else
+ 		pelt_util = esg_apply_migov_boost(esg_cpu->cpu, pelt_util);
+ 
+--- a/arch/arm64/boot/dts/exynos/exynos9830.dts
++++ b/arch/arm64/boot/dts/exynos/exynos9830.dts
+@@ -704,6 +704,9 @@
+ 			pm_qos-max-class = <4>;
+ 			step = <10>;
+ 			patient_mode = <0>;
++			/* S5E9965-style margin: 25/20/15/12% from ~0/60/75/90% of max (little, max 2.00 GHz) */
++			pelt-margin = <25 20 15 12>;
++			pelt-margin-freq = <0 1200000 1500000 1800000>;
+ 		};
+ 		domain@1 {
+ 			device_type = "esgov-pol4";
+@@ -712,6 +715,9 @@
+ 			pm_qos-max-class = <6>;
+ 			step = <8>;
+ 			patient_mode = <0>;
++			/* S5E9965-style margin: 25/20/15/12% from ~0/60/75/90% of max (mid, max 2.60 GHz) */
++			pelt-margin = <25 20 15 12>;
++			pelt-margin-freq = <0 1560000 1950000 2340000>;
+ 		};
+ 		domain@2 {
+ 			device_type = "esgov-pol6";
+@@ -720,6 +726,9 @@
+ 			pm_qos-max-class = <8>;
+ 			step = <10>;
+ 			patient_mode = <0>;
++			/* S5E9965-style margin: 25/20/15/12% from ~0/60/75/90% of max (big, max 2.73 GHz) */
++			pelt-margin = <25 20 15 12>;
++			pelt-margin-freq = <0 1640000 2050000 2460000>;
+ 		};
+ 	};
+ 
