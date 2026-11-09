@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Fri, 6 Nov 2026 23:30:00 -0300
+Subject: [PATCH] OMCAgent: use only the system recommended-app catalogue
+
+The regional catalogue on /prism belongs to the target firmware, which the
+ROM does not rebuild. Feed OMCAgent's main catalogue loader (setup wizard
+and ListChange) only with /system/etc/omcagent/unica_appres.json, ignoring
+the /prism catalogue and the downloaded list, and drop the /prism opt and
+/omr catalogues from the per-carrier loader. App download and installation
+stay with OMCAgent's providers.
+
+---
+diff --git a/smali/u7/c.smali b/smali/u7/c.smali
+index b94aa57..403a38d 100644
+--- a/smali/u7/c.smali
++++ b/smali/u7/c.smali
+@@ -300,6 +300,16 @@
+ 
+     move-result-object p1
+ 
++    # StockMod: recommended apps come only from the system catalogue. The
++    # regional /prism catalogue and the downloaded list are ignored.
++    const-string v0, "/system/etc/omcagent"
++
++    const-string v1, "unica_appres.json"
++
++    invoke-static {v0, v1}, Lu7/c;->d(Ljava/lang/String;Ljava/lang/String;)Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;
++
++    move-result-object p1
++
+     if-eqz p1, :cond_3
+ 
+     sget-object v0, Lcom/samsung/android/app/omcagent/rna/code/ConfigType;->ar:Lcom/samsung/android/app/omcagent/rna/code/ConfigType;
+@@ -492,12 +502,18 @@
+ 
+     move-result-object v3
+ 
++    # StockMod: ignore the /prism opt carrier catalogue.
++    const/4 v3, 0x0
++
+     const-string v4, "/omr/carrier"
+ 
+     invoke-static {v4, v0, p2}, Lu7/c;->i(Ljava/lang/String;Ljava/lang/String;Z)Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;
+ 
+     move-result-object v4
+ 
++    # StockMod: ignore the /omr carrier catalogue.
++    const/4 v4, 0x0
++
+     invoke-static {v3, v2}, Lu7/c;->m(Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;)Lcom/samsung/android/app/omcagent/rna/model/AppResInfo;
+ 
+     move-result-object v2

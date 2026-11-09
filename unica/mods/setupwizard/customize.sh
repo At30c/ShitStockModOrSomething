@@ -26,13 +26,19 @@ SMALI_PATCH "system" "system/priv-app/SecSetupWizard_Global/SecSetupWizard_Globa
     > /dev/null
 unset NAV_STEP_FILE NAV_STEP_METHOD SETUPWIZARD_ACTIVITY SETUPWIZARD_ACTIVITY_METHOD
 
-LOG "- Disabling Recommended apps step"
-# As in UN1CA: drop the OMCAgent ("Recommended apps") step from every setup
-# sequence. Each reference is a single <item> line in res/values/arrays.xml.
-SETUPWIZARD_ARRAYS="$SETUPWIZARD_APK/res/values/arrays.xml"
-grep -q "omcagent" "$SETUPWIZARD_ARRAYS" || LOGW "No omcagent setup step found in arrays.xml"
-EVAL "sed -i \"/omcagent/d\" \"$SETUPWIZARD_ARRAYS\""
-unset SETUPWIZARD_ARRAYS
+# Keep the OMCAgent "Recommended apps" step, fed only by the system catalogue.
+# The OMCAgent5 smali patch in this module makes its catalogue loader read
+# /system/etc/omcagent/unica_appres.json and ignore the target firmware's
+# regional /prism catalogue (and the downloaded list); OMCAgent's providers
+# still download and install each app.
+LOG "- Adding the system recommended-app catalogue for OMCAgent"
+EVAL "mkdir -p \"$WORK_DIR/system/system/etc/omcagent\""
+EVAL "cp -a \"$MODPATH/omcagent/unica_appres.json\" \"$WORK_DIR/system/system/etc/omcagent/unica_appres.json\""
+SET_METADATA "system" "system/etc/omcagent" 0 0 755 "u:object_r:system_file:s0"
+SET_METADATA "system" "system/etc/omcagent/unica_appres.json" 0 0 644 "u:object_r:system_file:s0"
+if ! grep -q "sequenceitem_omcagent_setup" "$SETUPWIZARD_APK/res/values/arrays.xml"; then
+    LOGW "SecSetupWizard has no OMCAgent setup step; recommended apps will not be offered"
+fi
 
 # Dynamically patch SecSetupWizard_Global
 # - Add missing/non-xml files in place
