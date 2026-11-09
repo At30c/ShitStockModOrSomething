@@ -5,6 +5,20 @@
 source "$SRC_DIR/scripts/utils/common_utils.sh"
 # ]
 
+# PRINT_FOTA_STATUS <FAIL|DONE>
+# Prints the edify line that records the install result for FotaAgent
+# (unica/mods/fotaagent). FotaAgent writes "FOTA" to /cache/fota/fota.status
+# before it reboots to recovery and reads the first line back after boot:
+# "DONE" is success, "FAIL" a failed install, "FOTA" a recovery that never ran.
+# The file only exists for installs started by FotaAgent; truncating it keeps
+# its owner, mode and label, so FotaAgent can still rewrite it.
+PRINT_FOTA_STATUS()
+{
+    _CHECK_NON_EMPTY_PARAM "STATUS" "$1" || return 1
+
+    echo "run_program(\"/sbin/sh\", \"-c\", \"[ -f /cache/fota/fota.status ] && echo $1 > /cache/fota/fota.status; exit 0\");"
+}
+
 # GET_DISK_USAGE <file>
 # Returns the size in bytes of the supplied file.
 GET_DISK_USAGE()

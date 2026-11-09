@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:26:57 -0300
+Subject: [PATCH 7/8] FotaAgent: keep the descriptor URL of ROM updater jobs
+
+---
+ .../executor/IDMFumoExecutorFumoStart.smali   | 22 +++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart.smali b/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart.smali
+index 3b52013..b95641a 100644
+--- a/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart.smali
++++ b/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart.smali
+@@ -1067,6 +1067,27 @@
+     const-string v0, ""
+ 
+     :goto_0
++    # UN1CA: a job created by the ROM updater already carries its download
++    # descriptor URL; only read ./FUMO/.../PkgURL when it does not.
++    iget-object v2, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->actionInfoDao:Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
++
++    invoke-virtual {v2}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->getActionInfo()Lcom/idm/service/actioninfo/IDMActionInfo;
++
++    move-result-object v2
++
++    if-eqz v2, :unica_read_pkgurl
++
++    invoke-virtual {v2}, Lcom/idm/service/actioninfo/IDMActionInfo;->idmGetDownloadDescriptorUrl()Ljava/lang/String;
++
++    move-result-object v2
++
++    invoke-static {v2}, Landroid/text/TextUtils;->isEmpty(Ljava/lang/CharSequence;)Z
++
++    move-result v2
++
++    if-eqz v2, :unica_skip_pkgurl
++
++    :unica_read_pkgurl
+     iget-object v1, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->actionInfoDao:Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
+ 
+     invoke-virtual {v1}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->getServerId()Ljava/lang/String;
+@@ -1085,6 +1106,7 @@
+ 
+     invoke-virtual {v0, p1}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->setDownloadDescriptorUrl(Ljava/lang/String;)V
+ 
++    :unica_skip_pkgurl
+     invoke-static {}, Lcom/idm/fotaagent/database/sqlite/database/IDMDatabaseManager;->getInstance()Lcom/idm/fotaagent/database/sqlite/database/IDMDatabaseManager;
+ 
+     move-result-object p1

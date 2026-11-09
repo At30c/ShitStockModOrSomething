@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 19:25:40 -0300
+Subject: [PATCH] FotaAgent: report device registration as done
+
+---
+ .../data/repository/DeviceRegistrationRepository.smali    | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/database/room/data/repository/DeviceRegistrationRepository.smali b/smali/com/idm/fotaagent/database/room/data/repository/DeviceRegistrationRepository.smali
+index 9138a03..c4edf62 100644
+--- a/smali/com/idm/fotaagent/database/room/data/repository/DeviceRegistrationRepository.smali
++++ b/smali/com/idm/fotaagent/database/room/data/repository/DeviceRegistrationRepository.smali
+@@ -240,6 +240,14 @@
+ .method public isRegistered()Z
+     .locals 1
+ 
++    # UN1CA: registration with Samsung never happens (0001). Report it as
++    # done, or boot never resumes a pending update job (so the install
++    # result is never read) and registration is rescheduled forever.
++    const/4 v0, 0x1
++
++    return v0
++
++
+     invoke-direct {p0}, Lcom/idm/fotaagent/database/room/data/repository/DeviceRegistrationRepository;->getState()I
+ 
+     move-result p0

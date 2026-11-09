@@ -97,7 +97,11 @@ GENERATE_BUILD_INFO()
         echo "device=$TARGET_CODENAME"
         echo "version=$ROM_VERSION"
         echo "commit=$(GET_PROP "system" "ro.unica.commit")"
-        echo "timestamp=$ROM_BUILD_TIMESTAMP"
+        # The value in the image (stamp_build_info.sh sets it on every build):
+        # FotaAgent compares it with the manifest timestamps, and incremental
+        # packages are offered only when it equals their base_timestamp.
+        echo -n "timestamp="
+        [ "$(GET_PROP "system" "ro.unica.timestamp")" ] && GET_PROP "system" "ro.unica.timestamp" || echo "$ROM_BUILD_TIMESTAMP"
         echo "security_patch_version=$(GET_PROP "system" "ro.build.version.security_patch")"
         # TODO
         echo "incremental=0"
@@ -315,6 +319,9 @@ GENERATE_UPDATER_SCRIPT()
         fi
 
         PRINT_HEADER
+        if ${FOTA_STATUS_IN_FULL_ZIP:-false}; then
+            PRINT_FOTA_STATUS "FAIL" || exit 1
+        fi
 
         # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#4007
         echo -e "\n# --- Start patching dynamic partitions ---\n\n"
@@ -455,6 +462,9 @@ GENERATE_UPDATER_SCRIPT()
             cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-end.edify"
         fi
 
+        if ${FOTA_STATUS_IN_FULL_ZIP:-false}; then
+            PRINT_FOTA_STATUS "DONE" || exit 1
+        fi
         echo    'set_progress(1.000000);'
         echo    'ui_print("****************************************");'
         echo    'ui_print(" ");'

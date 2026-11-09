@@ -432,6 +432,7 @@ GENERATE_UPDATER_SCRIPT()
         PRINT_ASSERTIONS "$TARGET_BUILD_INFO" || exit 1
 
         PRINT_HEADER "$TARGET_BUILD_INFO" || exit 1
+        PRINT_FOTA_STATUS "FAIL" || exit 1
 
         # https://android.googlesource.com/platform/build/+/refs/tags/android-16.0.0_r4/tools/releasetools/non_ab_ota.py#397
         echo    'ui_print("Verify partitions...");'
@@ -543,6 +544,7 @@ GENERATE_UPDATER_SCRIPT()
             cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-end.edify"
         fi
 
+        PRINT_FOTA_STATUS "DONE" || exit 1
         echo    'set_progress(1.000000);'
 
         PRINT_SEPARATOR

@@ -1,0 +1,4508 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 23:07:50 -0300
+Subject: [PATCH] FotaAgent: check the ROM update manifest instead of Samsung
+
+Adds io.unica.fota.UpdateChecker and PartProxy (built from src/) and
+uses them for the periodic check (5-10 minutes after registration, then
+daily) and for the Settings check button. Packages published in parts
+are served as one file on 127.0.0.1 by PartProxy.
+---
+ smali/com/idm/fotaagent/IDMApplication.smali  |    4 +
+ .../sqlite/database/polling/PollingInfo.smali |  158 +-
+ .../restclient/polling/PollingTimer.smali     |   12 +-
+ .../polling/state/PollingStartState.smali     |  171 +-
+ .../scheduler/DmSessionStarter.smali          |    4 +-
+ .../PartProxy$$ExternalSyntheticLambda0.smali |   36 +
+ .../PartProxy$$ExternalSyntheticLambda1.smali |   36 +
+ smali_classes2/io/unica/fota/PartProxy.smali  | 2079 +++++++++++++++++
+ ...ateChecker$$ExternalSyntheticLambda0.smali |   36 +
+ ...ateChecker$$ExternalSyntheticLambda1.smali |   42 +
+ ...ateChecker$$ExternalSyntheticLambda2.smali |   36 +
+ .../fota/UpdateChecker$CheckFailed.smali      |   25 +
+ .../io/unica/fota/UpdateChecker.smali         | 1716 ++++++++++++++
+ 13 files changed, 4033 insertions(+), 322 deletions(-)
+ create mode 100644 smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda0.smali
+ create mode 100644 smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda1.smali
+ create mode 100644 smali_classes2/io/unica/fota/PartProxy.smali
+ create mode 100644 smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda0.smali
+ create mode 100644 smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda1.smali
+ create mode 100644 smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda2.smali
+ create mode 100644 smali_classes2/io/unica/fota/UpdateChecker$CheckFailed.smali
+ create mode 100644 smali_classes2/io/unica/fota/UpdateChecker.smali
+
+diff --git a/smali/com/idm/fotaagent/IDMApplication.smali b/smali/com/idm/fotaagent/IDMApplication.smali
+index 542ccf7..cdfc19d 100644
+--- a/smali/com/idm/fotaagent/IDMApplication.smali
++++ b/smali/com/idm/fotaagent/IDMApplication.smali
+@@ -120,6 +120,10 @@
+ 
+     invoke-super {p0}, Landroid/app/Application;->onCreate()V
+ 
++    # UN1CA: bring back the part proxy of a pending split update download
++    # (io.unica.fota.PartProxy), so a download resumed after a reboot finds it.
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->startIfPending(Landroid/content/Context;)V
++
+     invoke-static {}, Lcom/idm/fotaagent/IDMApplication;->enableLog()V
+ 
+     const-string v0, ">>>>>>>>>>   com.wssyncmldm starts   <<<<<<<<<<"
+diff --git a/smali/com/idm/fotaagent/database/sqlite/database/polling/PollingInfo.smali b/smali/com/idm/fotaagent/database/sqlite/database/polling/PollingInfo.smali
+index 61d2081..12f625e 100644
+--- a/smali/com/idm/fotaagent/database/sqlite/database/polling/PollingInfo.smali
++++ b/smali/com/idm/fotaagent/database/sqlite/database/polling/PollingInfo.smali
+@@ -91,162 +91,10 @@
+ 
+ # virtual methods
+ .method public getNextPollingTime()J
+-    .locals 10
+-
+-    invoke-static {}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->get()Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;
+-
+-    move-result-object v0
+-
+-    invoke-virtual {v0}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->getPeriod()I
+-
+-    move-result v0
+-
+-    if-nez v0, :cond_0
+-
+-    const-string p0, "period is zero."
+-
+-    invoke-static {p0}, Lcom/samsung/android/fotaagent/common/log/Log;->E(Ljava/lang/Object;)V
+-
+-    const-wide/16 v0, 0x0
+-
+-    return-wide v0
+-
+-    :cond_0
+-    const-string v1, ""
+-
+-    invoke-static {v1}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+-
+-    invoke-static {}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->get()Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;
+-
+-    move-result-object v1
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->getPeriodUnit()Ljava/lang/String;
+-
+-    move-result-object v1
+-
+-    invoke-static {}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->get()Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;
+-
+-    move-result-object v2
+-
+-    invoke-virtual {v2}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->getTime()I
+-
+-    move-result v2
+-
+-    invoke-static {}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->get()Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;
+-
+-    move-result-object v3
+-
+-    invoke-virtual {v3}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfoDao;->getRange()I
+-
+-    move-result v3
+-
+-    invoke-static {}, Ljava/util/Calendar;->getInstance()Ljava/util/Calendar;
+-
+-    move-result-object v4
+-
+-    const-string v5, "hour"
+-
+-    invoke-virtual {v5, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+-
+-    move-result v5
+-
+-    const/16 v6, 0xb
+-
+-    if-eqz v5, :cond_1
+-
+-    invoke-virtual {v4, v6, v0}, Ljava/util/Calendar;->add(II)V
+-
+-    goto :goto_3
+-
+-    :cond_1
+-    const-string v5, "min"
+-
+-    invoke-virtual {v5, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+-
+-    move-result v1
+-
+-    const/16 v5, 0xc
+-
+-    if-eqz v1, :cond_2
+-
+-    invoke-virtual {v4, v5, v0}, Ljava/util/Calendar;->add(II)V
+-
+-    goto :goto_3
+-
+-    :cond_2
+-    new-instance v1, Ljava/util/Random;
+-
+-    invoke-direct {v1}, Ljava/util/Random;-><init>()V
+-
+-    iget-boolean v7, p0, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfo;->periodChangedInDayUnit:Z
+-
+-    const/4 v8, 0x0
+-
+-    const/4 v9, 0x5
+-
+-    if-nez v7, :cond_4
+-
+-    iget-boolean p0, p0, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfo;->urlChanged:Z
+-
+-    if-eqz p0, :cond_3
+-
+-    goto :goto_0
+-
+-    :cond_3
+-    invoke-virtual {v4, v9, v0}, Ljava/util/Calendar;->add(II)V
+-
+-    goto :goto_2
+-
+-    :cond_4
+-    :goto_0
+-    if-lez v0, :cond_5
+-
+-    invoke-virtual {v1, v0}, Ljava/util/Random;->nextInt(I)I
+-
+-    move-result p0
+-
+-    goto :goto_1
+-
+-    :cond_5
+-    move p0, v8
+-
+-    :goto_1
+-    add-int/lit8 p0, p0, 0x1
+-
+-    invoke-virtual {v4, v9, p0}, Ljava/util/Calendar;->add(II)V
+-
+-    :goto_2
+-    if-lez v3, :cond_6
+-
+-    invoke-virtual {v1, v3}, Ljava/util/Random;->nextInt(I)I
+-
+-    move-result v8
+-
+-    :cond_6
+-    add-int/2addr v2, v8
+-
+-    invoke-virtual {v4, v6, v2}, Ljava/util/Calendar;->set(II)V
+-
+-    sget p0, Lcom/samsung/android/fotaagent/common/util/TimeConstants;->HOUR_IN_MINUTE:I
+-
+-    invoke-virtual {v1, p0}, Ljava/util/Random;->nextInt(I)I
+-
+-    move-result p0
+-
+-    invoke-virtual {v4, v5, p0}, Ljava/util/Calendar;->set(II)V
+-
+-    sget p0, Lcom/samsung/android/fotaagent/common/util/TimeConstants;->MINUTE_IN_SECOND:I
+-
+-    invoke-virtual {v1, p0}, Ljava/util/Random;->nextInt(I)I
+-
+-    move-result p0
+-
+-    const/16 v0, 0xd
+-
+-    invoke-virtual {v4, v0, p0}, Ljava/util/Calendar;->set(II)V
++    .locals 2
+ 
+-    :goto_3
+-    invoke-virtual {v4}, Ljava/util/Calendar;->getTimeInMillis()J
++    # UN1CA: check the ROM update manifest once a day.
++    invoke-static {}, Lio/unica/fota/UpdateChecker;->nextPollingTime()J
+ 
+     move-result-wide v0
+ 
+diff --git a/smali/com/idm/fotaagent/restapi/restclient/polling/PollingTimer.smali b/smali/com/idm/fotaagent/restapi/restclient/polling/PollingTimer.smali
+index 9a3461a..f64aa0f 100644
+--- a/smali/com/idm/fotaagent/restapi/restclient/polling/PollingTimer.smali
++++ b/smali/com/idm/fotaagent/restapi/restclient/polling/PollingTimer.smali
+@@ -29,15 +29,9 @@
+ .method private getFirstPollingTimeWithDm()J
+     .locals 2
+ 
+-    const-string p0, "Software update initiated after registration. set polling time by PollingInfo"
+-
+-    invoke-static {p0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+-
+-    invoke-static {}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfo;->get()Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfo;
+-
+-    move-result-object p0
+-
+-    invoke-virtual {p0}, Lcom/idm/fotaagent/database/sqlite/database/polling/PollingInfo;->getNextPollingTime()J
++    # UN1CA: check the ROM update manifest 5 to 10 minutes after the app
++    # registers (first boot, after an update or a data wipe), not a day later.
++    invoke-static {}, Lio/unica/fota/UpdateChecker;->firstPollingTime()J
+ 
+     move-result-wide v0
+ 
+diff --git a/smali/com/idm/fotaagent/restapi/restclient/polling/state/PollingStartState.smali b/smali/com/idm/fotaagent/restapi/restclient/polling/state/PollingStartState.smali
+index 3b6ac1b..24523ca 100644
+--- a/smali/com/idm/fotaagent/restapi/restclient/polling/state/PollingStartState.smali
++++ b/smali/com/idm/fotaagent/restapi/restclient/polling/state/PollingStartState.smali
+@@ -128,179 +128,36 @@
+ .end method
+ 
+ .method public onExecute()V
+-    .locals 3
++    .locals 2
+ 
++    # UN1CA: the periodic check reads the ROM update manifest
++    # (io.unica.fota.UpdateChecker) instead of the Samsung version.xml. When
++    # it cannot be read, keep the alarm so the check is retried, as the
++    # stock code does on network errors.
+     iget-object v0, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->context:Landroid/content/Context;
+ 
+-    invoke-static {v0}, Lcom/idm/fotaagent/restapi/restclient/polling/Polling;->getUrlString(Landroid/content/Context;)Ljava/lang/String;
+-
+-    move-result-object v0
+-
+-    iget-object v1, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->context:Landroid/content/Context;
+-
+-    invoke-static {v1, v0}, Lcom/idm/fotaagent/utils/GeneralUtils;->appendExtraParam(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;
+-
+-    move-result-object v0
+-
+-    new-instance v1, Lcom/idm/fotaagent/restapi/restclient/polling/PollingRestClient;
+-
+-    iget-object v2, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->context:Landroid/content/Context;
+-
+-    invoke-direct {v1, v2, v0}, Lcom/idm/fotaagent/restapi/restclient/polling/PollingRestClient;-><init>(Landroid/content/Context;Ljava/lang/String;)V
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/restapi/restclient/BaseRestClient;->execute()Z
++    invoke-static {v0}, Lio/unica/fota/UpdateChecker;->poll(Landroid/content/Context;)Z
+ 
+     move-result v0
+ 
+-    if-eqz v0, :cond_2
+-
+-    const-string v0, "Receive result: success in PollingRestClient"
+-
+-    invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/restapi/restclient/BaseRestClient;->getResponse()Lcom/idm/fotaagent/restapi/response/Response;
+-
+-    move-result-object v0
+-
+-    check-cast v0, Lcom/idm/fotaagent/restapi/response/Response$WithAttributes$ForPolling;
+-
+-    invoke-virtual {v0}, Lcom/idm/fotaagent/restapi/response/Response$WithAttributes;->getAttributes()Ljava/util/Map;
+-
+-    move-result-object v0
+-
+-    invoke-static {v0}, Lcom/idm/fotaagent/restapi/restclient/polling/Polling;->updateFrom(Ljava/util/Map;)V
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/restapi/restclient/BaseRestClient;->getResponse()Lcom/idm/fotaagent/restapi/response/Response;
+-
+-    move-result-object v1
+-
+-    check-cast v1, Lcom/idm/fotaagent/restapi/response/Response$WithAttributes$ForPolling;
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/restapi/response/Response$WithAttributes$ForPolling;->getVersions()[Ljava/lang/String;
+-
+-    move-result-object v1
+-
+-    invoke-static {v1}, Lcom/idm/fotaagent/restapi/restclient/polling/Polling;->isUpdatable([Ljava/lang/String;)Z
+-
+-    move-result v1
+-
+-    if-eqz v1, :cond_0
+-
+-    const-string v1, "start device init"
+-
+-    invoke-static {v1}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+-
+-    invoke-static {}, Lcom/idm/fotaagent/scheduler/SchedulerInitiator;->getInstance()Lcom/idm/fotaagent/scheduler/SchedulerInitiator;
+-
+-    move-result-object v1
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/scheduler/SchedulerInitiator;->initiateByDevice()V
+-
+-    goto :goto_0
+-
+-    :cond_0
+-    new-instance v1, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
+-
+-    invoke-direct {v1}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;-><init>()V
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/database/sqlite/database/dao/Dao;->getEntity()Ljava/lang/Object;
+-
+-    move-result-object v1
+-
+-    if-nez v1, :cond_1
+-
+-    iget-object v1, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->context:Landroid/content/Context;
+-
+-    invoke-static {v1}, Lcom/idm/fotaagent/enabler/security/SecurityPatchLevelManager;->unregisterIfPossible(Landroid/content/Context;)V
+-
+-    :cond_1
+-    :goto_0
+-    new-instance v1, Lcom/idm/fotaagent/restapi/restclient/heartbeat/PeriodicHeartbeatManager;
+-
+-    iget-object v2, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->context:Landroid/content/Context;
+-
+-    invoke-direct {v1, v2}, Lcom/idm/fotaagent/restapi/restclient/heartbeat/PeriodicHeartbeatManager;-><init>(Landroid/content/Context;)V
+-
+-    new-instance v2, Lcom/idm/fotaagent/restapi/restclient/heartbeat/PeriodicHeartbeat$TriggeredByPolling;
+-
+-    invoke-direct {v2, v0}, Lcom/idm/fotaagent/restapi/restclient/heartbeat/PeriodicHeartbeat$TriggeredByPolling;-><init>(Ljava/util/Map;)V
+-
+-    invoke-virtual {v1, v2}, Lcom/idm/fotaagent/restapi/restclient/heartbeat/PeriodicHeartbeatManager;->registerIfChanged(Lcom/idm/fotaagent/restapi/restclient/heartbeat/PeriodicHeartbeat;)V
+-
+-    iget-object p0, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->pollingContext:Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;
+-
+-    new-instance v0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingReservationState;
+-
+-    invoke-direct {v0, p0}, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingReservationState;-><init>(Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;)V
+-
+-    invoke-virtual {p0, v0}, Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;->changeState(Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;)V
+-
+-    return-void
+-
+-    :cond_2
+-    const-string v0, "Receive result: fail in PollingRestClient"
+-
+-    invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+-
+-    invoke-virtual {v1}, Lcom/idm/fotaagent/restapi/restclient/BaseRestClient;->getResponse()Lcom/idm/fotaagent/restapi/response/Response;
+-
+-    move-result-object v0
+-
+-    check-cast v0, Lcom/idm/fotaagent/restapi/response/Response$WithAttributes$ForPolling;
+-
+-    invoke-virtual {v0}, Lcom/idm/fotaagent/restapi/response/Response;->getResult()Lcom/idm/fotaagent/restapi/response/Result;
+-
+-    move-result-object v0
+-
+-    invoke-virtual {v0}, Lcom/idm/fotaagent/restapi/response/Result;->isNetworkFailed()Z
+-
+-    move-result v1
+-
+-    if-eqz v1, :cond_3
+-
+-    const-string v0, "Network is not available; Do not cancel alarm to retry 1 hour later"
+-
+-    invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+-
+     iget-object p0, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->pollingContext:Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;
+ 
+-    new-instance v0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingFinishedState;
+-
+-    invoke-direct {v0, p0}, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingFinishedState;-><init>(Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;)V
+-
+-    invoke-virtual {p0, v0}, Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;->changeState(Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;)V
+-
+-    return-void
+-
+-    :cond_3
+-    invoke-virtual {v0}, Lcom/idm/fotaagent/restapi/response/Result;->isAbnormalData()Z
+-
+-    move-result v0
+-
+-    if-eqz v0, :cond_4
++    if-eqz v0, :cond_failed
+ 
+-    const-string v0, "Received data is wrong; Do not cancel alarm to retry 1 hour later"
++    new-instance v1, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingReservationState;
+ 
+-    invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
++    invoke-direct {v1, p0}, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingReservationState;-><init>(Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;)V
+ 
+-    iget-object p0, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->pollingContext:Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;
+-
+-    new-instance v0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingFinishedState;
+-
+-    invoke-direct {v0, p0}, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingFinishedState;-><init>(Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;)V
+-
+-    invoke-virtual {p0, v0}, Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;->changeState(Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;)V
++    invoke-virtual {p0, v1}, Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;->changeState(Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;)V
+ 
+     return-void
+ 
+-    :cond_4
+-    iget-object p0, p0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;->pollingContext:Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;
+-
+-    new-instance v0, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingReservationState;
++    :cond_failed
++    new-instance v1, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingFinishedState;
+ 
+-    invoke-direct {v0, p0}, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingReservationState;-><init>(Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;)V
++    invoke-direct {v1, p0}, Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingFinishedState;-><init>(Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;)V
+ 
+-    invoke-virtual {p0, v0}, Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;->changeState(Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;)V
++    invoke-virtual {p0, v1}, Lcom/idm/fotaagent/restapi/restclient/polling/context/PollingContext;->changeState(Lcom/idm/fotaagent/restapi/restclient/polling/state/PollingState;)V
+ 
+     return-void
+ .end method
+diff --git a/smali/com/idm/fotaagent/scheduler/DmSessionStarter.smali b/smali/com/idm/fotaagent/scheduler/DmSessionStarter.smali
+index 3453ddb..39f5172 100644
+--- a/smali/com/idm/fotaagent/scheduler/DmSessionStarter.smali
++++ b/smali/com/idm/fotaagent/scheduler/DmSessionStarter.smali
+@@ -211,7 +211,9 @@
+ 
+     move-result-object p0
+ 
+-    invoke-static {p0}, Lcom/idm/fotaagent/LibraryStarter;->startDMTask(Lcom/idm/service/actioninfo/IDMActionInfo;)V
++    # UN1CA: check the ROM update manifest instead of opening a Samsung DM
++    # session (io.unica.fota.UpdateChecker).
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->startDMTask(Lcom/idm/service/actioninfo/IDMActionInfo;)V
+ 
+     sget-object p0, Lcom/idm/fotaagent/multidevice/protocol/Action;->SOFTWARE_UPDATE:Lcom/idm/fotaagent/multidevice/protocol/Action;
+ 
+diff --git a/smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda0.smali b/smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda0.smali
+new file mode 100644
+index 0000000..548caee
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda0.smali
+@@ -0,0 +1,36 @@
++.class public final synthetic Lio/unica/fota/PartProxy$$ExternalSyntheticLambda0;
++.super Ljava/lang/Object;
++.source "D8$$SyntheticClass"
++
++# interfaces
++.implements Ljava/lang/Runnable;
++
++
++# instance fields
++.field public final synthetic f$0:Ljava/net/Socket;
++
++
++# direct methods
++.method public synthetic constructor <init>(Ljava/net/Socket;)V
++    .registers 2
++
++    .line 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    iput-object p1, p0, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda0;->f$0:Ljava/net/Socket;
++
++    return-void
++.end method
++
++
++# virtual methods
++.method public final run()V
++    .registers 2
++
++    .line 0
++    iget-object v0, p0, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda0;->f$0:Ljava/net/Socket;
++
++    invoke-static {v0}, Lio/unica/fota/PartProxy;->lambda$acceptLoop$1(Ljava/net/Socket;)V
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda1.smali b/smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda1.smali
+new file mode 100644
+index 0000000..f5072a1
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/PartProxy$$ExternalSyntheticLambda1.smali
+@@ -0,0 +1,36 @@
++.class public final synthetic Lio/unica/fota/PartProxy$$ExternalSyntheticLambda1;
++.super Ljava/lang/Object;
++.source "D8$$SyntheticClass"
++
++# interfaces
++.implements Ljava/lang/Runnable;
++
++
++# instance fields
++.field public final synthetic f$0:Ljava/net/ServerSocket;
++
++
++# direct methods
++.method public synthetic constructor <init>(Ljava/net/ServerSocket;)V
++    .registers 2
++
++    .line 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    iput-object p1, p0, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda1;->f$0:Ljava/net/ServerSocket;
++
++    return-void
++.end method
++
++
++# virtual methods
++.method public final run()V
++    .registers 2
++
++    .line 0
++    iget-object v0, p0, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda1;->f$0:Ljava/net/ServerSocket;
++
++    invoke-static {v0}, Lio/unica/fota/PartProxy;->lambda$start$0(Ljava/net/ServerSocket;)V
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/PartProxy.smali b/smali_classes2/io/unica/fota/PartProxy.smali
+new file mode 100644
+index 0000000..3cc0f88
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/PartProxy.smali
+@@ -0,0 +1,2079 @@
++.class public final Lio/unica/fota/PartProxy;
++.super Ljava/lang/Object;
++.source "PartProxy.java"
++
++
++# static fields
++.field static final BASE:Ljava/lang/String; = "http://127.0.0.1:47821"
++
++.field static final DD_URL:Ljava/lang/String; = "http://127.0.0.1:47821/unica/dd.xml"
++
++.field private static final KEY_DD:Ljava/lang/String; = "dd"
++
++.field private static final KEY_PARTS:Ljava/lang/String; = "parts"
++
++.field private static final NETWORK_CHECK_MS:J = 0x3e8L
++
++.field static final PACKAGE_URL:Ljava/lang/String; = "http://127.0.0.1:47821/unica/package.bin"
++
++.field static final PORT:I = 0xbacd
++
++.field private static final PREFS:Ljava/lang/String; = "unica_fota_parts"
++
++.field private static final TAG:Ljava/lang/String; = "UnicaFota"
++
++.field private static final TIMEOUT_MS:I = 0x7530
++
++.field private static appContext:Landroid/content/Context;
++
++.field private static server:Ljava/net/ServerSocket;
++
++
++# direct methods
++.method private constructor <init>()V
++    .registers 1
++
++    .line 61
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    return-void
++.end method
++
++.method private static acceptLoop(Ljava/net/ServerSocket;)V
++    .registers 4
++
++    .line 105
++    nop
++
++    :goto_1
++    invoke-virtual {p0}, Ljava/net/ServerSocket;->isClosed()Z
++
++    move-result v0
++
++    if-nez v0, :cond_2e
++
++    .line 107
++    :try_start_7
++    invoke-virtual {p0}, Ljava/net/ServerSocket;->accept()Ljava/net/Socket;
++
++    move-result-object v0
++
++    .line 108
++    new-instance v1, Ljava/lang/Thread;
++
++    new-instance v2, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda0;
++
++    invoke-direct {v2, v0}, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda0;-><init>(Ljava/net/Socket;)V
++
++    const-string v0, "UnicaFotaProxyConn"
++
++    invoke-direct {v1, v2, v0}, Ljava/lang/Thread;-><init>(Ljava/lang/Runnable;Ljava/lang/String;)V
++
++    .line 109
++    const/4 v0, 0x1
++
++    invoke-virtual {v1, v0}, Ljava/lang/Thread;->setDaemon(Z)V
++
++    .line 110
++    invoke-virtual {v1}, Ljava/lang/Thread;->start()V
++    :try_end_1e
++    .catch Ljava/io/IOException; {:try_start_7 .. :try_end_1e} :catch_1f
++
++    goto :goto_2d
++
++    .line 111
++    :catch_1f
++    move-exception v0
++
++    .line 112
++    invoke-virtual {p0}, Ljava/net/ServerSocket;->isClosed()Z
++
++    move-result v1
++
++    if-nez v1, :cond_2d
++
++    const-string v1, "UnicaFota"
++
++    const-string v2, "part proxy accept failed"
++
++    invoke-static {v1, v2, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 113
++    :cond_2d
++    :goto_2d
++    goto :goto_1
++
++    .line 115
++    :cond_2e
++    return-void
++.end method
++
++.method static clear(Landroid/content/Context;)V
++    .registers 2
++
++    .line 86
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->prefs(Landroid/content/Context;)Landroid/content/SharedPreferences;
++
++    move-result-object p0
++
++    invoke-interface {p0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
++
++    move-result-object p0
++
++    const-string v0, "dd"
++
++    invoke-interface {p0, v0}, Landroid/content/SharedPreferences$Editor;->remove(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
++
++    move-result-object p0
++
++    const-string v0, "parts"
++
++    invoke-interface {p0, v0}, Landroid/content/SharedPreferences$Editor;->remove(Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
++
++    move-result-object p0
++
++    invoke-interface {p0}, Landroid/content/SharedPreferences$Editor;->commit()Z
++
++    .line 87
++    return-void
++.end method
++
++.method private static copyPart(Landroid/net/ConnectivityManager;Landroid/net/Network;Ljava/lang/String;JJJLjava/io/OutputStream;[B)V
++    .registers 27
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Ljava/io/IOException;
++        }
++    .end annotation
++
++    .line 268
++    move-object/from16 v0, p1
++
++    move-object/from16 v1, p2
++
++    move-object/from16 v2, p10
++
++    new-instance v3, Ljava/net/URL;
++
++    invoke-direct {v3, v1}, Ljava/net/URL;-><init>(Ljava/lang/String;)V
++
++    invoke-virtual {v0, v3}, Landroid/net/Network;->openConnection(Ljava/net/URL;)Ljava/net/URLConnection;
++
++    move-result-object v3
++
++    check-cast v3, Ljava/net/HttpURLConnection;
++
++    .line 270
++    const/16 v4, 0x7530
++
++    :try_start_13
++    invoke-virtual {v3, v4}, Ljava/net/HttpURLConnection;->setConnectTimeout(I)V
++
++    .line 271
++    invoke-virtual {v3, v4}, Ljava/net/HttpURLConnection;->setReadTimeout(I)V
++
++    .line 272
++    const/4 v4, 0x1
++
++    invoke-virtual {v3, v4}, Ljava/net/HttpURLConnection;->setInstanceFollowRedirects(Z)V
++
++    .line 273
++    const/4 v4, 0x0
++
++    invoke-virtual {v3, v4}, Ljava/net/HttpURLConnection;->setUseCaches(Z)V
++
++    .line 274
++    const-string v5, "Range"
++
++    new-instance v6, Ljava/lang/StringBuilder;
++
++    invoke-direct {v6}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v7, "bytes="
++
++    invoke-virtual {v6, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v6
++
++    move-wide/from16 v7, p3
++
++    invoke-virtual {v6, v7, v8}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v6
++
++    const-string v9, "-"
++
++    invoke-virtual {v6, v9}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v6
++
++    move-wide/from16 v9, p5
++
++    invoke-virtual {v6, v9, v10}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v6
++
++    invoke-virtual {v6}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v6
++
++    invoke-virtual {v3, v5, v6}, Ljava/net/HttpURLConnection;->setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V
++
++    .line 275
++    invoke-virtual {v3}, Ljava/net/HttpURLConnection;->getResponseCode()I
++
++    move-result v5
++
++    .line 277
++    const/16 v6, 0xce
++
++    const-wide/16 v9, 0x0
++
++    if-ne v5, v6, :cond_53
++
++    .line 278
++    move-wide v7, v9
++
++    goto :goto_58
++
++    .line 279
++    :cond_53
++    const/16 v6, 0xc8
++
++    if-ne v5, v6, :cond_107
++
++    .line 281
++    nop
++
++    .line 285
++    :goto_58
++    invoke-virtual {v3}, Ljava/net/HttpURLConnection;->getInputStream()Ljava/io/InputStream;
++
++    move-result-object v5
++    :try_end_5c
++    .catchall {:try_start_13 .. :try_end_5c} :catchall_12a
++
++    .line 286
++    :goto_5c
++    cmp-long v6, v7, v9
++
++    const-string v11, "short part "
++
++    if-lez v6, :cond_91
++
++    .line 287
++    :try_start_62
++    invoke-virtual {v5, v7, v8}, Ljava/io/InputStream;->skip(J)J
++
++    move-result-wide v12
++
++    .line 288
++    cmp-long v6, v12, v9
++
++    if-gtz v6, :cond_8a
++
++    .line 289
++    invoke-virtual {v5}, Ljava/io/InputStream;->read()I
++
++    move-result v6
++
++    if-ltz v6, :cond_73
++
++    .line 290
++    const-wide/16 v12, 0x1
++
++    goto :goto_8a
++
++    .line 289
++    :cond_73
++    new-instance v0, Ljava/io/IOException;
++
++    new-instance v2, Ljava/lang/StringBuilder;
++
++    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
++
++    invoke-virtual {v2, v11}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-direct {v0, v1}, Ljava/io/IOException;-><init>(Ljava/lang/String;)V
++
++    throw v0
++    :try_end_8a
++    .catchall {:try_start_62 .. :try_end_8a} :catchall_8c
++
++    .line 292
++    :cond_8a
++    :goto_8a
++    sub-long/2addr v7, v12
++
++    .line 293
++    goto :goto_5c
++
++    .line 285
++    :catchall_8c
++    move-exception v0
++
++    move-object v1, v0
++
++    move-object/from16 p3, v5
++
++    goto :goto_f0
++
++    .line 294
++    :cond_91
++    nop
++
++    .line 295
++    move-wide/from16 v6, p7
++
++    move-wide v12, v9
++
++    .line 296
++    :goto_95
++    cmp-long v8, v6, v9
++
++    if-lez v8, :cond_fb
++
++    .line 297
++    :try_start_99
++    invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
++
++    move-result-wide v14
++    :try_end_9d
++    .catchall {:try_start_99 .. :try_end_9d} :catchall_ec
++
++    .line 298
++    cmp-long v8, v14, v12
++
++    if-ltz v8, :cond_b7
++
++    .line 299
++    :try_start_a1
++    invoke-virtual/range {p0 .. p0}, Landroid/net/ConnectivityManager;->getActiveNetwork()Landroid/net/Network;
++
++    move-result-object v8
++
++    invoke-virtual {v0, v8}, Landroid/net/Network;->equals(Ljava/lang/Object;)Z
++
++    move-result v8
++
++    if-eqz v8, :cond_af
++
++    .line 302
++    const-wide/16 v12, 0x3e8
++
++    add-long/2addr v12, v14
++
++    goto :goto_b7
++
++    .line 300
++    :cond_af
++    new-instance v0, Ljava/io/IOException;
++
++    const-string v1, "network changed"
++
++    invoke-direct {v0, v1}, Ljava/io/IOException;-><init>(Ljava/lang/String;)V
++
++    throw v0
++    :try_end_b7
++    .catchall {:try_start_a1 .. :try_end_b7} :catchall_8c
++
++    .line 304
++    :cond_b7
++    :goto_b7
++    :try_start_b7
++    array-length v8, v2
++
++    int-to-long v14, v8
++
++    invoke-static {v14, v15, v6, v7}, Ljava/lang/Math;->min(JJ)J
++
++    move-result-wide v14
++
++    long-to-int v8, v14
++
++    invoke-virtual {v5, v2, v4, v8}, Ljava/io/InputStream;->read([BII)I
++
++    move-result v8
++
++    .line 305
++    if-ltz v8, :cond_d1
++
++    .line 306
++    move-object/from16 v14, p9
++
++    invoke-virtual {v14, v2, v4, v8}, Ljava/io/OutputStream;->write([BII)V
++    :try_end_c9
++    .catchall {:try_start_b7 .. :try_end_c9} :catchall_ec
++
++    .line 307
++    move-object/from16 p3, v5
++
++    int-to-long v4, v8
++
++    sub-long/2addr v6, v4
++
++    .line 308
++    move-object/from16 v5, p3
++
++    const/4 v4, 0x0
++
++    goto :goto_95
++
++    .line 305
++    :cond_d1
++    move-object/from16 p3, v5
++
++    :try_start_d3
++    new-instance v0, Ljava/io/IOException;
++
++    new-instance v2, Ljava/lang/StringBuilder;
++
++    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
++
++    invoke-virtual {v2, v11}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-direct {v0, v1}, Ljava/io/IOException;-><init>(Ljava/lang/String;)V
++
++    throw v0
++    :try_end_ea
++    .catchall {:try_start_d3 .. :try_end_ea} :catchall_ea
++
++    .line 285
++    :catchall_ea
++    move-exception v0
++
++    goto :goto_ef
++
++    :catchall_ec
++    move-exception v0
++
++    move-object/from16 p3, v5
++
++    :goto_ef
++    move-object v1, v0
++
++    :goto_f0
++    if-eqz p3, :cond_fa
++
++    :try_start_f2
++    invoke-virtual/range {p3 .. p3}, Ljava/io/InputStream;->close()V
++    :try_end_f5
++    .catchall {:try_start_f2 .. :try_end_f5} :catchall_f6
++
++    goto :goto_fa
++
++    :catchall_f6
++    move-exception v0
++
++    :try_start_f7
++    invoke-virtual {v1, v0}, Ljava/lang/Throwable;->addSuppressed(Ljava/lang/Throwable;)V
++
++    :cond_fa
++    :goto_fa
++    throw v1
++
++    .line 309
++    :cond_fb
++    move-object/from16 p3, v5
++
++    if-eqz p3, :cond_102
++
++    invoke-virtual/range {p3 .. p3}, Ljava/io/InputStream;->close()V
++    :try_end_102
++    .catchall {:try_start_f7 .. :try_end_102} :catchall_12a
++
++    .line 311
++    :cond_102
++    invoke-virtual {v3}, Ljava/net/HttpURLConnection;->disconnect()V
++
++    .line 312
++    nop
++
++    .line 313
++    return-void
++
++    .line 283
++    :cond_107
++    :try_start_107
++    new-instance v0, Ljava/io/IOException;
++
++    new-instance v2, Ljava/lang/StringBuilder;
++
++    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v4, "HTTP "
++
++    invoke-virtual {v2, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2, v5}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    const-string v4, " for "
++
++    invoke-virtual {v2, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-direct {v0, v1}, Ljava/io/IOException;-><init>(Ljava/lang/String;)V
++
++    throw v0
++    :try_end_12a
++    .catchall {:try_start_107 .. :try_end_12a} :catchall_12a
++
++    .line 311
++    :catchall_12a
++    move-exception v0
++
++    invoke-virtual {v3}, Ljava/net/HttpURLConnection;->disconnect()V
++
++    .line 312
++    throw v0
++.end method
++
++.method private static handle(Ljava/net/Socket;)V
++    .registers 25
++
++    .line 142
++    move-object/from16 v1, p0
++
++    const-string v2, "UnicaFota"
++
++    const-string v0, " "
++
++    .line 143
++    const/16 v3, 0x7530
++
++    :try_start_8
++    invoke-virtual {v1, v3}, Ljava/net/Socket;->setSoTimeout(I)V
++
++    .line 144
++    invoke-virtual {v1}, Ljava/net/Socket;->getInputStream()Ljava/io/InputStream;
++
++    move-result-object v3
++
++    .line 145
++    new-instance v4, Ljava/io/BufferedOutputStream;
++
++    invoke-virtual {v1}, Ljava/net/Socket;->getOutputStream()Ljava/io/OutputStream;
++
++    move-result-object v5
++
++    const/high16 v10, 0x10000
++
++    invoke-direct {v4, v5, v10}, Ljava/io/BufferedOutputStream;-><init>(Ljava/io/OutputStream;I)V
++
++    .line 147
++    invoke-static {v3}, Lio/unica/fota/PartProxy;->readLine(Ljava/io/InputStream;)Ljava/lang/String;
++
++    move-result-object v5
++    :try_end_1e
++    .catchall {:try_start_8 .. :try_end_1e} :catchall_2fc
++
++    .line 148
++    if-nez v5, :cond_2c
++
++    .line 259
++    if-eqz v1, :cond_2b
++
++    :try_start_22
++    invoke-virtual {v1}, Ljava/net/Socket;->close()V
++    :try_end_25
++    .catchall {:try_start_22 .. :try_end_25} :catchall_26
++
++    goto :goto_2b
++
++    :catchall_26
++    move-exception v0
++
++    move-object/from16 v18, v2
++
++    goto/16 :goto_30c
++
++    .line 148
++    :cond_2b
++    :goto_2b
++    return-void
++
++    .line 149
++    :cond_2c
++    const/4 v6, 0x0
++
++    move-object v7, v6
++
++    .line 151
++    :goto_2e
++    :try_start_2e
++    invoke-static {v3}, Lio/unica/fota/PartProxy;->readLine(Ljava/io/InputStream;)Ljava/lang/String;
++
++    move-result-object v8
++    :try_end_32
++    .catchall {:try_start_2e .. :try_end_32} :catchall_2fc
++
++    const/4 v11, 0x0
++
++    if-eqz v8, :cond_64
++
++    :try_start_35
++    invoke-virtual {v8}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v9
++
++    if-nez v9, :cond_64
++
++    .line 152
++    const/16 v9, 0x3a
++
++    invoke-virtual {v8, v9}, Ljava/lang/String;->indexOf(I)I
++
++    move-result v9
++
++    .line 153
++    if-lez v9, :cond_5d
++
++    invoke-virtual {v8, v11, v9}, Ljava/lang/String;->substring(II)Ljava/lang/String;
++
++    move-result-object v11
++
++    invoke-virtual {v11}, Ljava/lang/String;->trim()Ljava/lang/String;
++
++    move-result-object v11
++
++    const-string v12, "Range"
++
++    invoke-virtual {v11, v12}, Ljava/lang/String;->equalsIgnoreCase(Ljava/lang/String;)Z
++
++    move-result v11
++
++    if-eqz v11, :cond_5d
++
++    .line 154
++    add-int/lit8 v9, v9, 0x1
++
++    invoke-virtual {v8, v9}, Ljava/lang/String;->substring(I)Ljava/lang/String;
++
++    move-result-object v7
++
++    invoke-virtual {v7}, Ljava/lang/String;->trim()Ljava/lang/String;
++
++    move-result-object v7
++    :try_end_5d
++    .catchall {:try_start_35 .. :try_end_5d} :catchall_5e
++
++    .line 156
++    :cond_5d
++    goto :goto_2e
++
++    .line 142
++    :catchall_5e
++    move-exception v0
++
++    move-object v1, v0
++
++    move-object/from16 v18, v2
++
++    goto/16 :goto_300
++
++    .line 157
++    :cond_64
++    :try_start_64
++    invoke-virtual {v5, v0}, Ljava/lang/String;->split(Ljava/lang/String;)[Ljava/lang/String;
++
++    move-result-object v3
++
++    .line 158
++    array-length v5, v3
++    :try_end_69
++    .catchall {:try_start_64 .. :try_end_69} :catchall_2fc
++
++    const/4 v8, 0x2
++
++    if-ge v5, v8, :cond_72
++
++    .line 259
++    if-eqz v1, :cond_71
++
++    :try_start_6e
++    invoke-virtual {v1}, Ljava/net/Socket;->close()V
++    :try_end_71
++    .catchall {:try_start_6e .. :try_end_71} :catchall_26
++
++    .line 158
++    :cond_71
++    return-void
++
++    .line 159
++    :cond_72
++    :try_start_72
++    aget-object v5, v3, v11
++
++    .line 160
++    const/4 v8, 0x1
++
++    aget-object v3, v3, v8
++
++    .line 161
++    const/16 v9, 0x3f
++
++    invoke-virtual {v3, v9}, Ljava/lang/String;->indexOf(I)I
++
++    move-result v9
++    :try_end_7d
++    .catchall {:try_start_72 .. :try_end_7d} :catchall_2fc
++
++    .line 162
++    if-ltz v9, :cond_83
++
++    :try_start_7f
++    invoke-virtual {v3, v11, v9}, Ljava/lang/String;->substring(II)Ljava/lang/String;
++
++    move-result-object v3
++    :try_end_83
++    .catchall {:try_start_7f .. :try_end_83} :catchall_5e
++
++    .line 163
++    :cond_83
++    :try_start_83
++    const-string v9, "HEAD"
++
++    invoke-virtual {v5, v9}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v12
++    :try_end_89
++    .catchall {:try_start_83 .. :try_end_89} :catchall_2fc
++
++    .line 164
++    if-eqz v7, :cond_9d
++
++    :try_start_8b
++    new-instance v9, Ljava/lang/StringBuilder;
++
++    invoke-direct {v9}, Ljava/lang/StringBuilder;-><init>()V
++
++    invoke-virtual {v9, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v9
++
++    invoke-virtual {v9, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v9
++
++    invoke-virtual {v9}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v9
++    :try_end_9c
++    .catchall {:try_start_8b .. :try_end_9c} :catchall_5e
++
++    goto :goto_9f
++
++    :cond_9d
++    :try_start_9d
++    const-string v9, ""
++
++    :goto_9f
++    new-instance v13, Ljava/lang/StringBuilder;
++
++    invoke-direct {v13}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v14, "part proxy: "
++
++    invoke-virtual {v13, v14}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v13
++
++    invoke-virtual {v13, v5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v13
++
++    invoke-virtual {v13, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0, v9}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-static {v2, v0}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 166
++    sget-object v0, Lio/unica/fota/PartProxy;->appContext:Landroid/content/Context;
++
++    invoke-static {v0}, Lio/unica/fota/PartProxy;->prefs(Landroid/content/Context;)Landroid/content/SharedPreferences;
++
++    move-result-object v0
++
++    .line 167
++    const-string v9, "dd"
++
++    invoke-interface {v0, v9, v6}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v9
++
++    .line 168
++    const-string v13, "parts"
++
++    invoke-interface {v0, v13, v6}, Landroid/content/SharedPreferences;->getString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v0
++
++    .line 169
++    if-eqz v9, :cond_2e6
++
++    if-eqz v0, :cond_2e6
++
++    const-string v6, "GET"
++
++    invoke-virtual {v5, v6}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v5
++
++    if-nez v5, :cond_e5
++
++    if-nez v12, :cond_e5
++
++    move-object/from16 v18, v2
++
++    goto/16 :goto_2e8
++
++    .line 175
++    :cond_e5
++    const-string v5, "/unica/dd.xml"
++
++    invoke-virtual {v3, v5}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v5
++    :try_end_eb
++    .catchall {:try_start_9d .. :try_end_eb} :catchall_2fc
++
++    if-eqz v5, :cond_10b
++
++    .line 176
++    :try_start_ed
++    sget-object v0, Ljava/nio/charset/StandardCharsets;->UTF_8:Ljava/nio/charset/Charset;
++
++    invoke-virtual {v9, v0}, Ljava/lang/String;->getBytes(Ljava/nio/charset/Charset;)[B
++
++    move-result-object v0
++
++    .line 177
++    const-string v5, "200 OK"
++
++    const-string v6, "text/xml; charset=utf-8"
++
++    array-length v3, v0
++
++    int-to-long v7, v3
++
++    const/4 v9, 0x0
++
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    .line 178
++    if-nez v12, :cond_102
++
++    invoke-virtual {v4, v0}, Ljava/io/OutputStream;->write([B)V
++
++    .line 179
++    :cond_102
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_105
++    .catchall {:try_start_ed .. :try_end_105} :catchall_5e
++
++    .line 259
++    if-eqz v1, :cond_10a
++
++    :try_start_107
++    invoke-virtual {v1}, Ljava/net/Socket;->close()V
++    :try_end_10a
++    .catchall {:try_start_107 .. :try_end_10a} :catchall_26
++
++    .line 180
++    :cond_10a
++    return-void
++
++    .line 182
++    :cond_10b
++    :try_start_10b
++    const-string v5, "/unica/package.bin"
++
++    invoke-virtual {v3, v5}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v3
++    :try_end_111
++    .catchall {:try_start_10b .. :try_end_111} :catchall_2fc
++
++    if-nez v3, :cond_125
++
++    .line 183
++    :try_start_113
++    const-string v5, "404 Not Found"
++
++    const-wide/16 v7, 0x0
++
++    const/4 v9, 0x0
++
++    const/4 v6, 0x0
++
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    .line 184
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_11f
++    .catchall {:try_start_113 .. :try_end_11f} :catchall_5e
++
++    .line 259
++    if-eqz v1, :cond_124
++
++    :try_start_121
++    invoke-virtual {v1}, Ljava/net/Socket;->close()V
++    :try_end_124
++    .catchall {:try_start_121 .. :try_end_124} :catchall_26
++
++    .line 185
++    :cond_124
++    return-void
++
++    .line 188
++    :cond_125
++    :try_start_125
++    new-instance v3, Lorg/json/JSONArray;
++
++    invoke-direct {v3, v0}, Lorg/json/JSONArray;-><init>(Ljava/lang/String;)V
++
++    .line 189
++    invoke-virtual {v3}, Lorg/json/JSONArray;->length()I
++
++    move-result v0
++
++    .line 190
++    new-array v15, v0, [Ljava/lang/String;
++
++    .line 191
++    add-int/lit8 v5, v0, 0x1
++
++    new-array v13, v5, [J
++    :try_end_134
++    .catchall {:try_start_125 .. :try_end_134} :catchall_2fc
++
++    .line 192
++    move v5, v11
++
++    :goto_135
++    if-ge v5, v0, :cond_153
++
++    .line 193
++    :try_start_137
++    invoke-virtual {v3, v5}, Lorg/json/JSONArray;->getJSONObject(I)Lorg/json/JSONObject;
++
++    move-result-object v6
++
++    .line 194
++    const-string v9, "url"
++
++    invoke-virtual {v6, v9}, Lorg/json/JSONObject;->getString(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v9
++
++    aput-object v9, v15, v5
++
++    .line 195
++    add-int/lit8 v9, v5, 0x1
++
++    aget-wide v16, v13, v5
++
++    const-string v5, "size"
++
++    invoke-virtual {v6, v5}, Lorg/json/JSONObject;->getLong(Ljava/lang/String;)J
++
++    move-result-wide v5
++
++    add-long v16, v16, v5
++
++    aput-wide v16, v13, v9
++    :try_end_151
++    .catchall {:try_start_137 .. :try_end_151} :catchall_5e
++
++    .line 192
++    move v5, v9
++
++    goto :goto_135
++
++    .line 197
++    :cond_153
++    :try_start_153
++    aget-wide v5, v13, v0
++    :try_end_155
++    .catchall {:try_start_153 .. :try_end_155} :catchall_2fc
++
++    .line 199
++    nop
++
++    .line 200
++    const-wide/16 v16, 0x1
++
++    move v3, v8
++
++    sub-long v8, v5, v16
++
++    .line 201
++    nop
++
++    .line 202
++    move/from16 v18, v3
++
++    move-object v14, v4
++
++    const-string v10, "\r\n"
++
++    if-eqz v7, :cond_220
++
++    :try_start_163
++    const-string v3, "bytes="
++
++    invoke-virtual {v7, v3}, Ljava/lang/String;->startsWith(Ljava/lang/String;)Z
++
++    move-result v3
++
++    if-eqz v3, :cond_220
++
++    .line 203
++    const/4 v3, 0x6
++
++    invoke-virtual {v7, v3}, Ljava/lang/String;->substring(I)Ljava/lang/String;
++
++    move-result-object v3
++
++    .line 204
++    const/16 v4, 0x2d
++
++    invoke-virtual {v3, v4}, Ljava/lang/String;->indexOf(I)I
++
++    move-result v4
++    :try_end_176
++    .catchall {:try_start_163 .. :try_end_176} :catchall_5e
++
++    .line 205
++    const-string v7, "Content-Range: bytes */"
++
++    if-ltz v4, :cond_1f8
++
++    const/16 v11, 0x2c
++
++    :try_start_17c
++    invoke-virtual {v3, v11}, Ljava/lang/String;->indexOf(I)I
++
++    move-result v11
++
++    if-ltz v11, :cond_185
++
++    move-object v4, v14
++
++    goto/16 :goto_1f9
++
++    .line 211
++    :cond_185
++    const/4 v11, 0x0
++
++    invoke-virtual {v3, v11, v4}, Ljava/lang/String;->substring(II)Ljava/lang/String;
++
++    move-result-object v22
++
++    invoke-virtual/range {v22 .. v22}, Ljava/lang/String;->trim()Ljava/lang/String;
++
++    move-result-object v22
++
++    .line 212
++    add-int/lit8 v4, v4, 0x1
++
++    invoke-virtual {v3, v4}, Ljava/lang/String;->substring(I)Ljava/lang/String;
++
++    move-result-object v3
++
++    invoke-virtual {v3}, Ljava/lang/String;->trim()Ljava/lang/String;
++
++    move-result-object v3
++
++    .line 213
++    invoke-virtual/range {v22 .. v22}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v4
++
++    if-eqz v4, :cond_1ad
++
++    .line 214
++    invoke-static {v3}, Ljava/lang/Long;->parseLong(Ljava/lang/String;)J
++
++    move-result-wide v3
++
++    sub-long v3, v5, v3
++
++    move/from16 v23, v12
++
++    const-wide/16 v11, 0x0
++
++    invoke-static {v11, v12, v3, v4}, Ljava/lang/Math;->max(JJ)J
++
++    move-result-wide v3
++
++    goto :goto_1c3
++
++    .line 216
++    :cond_1ad
++    move/from16 v23, v12
++
++    invoke-static/range {v22 .. v22}, Ljava/lang/Long;->parseLong(Ljava/lang/String;)J
++
++    move-result-wide v11
++
++    .line 217
++    invoke-virtual {v3}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v4
++
++    if-nez v4, :cond_1c2
++
++    invoke-static {v3}, Ljava/lang/Long;->parseLong(Ljava/lang/String;)J
++
++    move-result-wide v3
++
++    invoke-static {v8, v9, v3, v4}, Ljava/lang/Math;->min(JJ)J
++
++    move-result-wide v3
++
++    move-wide v8, v3
++
++    :cond_1c2
++    move-wide v3, v11
++
++    .line 219
++    :goto_1c3
++    cmp-long v11, v3, v5
++
++    if-gez v11, :cond_1d0
++
++    cmp-long v11, v3, v8
++
++    if-lez v11, :cond_1cc
++
++    goto :goto_1d0
++
++    .line 225
++    :cond_1cc
++    move-wide v11, v3
++
++    move-object v4, v14
++
++    move-wide v7, v8
++
++    goto :goto_228
++
++    .line 220
++    :cond_1d0
++    :goto_1d0
++    const-string v0, "416 Range Not Satisfiable"
++
++    new-instance v3, Ljava/lang/StringBuilder;
++
++    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
++
++    invoke-virtual {v3, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v5, v6}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v10}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v9
++
++    const/4 v6, 0x0
++
++    const-wide/16 v7, 0x0
++
++    move-object v5, v0
++
++    move-object v4, v14
++
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    .line 222
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_1f2
++    .catchall {:try_start_17c .. :try_end_1f2} :catchall_5e
++
++    .line 259
++    if-eqz v1, :cond_1f7
++
++    :try_start_1f4
++    invoke-virtual {v1}, Ljava/net/Socket;->close()V
++    :try_end_1f7
++    .catchall {:try_start_1f4 .. :try_end_1f7} :catchall_26
++
++    .line 223
++    :cond_1f7
++    return-void
++
++    .line 205
++    :cond_1f8
++    move-object v4, v14
++
++    .line 206
++    :goto_1f9
++    :try_start_1f9
++    const-string v0, "416 Range Not Satisfiable"
++
++    new-instance v3, Ljava/lang/StringBuilder;
++
++    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
++
++    invoke-virtual {v3, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v5, v6}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v10}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v9
++
++    const/4 v6, 0x0
++
++    const-wide/16 v7, 0x0
++
++    move-object v5, v0
++
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    .line 208
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_21a
++    .catchall {:try_start_1f9 .. :try_end_21a} :catchall_5e
++
++    .line 259
++    if-eqz v1, :cond_21f
++
++    :try_start_21c
++    invoke-virtual {v1}, Ljava/net/Socket;->close()V
++    :try_end_21f
++    .catchall {:try_start_21c .. :try_end_21f} :catchall_26
++
++    .line 209
++    :cond_21f
++    return-void
++
++    .line 202
++    :cond_220
++    move/from16 v23, v12
++
++    move-object v4, v14
++
++    const-wide/16 v11, 0x0
++
++    .line 228
++    const/16 v18, 0x0
++
++    move-wide v7, v8
++
++    :goto_228
++    sub-long v20, v7, v11
++
++    add-long v20, v20, v16
++
++    .line 229
++    if-eqz v18, :cond_269
++
++    .line 230
++    :try_start_22e
++    const-string v3, "206 Partial Content"
++
++    const-string v9, "application/octet-stream"
++
++    new-instance v14, Ljava/lang/StringBuilder;
++
++    invoke-direct {v14}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v1, "Content-Range: bytes "
++
++    invoke-virtual {v14, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v11, v12}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    const-string v14, "-"
++
++    invoke-virtual {v1, v14}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v7, v8}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    const-string v14, "/"
++
++    invoke-virtual {v1, v14}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v5, v6}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v10}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++    :try_end_25d
++    .catchall {:try_start_22e .. :try_end_25d} :catchall_2fc
++
++    move-object/from16 v18, v2
++
++    move-object v5, v3
++
++    move-object v6, v9
++
++    move-object v9, v1
++
++    move-wide v1, v7
++
++    move-wide/from16 v7, v20
++
++    :try_start_265
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    goto :goto_276
++
++    .line 233
++    :cond_269
++    move-object/from16 v18, v2
++
++    move-wide v1, v7
++
++    move-wide/from16 v7, v20
++
++    const-string v5, "200 OK"
++
++    const-string v6, "application/octet-stream"
++
++    const/4 v9, 0x0
++
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    .line 235
++    :goto_276
++    if-eqz v23, :cond_281
++
++    .line 236
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_27b
++    .catchall {:try_start_265 .. :try_end_27b} :catchall_2fa
++
++    .line 259
++    if-eqz p0, :cond_280
++
++    :try_start_27d
++    invoke-virtual/range {p0 .. p0}, Ljava/net/Socket;->close()V
++    :try_end_280
++    .catchall {:try_start_27d .. :try_end_280} :catchall_30b
++
++    .line 237
++    :cond_280
++    return-void
++
++    .line 245
++    :cond_281
++    :try_start_281
++    sget-object v3, Lio/unica/fota/PartProxy;->appContext:Landroid/content/Context;
++
++    const-class v5, Landroid/net/ConnectivityManager;
++
++    invoke-virtual {v3, v5}, Landroid/content/Context;->getSystemService(Ljava/lang/Class;)Ljava/lang/Object;
++
++    move-result-object v3
++
++    check-cast v3, Landroid/net/ConnectivityManager;
++
++    .line 246
++    invoke-virtual {v3}, Landroid/net/ConnectivityManager;->getActiveNetwork()Landroid/net/Network;
++
++    move-result-object v5
++
++    .line 247
++    if-eqz v5, :cond_2de
++
++    .line 248
++    nop
++
++    .line 249
++    const/high16 v6, 0x10000
++
++    new-array v14, v6, [B
++
++    .line 250
++    move-wide/from16 v19, v11
++
++    const/4 v11, 0x0
++
++    :goto_299
++    if-ge v11, v0, :cond_2d5
++
++    cmp-long v6, v19, v1
++
++    if-gtz v6, :cond_2d5
++
++    .line 251
++    add-int/lit8 v21, v11, 0x1
++
++    aget-wide v6, v13, v21
++
++    cmp-long v6, v19, v6
++
++    if-ltz v6, :cond_2ab
++
++    move-object v6, v5
++
++    move-object v5, v3
++
++    move-object v3, v13
++
++    goto :goto_2cf
++
++    .line 252
++    :cond_2ab
++    aget-wide v6, v13, v11
++
++    sub-long v7, v19, v6
++
++    .line 253
++    aget-wide v9, v13, v21
++
++    sub-long v9, v9, v16
++
++    invoke-static {v1, v2, v9, v10}, Ljava/lang/Math;->min(JJ)J
++
++    move-result-wide v9
++
++    aget-wide v22, v13, v11
++
++    sub-long v9, v9, v22
++
++    .line 254
++    sub-long v22, v9, v7
++
++    add-long v22, v22, v16
++
++    .line 255
++    aget-object v6, v15, v11
++
++    move-object v11, v4
++
++    move-object v4, v3
++
++    move-object v3, v13
++
++    move-object v13, v11
++
++    move-wide/from16 v11, v22
++
++    invoke-static/range {v4 .. v14}, Lio/unica/fota/PartProxy;->copyPart(Landroid/net/ConnectivityManager;Landroid/net/Network;Ljava/lang/String;JJJLjava/io/OutputStream;[B)V
++
++    move-object v6, v5
++
++    move-object v5, v4
++
++    move-object v4, v13
++
++    .line 256
++    add-long v19, v19, v11
++
++    .line 250
++    :goto_2cf
++    move-object v13, v3
++
++    move-object v3, v5
++
++    move-object v5, v6
++
++    move/from16 v11, v21
++
++    goto :goto_299
++
++    .line 258
++    :cond_2d5
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_2d8
++    .catchall {:try_start_281 .. :try_end_2d8} :catchall_2fa
++
++    .line 259
++    if-eqz p0, :cond_2dd
++
++    :try_start_2da
++    invoke-virtual/range {p0 .. p0}, Ljava/net/Socket;->close()V
++    :try_end_2dd
++    .catchall {:try_start_2da .. :try_end_2dd} :catchall_30b
++
++    .line 263
++    :cond_2dd
++    goto :goto_313
++
++    .line 247
++    :cond_2de
++    :try_start_2de
++    new-instance v0, Ljava/io/IOException;
++
++    const-string v1, "no active network"
++
++    invoke-direct {v0, v1}, Ljava/io/IOException;-><init>(Ljava/lang/String;)V
++
++    throw v0
++
++    .line 169
++    :cond_2e6
++    move-object/from16 v18, v2
++
++    .line 170
++    :goto_2e8
++    const-string v5, "404 Not Found"
++
++    const-wide/16 v7, 0x0
++
++    const/4 v9, 0x0
++
++    const/4 v6, 0x0
++
++    invoke-static/range {v4 .. v9}, Lio/unica/fota/PartProxy;->writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++
++    .line 171
++    invoke-virtual {v4}, Ljava/io/OutputStream;->flush()V
++    :try_end_2f4
++    .catchall {:try_start_2de .. :try_end_2f4} :catchall_2fa
++
++    .line 259
++    if-eqz p0, :cond_2f9
++
++    :try_start_2f6
++    invoke-virtual/range {p0 .. p0}, Ljava/net/Socket;->close()V
++    :try_end_2f9
++    .catchall {:try_start_2f6 .. :try_end_2f9} :catchall_30b
++
++    .line 172
++    :cond_2f9
++    return-void
++
++    .line 142
++    :catchall_2fa
++    move-exception v0
++
++    goto :goto_2ff
++
++    :catchall_2fc
++    move-exception v0
++
++    move-object/from16 v18, v2
++
++    :goto_2ff
++    move-object v1, v0
++
++    :goto_300
++    if-eqz p0, :cond_30a
++
++    :try_start_302
++    invoke-virtual/range {p0 .. p0}, Ljava/net/Socket;->close()V
++    :try_end_305
++    .catchall {:try_start_302 .. :try_end_305} :catchall_306
++
++    goto :goto_30a
++
++    :catchall_306
++    move-exception v0
++
++    :try_start_307
++    invoke-virtual {v1, v0}, Ljava/lang/Throwable;->addSuppressed(Ljava/lang/Throwable;)V
++
++    :cond_30a
++    :goto_30a
++    throw v1
++    :try_end_30b
++    .catchall {:try_start_307 .. :try_end_30b} :catchall_30b
++
++    .line 259
++    :catchall_30b
++    move-exception v0
++
++    .line 262
++    :goto_30c
++    const-string v1, "part proxy: transfer aborted"
++
++    move-object/from16 v2, v18
++
++    invoke-static {v2, v1, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 264
++    :goto_313
++    return-void
++.end method
++
++.method static synthetic lambda$acceptLoop$1(Ljava/net/Socket;)V
++    .registers 1
++
++    .line 108
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->handle(Ljava/net/Socket;)V
++
++    return-void
++.end method
++
++.method static synthetic lambda$start$0(Ljava/net/ServerSocket;)V
++    .registers 1
++
++    .line 98
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->acceptLoop(Ljava/net/ServerSocket;)V
++
++    return-void
++.end method
++
++.method private static prefs(Landroid/content/Context;)Landroid/content/SharedPreferences;
++    .registers 3
++
++    .line 64
++    invoke-virtual {p0}, Landroid/content/Context;->getApplicationContext()Landroid/content/Context;
++
++    move-result-object p0
++
++    const-string v0, "unica_fota_parts"
++
++    const/4 v1, 0x0
++
++    invoke-virtual {p0, v0, v1}, Landroid/content/Context;->getSharedPreferences(Ljava/lang/String;I)Landroid/content/SharedPreferences;
++
++    move-result-object p0
++
++    return-object p0
++.end method
++
++.method static publish(Landroid/content/Context;Ljava/lang/String;Lorg/json/JSONArray;)V
++    .registers 5
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Ljava/io/IOException;
++        }
++    .end annotation
++
++    .line 80
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->prefs(Landroid/content/Context;)Landroid/content/SharedPreferences;
++
++    move-result-object v0
++
++    invoke-interface {v0}, Landroid/content/SharedPreferences;->edit()Landroid/content/SharedPreferences$Editor;
++
++    move-result-object v0
++
++    const-string v1, "dd"
++
++    invoke-interface {v0, v1, p1}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
++
++    move-result-object p1
++
++    const-string v0, "parts"
++
++    invoke-virtual {p2}, Lorg/json/JSONArray;->toString()Ljava/lang/String;
++
++    move-result-object p2
++
++    invoke-interface {p1, v0, p2}, Landroid/content/SharedPreferences$Editor;->putString(Ljava/lang/String;Ljava/lang/String;)Landroid/content/SharedPreferences$Editor;
++
++    move-result-object p1
++
++    invoke-interface {p1}, Landroid/content/SharedPreferences$Editor;->commit()Z
++
++    .line 81
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->start(Landroid/content/Context;)V
++
++    .line 82
++    return-void
++.end method
++
++.method private static readLine(Ljava/io/InputStream;)Ljava/lang/String;
++    .registers 5
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Ljava/io/IOException;
++        }
++    .end annotation
++
++    .line 118
++    new-instance v0, Ljava/lang/StringBuilder;
++
++    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
++
++    .line 120
++    :goto_5
++    invoke-virtual {p0}, Ljava/io/InputStream;->read()I
++
++    move-result v1
++
++    const/4 v2, -0x1
++
++    if-eq v1, v2, :cond_2a
++
++    .line 121
++    const/16 v3, 0xa
++
++    if-ne v1, v3, :cond_11
++
++    goto :goto_2a
++
++    .line 122
++    :cond_11
++    const/16 v2, 0xd
++
++    if-eq v1, v2, :cond_19
++
++    int-to-char v1, v1
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(C)Ljava/lang/StringBuilder;
++
++    .line 123
++    :cond_19
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->length()I
++
++    move-result v1
++
++    const/16 v2, 0x2000
++
++    if-gt v1, v2, :cond_22
++
++    goto :goto_5
++
++    :cond_22
++    new-instance p0, Ljava/io/IOException;
++
++    const-string v0, "header line too long"
++
++    invoke-direct {p0, v0}, Ljava/io/IOException;-><init>(Ljava/lang/String;)V
++
++    throw p0
++
++    .line 125
++    :cond_2a
++    :goto_2a
++    if-ne v1, v2, :cond_34
++
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->length()I
++
++    move-result p0
++
++    if-nez p0, :cond_34
++
++    const/4 p0, 0x0
++
++    return-object p0
++
++    .line 126
++    :cond_34
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object p0
++
++    return-object p0
++.end method
++
++.method private static declared-synchronized start(Landroid/content/Context;)V
++    .registers 6
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Ljava/io/IOException;
++        }
++    .end annotation
++
++    const-class v0, Lio/unica/fota/PartProxy;
++
++    monitor-enter v0
++
++    .line 90
++    :try_start_3
++    invoke-virtual {p0}, Landroid/content/Context;->getApplicationContext()Landroid/content/Context;
++
++    move-result-object p0
++
++    sput-object p0, Lio/unica/fota/PartProxy;->appContext:Landroid/content/Context;
++
++    .line 91
++    sget-object p0, Lio/unica/fota/PartProxy;->server:Ljava/net/ServerSocket;
++
++    if-eqz p0, :cond_17
++
++    sget-object p0, Lio/unica/fota/PartProxy;->server:Ljava/net/ServerSocket;
++
++    invoke-virtual {p0}, Ljava/net/ServerSocket;->isClosed()Z
++
++    move-result p0
++    :try_end_13
++    .catchall {:try_start_3 .. :try_end_13} :catchall_4e
++
++    if-nez p0, :cond_17
++
++    .line 92
++    monitor-exit v0
++
++    return-void
++
++    .line 94
++    :cond_17
++    :try_start_17
++    new-instance p0, Ljava/net/ServerSocket;
++
++    invoke-direct {p0}, Ljava/net/ServerSocket;-><init>()V
++
++    .line 95
++    const/4 v1, 0x1
++
++    invoke-virtual {p0, v1}, Ljava/net/ServerSocket;->setReuseAddress(Z)V
++
++    .line 96
++    new-instance v2, Ljava/net/InetSocketAddress;
++
++    const-string v3, "127.0.0.1"
++
++    invoke-static {v3}, Ljava/net/InetAddress;->getByName(Ljava/lang/String;)Ljava/net/InetAddress;
++
++    move-result-object v3
++
++    const v4, 0xbacd
++
++    invoke-direct {v2, v3, v4}, Ljava/net/InetSocketAddress;-><init>(Ljava/net/InetAddress;I)V
++
++    invoke-virtual {p0, v2}, Ljava/net/ServerSocket;->bind(Ljava/net/SocketAddress;)V
++
++    .line 97
++    sput-object p0, Lio/unica/fota/PartProxy;->server:Ljava/net/ServerSocket;
++
++    .line 98
++    new-instance v2, Ljava/lang/Thread;
++
++    new-instance v3, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda1;
++
++    invoke-direct {v3, p0}, Lio/unica/fota/PartProxy$$ExternalSyntheticLambda1;-><init>(Ljava/net/ServerSocket;)V
++
++    const-string p0, "UnicaFotaProxy"
++
++    invoke-direct {v2, v3, p0}, Ljava/lang/Thread;-><init>(Ljava/lang/Runnable;Ljava/lang/String;)V
++
++    .line 99
++    invoke-virtual {v2, v1}, Ljava/lang/Thread;->setDaemon(Z)V
++
++    .line 100
++    invoke-virtual {v2}, Ljava/lang/Thread;->start()V
++
++    .line 101
++    const-string p0, "UnicaFota"
++
++    const-string v1, "part proxy listening on http://127.0.0.1:47821"
++
++    invoke-static {p0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++    :try_end_4c
++    .catchall {:try_start_17 .. :try_end_4c} :catchall_4e
++
++    .line 102
++    monitor-exit v0
++
++    return-void
++
++    .line 89
++    :catchall_4e
++    move-exception p0
++
++    :try_start_4f
++    monitor-exit v0
++    :try_end_50
++    .catchall {:try_start_4f .. :try_end_50} :catchall_4e
++
++    throw p0
++.end method
++
++.method public static startIfPending(Landroid/content/Context;)V
++    .registers 3
++
++    .line 70
++    :try_start_0
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->prefs(Landroid/content/Context;)Landroid/content/SharedPreferences;
++
++    move-result-object v0
++
++    const-string v1, "parts"
++
++    invoke-interface {v0, v1}, Landroid/content/SharedPreferences;->contains(Ljava/lang/String;)Z
++
++    move-result v0
++
++    if-eqz v0, :cond_f
++
++    .line 71
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->start(Landroid/content/Context;)V
++    :try_end_f
++    .catchall {:try_start_0 .. :try_end_f} :catchall_10
++
++    .line 75
++    :cond_f
++    goto :goto_18
++
++    .line 73
++    :catchall_10
++    move-exception p0
++
++    .line 74
++    const-string v0, "UnicaFota"
++
++    const-string v1, "part proxy: cannot start"
++
++    invoke-static {v0, v1, p0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 76
++    :goto_18
++    return-void
++.end method
++
++.method private static writeHead(Ljava/io/OutputStream;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;)V
++    .registers 8
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Ljava/io/IOException;
++        }
++    .end annotation
++
++    .line 131
++    new-instance v0, Ljava/lang/StringBuilder;
++
++    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
++
++    .line 132
++    const-string v1, "HTTP/1.1 "
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object p1
++
++    const-string v1, "\r\n"
++
++    invoke-virtual {p1, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    .line 133
++    if-eqz p2, :cond_23
++
++    const-string p1, "Content-Type: "
++
++    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object p1
++
++    invoke-virtual {p1, p2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object p1
++
++    invoke-virtual {p1, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    .line 134
++    :cond_23
++    const-string p1, "Content-Length: "
++
++    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object p1
++
++    invoke-virtual {p1, p3, p4}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object p1
++
++    invoke-virtual {p1, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    .line 135
++    const-string p1, "Accept-Ranges: bytes\r\n"
++
++    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    .line 136
++    if-eqz p5, :cond_3a
++
++    invoke-virtual {v0, p5}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    .line 137
++    :cond_3a
++    const-string p1, "Connection: close\r\n\r\n"
++
++    invoke-virtual {v0, p1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    .line 138
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object p1
++
++    sget-object p2, Ljava/nio/charset/StandardCharsets;->US_ASCII:Ljava/nio/charset/Charset;
++
++    invoke-virtual {p1, p2}, Ljava/lang/String;->getBytes(Ljava/nio/charset/Charset;)[B
++
++    move-result-object p1
++
++    invoke-virtual {p0, p1}, Ljava/io/OutputStream;->write([B)V
++
++    .line 139
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda0.smali b/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda0.smali
+new file mode 100644
+index 0000000..207ec68
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda0.smali
+@@ -0,0 +1,36 @@
++.class public final synthetic Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda0;
++.super Ljava/lang/Object;
++.source "D8$$SyntheticClass"
++
++# interfaces
++.implements Ljava/lang/Runnable;
++
++
++# instance fields
++.field public final synthetic f$0:Ljava/util/concurrent/CountDownLatch;
++
++
++# direct methods
++.method public synthetic constructor <init>(Ljava/util/concurrent/CountDownLatch;)V
++    .registers 2
++
++    .line 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    iput-object p1, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda0;->f$0:Ljava/util/concurrent/CountDownLatch;
++
++    return-void
++.end method
++
++
++# virtual methods
++.method public final run()V
++    .registers 2
++
++    .line 0
++    iget-object v0, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda0;->f$0:Ljava/util/concurrent/CountDownLatch;
++
++    invoke-virtual {v0}, Ljava/util/concurrent/CountDownLatch;->countDown()V
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda1.smali b/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda1.smali
+new file mode 100644
+index 0000000..8fec79f
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda1.smali
+@@ -0,0 +1,42 @@
++.class public final synthetic Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;
++.super Ljava/lang/Object;
++.source "D8$$SyntheticClass"
++
++# interfaces
++.implements Ljava/lang/Runnable;
++
++
++# instance fields
++.field public final synthetic f$0:Landroid/os/Handler;
++
++.field public final synthetic f$1:Ljava/util/concurrent/CountDownLatch;
++
++
++# direct methods
++.method public synthetic constructor <init>(Landroid/os/Handler;Ljava/util/concurrent/CountDownLatch;)V
++    .registers 3
++
++    .line 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    iput-object p1, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;->f$0:Landroid/os/Handler;
++
++    iput-object p2, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;->f$1:Ljava/util/concurrent/CountDownLatch;
++
++    return-void
++.end method
++
++
++# virtual methods
++.method public final run()V
++    .registers 3
++
++    .line 0
++    iget-object v0, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;->f$0:Landroid/os/Handler;
++
++    iget-object v1, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;->f$1:Ljava/util/concurrent/CountDownLatch;
++
++    invoke-static {v0, v1}, Lio/unica/fota/UpdateChecker;->lambda$waitForScheduler$1(Landroid/os/Handler;Ljava/util/concurrent/CountDownLatch;)V
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda2.smali b/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda2.smali
+new file mode 100644
+index 0000000..bef6176
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateChecker$$ExternalSyntheticLambda2.smali
+@@ -0,0 +1,36 @@
++.class public final synthetic Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda2;
++.super Ljava/lang/Object;
++.source "D8$$SyntheticClass"
++
++# interfaces
++.implements Ljava/lang/Runnable;
++
++
++# instance fields
++.field public final synthetic f$0:Ljava/lang/String;
++
++
++# direct methods
++.method public synthetic constructor <init>(Ljava/lang/String;)V
++    .registers 2
++
++    .line 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    iput-object p1, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda2;->f$0:Ljava/lang/String;
++
++    return-void
++.end method
++
++
++# virtual methods
++.method public final run()V
++    .registers 2
++
++    .line 0
++    iget-object v0, p0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda2;->f$0:Ljava/lang/String;
++
++    invoke-static {v0}, Lio/unica/fota/UpdateChecker;->lambda$startDMTask$0(Ljava/lang/String;)V
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/UpdateChecker$CheckFailed.smali b/smali_classes2/io/unica/fota/UpdateChecker$CheckFailed.smali
+new file mode 100644
+index 0000000..80303ef
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateChecker$CheckFailed.smali
+@@ -0,0 +1,25 @@
++.class final Lio/unica/fota/UpdateChecker$CheckFailed;
++.super Ljava/lang/Exception;
++.source "UpdateChecker.java"
++
++
++# annotations
++.annotation system Ldalvik/annotation/EnclosingClass;
++    value = Lio/unica/fota/UpdateChecker;
++.end annotation
++
++.annotation system Ldalvik/annotation/InnerClass;
++    accessFlags = 0x18
++    name = "CheckFailed"
++.end annotation
++
++
++# direct methods
++.method constructor <init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++    .registers 3
++
++    .line 72
++    invoke-direct {p0, p1, p2}, Ljava/lang/Exception;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/UpdateChecker.smali b/smali_classes2/io/unica/fota/UpdateChecker.smali
+new file mode 100644
+index 0000000..e2b0591
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateChecker.smali
+@@ -0,0 +1,1716 @@
++.class public final Lio/unica/fota/UpdateChecker;
++.super Ljava/lang/Object;
++.source "UpdateChecker.java"
++
++
++# annotations
++.annotation system Ldalvik/annotation/MemberClasses;
++    value = {
++        Lio/unica/fota/UpdateChecker$CheckFailed;
++    }
++.end annotation
++
++
++# static fields
++.field private static final DAY_MS:J = 0x5265c00L
++
++.field private static final MAX_MANIFEST_BYTES:I = 0x100000
++
++.field private static final STR_FOTA_LATEST_VERSION:I = 0x7f13006e
++
++.field private static final TAG:Ljava/lang/String; = "UnicaFota"
++
++.field private static final TIMEOUT_MS:I = 0x7530
++
++
++# direct methods
++.method private constructor <init>()V
++    .registers 1
++
++    .line 68
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++
++    return-void
++.end method
++
++.method private static fetch(Ljava/lang/String;)Ljava/lang/String;
++    .registers 7
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Ljava/lang/Exception;
++        }
++    .end annotation
++
++    .line 94
++    new-instance v0, Ljava/net/URL;
++
++    invoke-direct {v0, p0}, Ljava/net/URL;-><init>(Ljava/lang/String;)V
++
++    invoke-virtual {v0}, Ljava/net/URL;->openConnection()Ljava/net/URLConnection;
++
++    move-result-object v0
++
++    check-cast v0, Ljava/net/HttpURLConnection;
++
++    .line 96
++    const/16 v1, 0x7530
++
++    :try_start_d
++    invoke-virtual {v0, v1}, Ljava/net/HttpURLConnection;->setConnectTimeout(I)V
++
++    .line 97
++    invoke-virtual {v0, v1}, Ljava/net/HttpURLConnection;->setReadTimeout(I)V
++
++    .line 98
++    const/4 v1, 0x1
++
++    invoke-virtual {v0, v1}, Ljava/net/HttpURLConnection;->setInstanceFollowRedirects(Z)V
++
++    .line 99
++    const/4 v1, 0x0
++
++    invoke-virtual {v0, v1}, Ljava/net/HttpURLConnection;->setUseCaches(Z)V
++
++    .line 100
++    const-string v2, "Cache-Control"
++
++    const-string v3, "no-cache"
++
++    invoke-virtual {v0, v2, v3}, Ljava/net/HttpURLConnection;->setRequestProperty(Ljava/lang/String;Ljava/lang/String;)V
++
++    .line 101
++    invoke-virtual {v0}, Ljava/net/HttpURLConnection;->getResponseCode()I
++
++    move-result v2
++
++    .line 102
++    const/16 v3, 0xc8
++
++    if-ne v2, v3, :cond_6c
++
++    .line 105
++    invoke-virtual {v0}, Ljava/net/HttpURLConnection;->getInputStream()Ljava/io/InputStream;
++
++    move-result-object p0
++    :try_end_2e
++    .catchall {:try_start_d .. :try_end_2e} :catchall_8f
++
++    .line 106
++    :try_start_2e
++    new-instance v2, Ljava/io/ByteArrayOutputStream;
++
++    invoke-direct {v2}, Ljava/io/ByteArrayOutputStream;-><init>()V
++
++    .line 107
++    const/16 v3, 0x2000
++
++    new-array v3, v3, [B
++
++    .line 109
++    :goto_37
++    invoke-virtual {p0, v3}, Ljava/io/InputStream;->read([B)I
++
++    move-result v4
++
++    if-lez v4, :cond_51
++
++    .line 110
++    invoke-virtual {v2, v3, v1, v4}, Ljava/io/ByteArrayOutputStream;->write([BII)V
++
++    .line 111
++    invoke-virtual {v2}, Ljava/io/ByteArrayOutputStream;->size()I
++
++    move-result v4
++
++    const/high16 v5, 0x100000
++
++    if-gt v4, v5, :cond_49
++
++    goto :goto_37
++
++    .line 112
++    :cond_49
++    new-instance v1, Ljava/lang/Exception;
++
++    const-string v2, "manifest too large"
++
++    invoke-direct {v1, v2}, Ljava/lang/Exception;-><init>(Ljava/lang/String;)V
++
++    throw v1
++
++    .line 115
++    :cond_51
++    const-string v1, "UTF-8"
++
++    invoke-virtual {v2, v1}, Ljava/io/ByteArrayOutputStream;->toString(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v1
++    :try_end_57
++    .catchall {:try_start_2e .. :try_end_57} :catchall_60
++
++    .line 116
++    if-eqz p0, :cond_5c
++
++    :try_start_59
++    invoke-virtual {p0}, Ljava/io/InputStream;->close()V
++    :try_end_5c
++    .catchall {:try_start_59 .. :try_end_5c} :catchall_8f
++
++    .line 118
++    :cond_5c
++    invoke-virtual {v0}, Ljava/net/HttpURLConnection;->disconnect()V
++
++    .line 115
++    return-object v1
++
++    .line 105
++    :catchall_60
++    move-exception v1
++
++    if-eqz p0, :cond_6b
++
++    :try_start_63
++    invoke-virtual {p0}, Ljava/io/InputStream;->close()V
++    :try_end_66
++    .catchall {:try_start_63 .. :try_end_66} :catchall_67
++
++    goto :goto_6b
++
++    :catchall_67
++    move-exception p0
++
++    :try_start_68
++    invoke-virtual {v1, p0}, Ljava/lang/Throwable;->addSuppressed(Ljava/lang/Throwable;)V
++
++    :cond_6b
++    :goto_6b
++    throw v1
++
++    .line 103
++    :cond_6c
++    new-instance v1, Ljava/lang/Exception;
++
++    new-instance v3, Ljava/lang/StringBuilder;
++
++    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v4, "HTTP "
++
++    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v2}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    const-string v3, " for "
++
++    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object p0
++
++    invoke-virtual {p0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object p0
++
++    invoke-direct {v1, p0}, Ljava/lang/Exception;-><init>(Ljava/lang/String;)V
++
++    throw v1
++    :try_end_8f
++    .catchall {:try_start_68 .. :try_end_8f} :catchall_8f
++
++    .line 118
++    :catchall_8f
++    move-exception p0
++
++    invoke-virtual {v0}, Ljava/net/HttpURLConnection;->disconnect()V
++
++    .line 119
++    throw p0
++.end method
++
++.method static findUpdate(Landroid/content/Context;)Ljava/lang/String;
++    .registers 2
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Lio/unica/fota/UpdateChecker$CheckFailed;
++        }
++    .end annotation
++
++    .line 127
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->selectUpdate(Landroid/content/Context;)Ljava/lang/String;
++
++    move-result-object v0
++
++    .line 128
++    if-nez v0, :cond_9
++
++    .line 129
++    invoke-static {p0}, Lio/unica/fota/PartProxy;->clear(Landroid/content/Context;)V
++
++    .line 131
++    :cond_9
++    return-object v0
++.end method
++
++.method private static finishSession(Ljava/lang/String;)V
++    .registers 5
++
++    .line 313
++    invoke-static {p0}, Lcom/idm/fotaagent/enabler/fumo/IntentManager;->sendFotaStatus(Ljava/lang/String;)V
++
++    .line 314
++    sget-object v0, Lcom/idm/fotaagent/enabler/ui/notification/manager/NotificationId;->NOTIFICATION_ID_PRIMARY:Lcom/idm/fotaagent/enabler/ui/notification/manager/NotificationId;
++
++    invoke-static {v0}, Lcom/idm/fotaagent/enabler/ui/notification/manager/NotificationTypeManager;->cancel(Lcom/idm/fotaagent/enabler/ui/notification/manager/NotificationId;)V
++
++    .line 315
++    invoke-static {}, Lcom/idm/fotaagent/scheduler/IDMSchedulerHandler;->getInstance()Lcom/idm/fotaagent/scheduler/IDMSchedulerHandler;
++
++    move-result-object v0
++
++    sget-object v1, Lcom/idm/fotaagent/scheduler/interfaces/IDMSchedulerInterface$IDM_SCHEDULE_EVENT;->SCHEDULE_EVENT_SCHEDULE_FINISH:Lcom/idm/fotaagent/scheduler/interfaces/IDMSchedulerInterface$IDM_SCHEDULE_EVENT;
++
++    const-wide/16 v2, 0x0
++
++    invoke-virtual {v0, v1, p0, v2, v3}, Lcom/idm/fotaagent/scheduler/IDMSchedulerHandler;->idmSendMessage(Lcom/idm/fotaagent/scheduler/interfaces/IDMSchedulerInterface$IDM_SCHEDULE_EVENT;Ljava/lang/Object;J)V
++
++    .line 317
++    return-void
++.end method
++
++.method public static firstPollingTime()J
++    .registers 4
++
++    .line 299
++    invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
++
++    move-result-wide v0
++
++    const-wide/32 v2, 0x493e0
++
++    add-long/2addr v0, v2
++
++    new-instance v2, Ljava/util/Random;
++
++    invoke-direct {v2}, Ljava/util/Random;-><init>()V
++
++    const v3, 0x493e0
++
++    invoke-virtual {v2, v3}, Ljava/util/Random;->nextInt(I)I
++
++    move-result v2
++
++    int-to-long v2, v2
++
++    add-long/2addr v0, v2
++
++    return-wide v0
++.end method
++
++.method private static getProp(Ljava/lang/String;)Ljava/lang/String;
++    .registers 7
++
++    .line 77
++    const-string v0, ""
++
++    :try_start_2
++    const-string v1, "android.os.SystemProperties"
++
++    invoke-static {v1}, Ljava/lang/Class;->forName(Ljava/lang/String;)Ljava/lang/Class;
++
++    move-result-object v1
++
++    .line 78
++    const-string v2, "get"
++
++    const/4 v3, 0x2
++
++    new-array v3, v3, [Ljava/lang/Class;
++
++    const-class v4, Ljava/lang/String;
++
++    const/4 v5, 0x0
++
++    aput-object v4, v3, v5
++
++    const-class v4, Ljava/lang/String;
++
++    const/4 v5, 0x1
++
++    aput-object v4, v3, v5
++
++    invoke-virtual {v1, v2, v3}, Ljava/lang/Class;->getMethod(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;
++
++    move-result-object v1
++
++    filled-new-array {p0, v0}, [Ljava/lang/Object;
++
++    move-result-object p0
++
++    .line 79
++    const/4 v2, 0x0
++
++    invoke-virtual {v1, v2, p0}, Ljava/lang/reflect/Method;->invoke(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;
++
++    move-result-object p0
++
++    check-cast p0, Ljava/lang/String;
++    :try_end_26
++    .catchall {:try_start_2 .. :try_end_26} :catchall_27
++
++    .line 78
++    return-object p0
++
++    .line 80
++    :catchall_27
++    move-exception p0
++
++    .line 81
++    return-object v0
++.end method
++
++.method private static jobPending()Z
++    .registers 4
++
++    .line 282
++    const/4 v0, 0x1
++
++    :try_start_1
++    new-instance v1, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
++
++    invoke-direct {v1}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;-><init>()V
++
++    invoke-virtual {v1}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->getEntity()Ljava/lang/Object;
++
++    move-result-object v1
++    :try_end_a
++    .catchall {:try_start_1 .. :try_end_a} :catchall_f
++
++    if-eqz v1, :cond_d
++
++    goto :goto_e
++
++    :cond_d
++    const/4 v0, 0x0
++
++    :goto_e
++    return v0
++
++    .line 283
++    :catchall_f
++    move-exception v1
++
++    .line 284
++    const-string v2, "UnicaFota"
++
++    const-string v3, "cannot read the job table"
++
++    invoke-static {v2, v3, v1}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 285
++    return v0
++.end method
++
++.method static synthetic lambda$startDMTask$0(Ljava/lang/String;)V
++    .registers 1
++
++    .line 309
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->runUserCheck(Ljava/lang/String;)V
++
++    return-void
++.end method
++
++.method static synthetic lambda$waitForScheduler$1(Landroid/os/Handler;Ljava/util/concurrent/CountDownLatch;)V
++    .registers 3
++
++    .line 330
++    invoke-static {p1}, Ljava/util/Objects;->requireNonNull(Ljava/lang/Object;)Ljava/lang/Object;
++
++    new-instance v0, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda0;
++
++    invoke-direct {v0, p1}, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda0;-><init>(Ljava/util/concurrent/CountDownLatch;)V
++
++    invoke-virtual {p0, v0}, Landroid/os/Handler;->post(Ljava/lang/Runnable;)Z
++
++    return-void
++.end method
++
++.method public static nextPollingTime()J
++    .registers 4
++
++    .line 291
++    invoke-static {}, Ljava/lang/System;->currentTimeMillis()J
++
++    move-result-wide v0
++
++    const-wide/32 v2, 0x5265c00
++
++    add-long/2addr v0, v2
++
++    new-instance v2, Ljava/util/Random;
++
++    invoke-direct {v2}, Ljava/util/Random;-><init>()V
++
++    const v3, 0x6ddd00
++
++    invoke-virtual {v2, v3}, Ljava/util/Random;->nextInt(I)I
++
++    move-result v2
++
++    int-to-long v2, v2
++
++    add-long/2addr v0, v2
++
++    return-wide v0
++.end method
++
++.method private static parseLong(Ljava/lang/String;)J
++    .registers 3
++
++    .line 87
++    :try_start_0
++    invoke-virtual {p0}, Ljava/lang/String;->trim()Ljava/lang/String;
++
++    move-result-object p0
++
++    invoke-static {p0}, Ljava/lang/Long;->parseLong(Ljava/lang/String;)J
++
++    move-result-wide v0
++    :try_end_8
++    .catch Ljava/lang/Exception; {:try_start_0 .. :try_end_8} :catch_9
++
++    return-wide v0
++
++    .line 88
++    :catch_9
++    move-exception p0
++
++    .line 89
++    const-wide/16 v0, -0x1
++
++    return-wide v0
++.end method
++
++.method public static poll(Landroid/content/Context;)Z
++    .registers 5
++
++    .line 263
++    invoke-static {}, Lio/unica/fota/UpdateChecker;->jobPending()Z
++
++    move-result v0
++
++    const/4 v1, 0x1
++
++    const-string v2, "UnicaFota"
++
++    if-eqz v0, :cond_f
++
++    .line 264
++    const-string p0, "periodic check skipped: an update job is already pending"
++
++    invoke-static {v2, p0}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 265
++    return v1
++
++    .line 268
++    :cond_f
++    :try_start_f
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->findUpdate(Landroid/content/Context;)Ljava/lang/String;
++
++    move-result-object v0
++
++    .line 269
++    if-eqz v0, :cond_1d
++
++    .line 270
++    new-instance v3, Lio/unica/fota/UpdateReceiver$Job;
++
++    invoke-direct {v3, p0, v0}, Lio/unica/fota/UpdateReceiver$Job;-><init>(Landroid/content/Context;Ljava/lang/String;)V
++
++    invoke-virtual {v3}, Lio/unica/fota/UpdateReceiver$Job;->run()V
++    :try_end_1d
++    .catch Lio/unica/fota/UpdateChecker$CheckFailed; {:try_start_f .. :try_end_1d} :catch_1e
++
++    .line 272
++    :cond_1d
++    return v1
++
++    .line 273
++    :catch_1e
++    move-exception p0
++
++    .line 274
++    const-string v0, "periodic check failed"
++
++    invoke-static {v2, v0, p0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 275
++    const/4 p0, 0x0
++
++    return p0
++.end method
++
++.method private static publishParts(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lorg/json/JSONArray;)Ljava/lang/String;
++    .registers 19
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Lio/unica/fota/UpdateChecker$CheckFailed;
++        }
++    .end annotation
++
++    .line 213
++    const-string v0, "url"
++
++    const-string v1, "size"
++
++    new-instance v2, Lorg/json/JSONArray;
++
++    invoke-direct {v2}, Lorg/json/JSONArray;-><init>()V
++
++    .line 214
++    nop
++
++    .line 216
++    :try_start_a
++    invoke-virtual/range {p3 .. p3}, Lorg/json/JSONArray;->length()I
++
++    move-result v3
++
++    if-eqz v3, :cond_fe
++
++    .line 217
++    const-wide/16 v3, 0x0
++
++    const/4 v5, 0x0
++
++    move-wide v6, v3
++
++    :goto_14
++    invoke-virtual/range {p3 .. p3}, Lorg/json/JSONArray;->length()I
++
++    move-result v8
++
++    if-ge v5, v8, :cond_69
++
++    .line 218
++    move-object/from16 v8, p3
++
++    invoke-virtual {v8, v5}, Lorg/json/JSONArray;->getJSONObject(I)Lorg/json/JSONObject;
++
++    move-result-object v9
++
++    .line 219
++    invoke-virtual {v9, v1}, Lorg/json/JSONObject;->getLong(Ljava/lang/String;)J
++
++    move-result-wide v10
++
++    .line 220
++    cmp-long v12, v10, v3
++
++    if-lez v12, :cond_50
++
++    .line 221
++    new-instance v12, Ljava/net/URL;
++
++    new-instance v13, Ljava/net/URL;
++
++    move-object/from16 v14, p1
++
++    invoke-direct {v13, v14}, Ljava/net/URL;-><init>(Ljava/lang/String;)V
++
++    invoke-virtual {v9, v0}, Lorg/json/JSONObject;->getString(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v9
++
++    invoke-direct {v12, v13, v9}, Ljava/net/URL;-><init>(Ljava/net/URL;Ljava/lang/String;)V
++
++    invoke-virtual {v12}, Ljava/net/URL;->toString()Ljava/lang/String;
++
++    move-result-object v9
++
++    .line 222
++    new-instance v12, Lorg/json/JSONObject;
++
++    invoke-direct {v12}, Lorg/json/JSONObject;-><init>()V
++
++    invoke-virtual {v12, v0, v9}, Lorg/json/JSONObject;->put(Ljava/lang/String;Ljava/lang/Object;)Lorg/json/JSONObject;
++
++    move-result-object v9
++
++    invoke-virtual {v9, v1, v10, v11}, Lorg/json/JSONObject;->put(Ljava/lang/String;J)Lorg/json/JSONObject;
++
++    move-result-object v9
++
++    invoke-virtual {v2, v9}, Lorg/json/JSONArray;->put(Ljava/lang/Object;)Lorg/json/JSONArray;
++
++    .line 223
++    add-long/2addr v6, v10
++
++    .line 217
++    add-int/lit8 v5, v5, 0x1
++
++    goto :goto_14
++
++    .line 220
++    :cond_50
++    new-instance p0, Ljava/lang/Exception;
++
++    new-instance v0, Ljava/lang/StringBuilder;
++
++    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v1, "bad size for part "
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0, v5}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-direct {p0, v0}, Ljava/lang/Exception;-><init>(Ljava/lang/String;)V
++
++    throw p0
++    :try_end_69
++    .catch Ljava/lang/Exception; {:try_start_a .. :try_end_69} :catch_106
++
++    .line 227
++    :cond_69
++    nop
++
++    .line 231
++    :try_start_6a
++    invoke-static/range {p2 .. p2}, Lio/unica/fota/UpdateChecker;->fetch(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v0
++    :try_end_6e
++    .catch Ljava/lang/Exception; {:try_start_6a .. :try_end_6e} :catch_e1
++
++    .line 234
++    nop
++
++    .line 235
++    const-string v1, "<size>\\s*(\\d+)\\s*</size>"
++
++    invoke-static {v1}, Ljava/util/regex/Pattern;->compile(Ljava/lang/String;)Ljava/util/regex/Pattern;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v0}, Ljava/util/regex/Pattern;->matcher(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;
++
++    move-result-object v1
++
++    .line 236
++    invoke-virtual {v1}, Ljava/util/regex/Matcher;->find()Z
++
++    move-result v3
++
++    const/4 v4, 0x0
++
++    if-eqz v3, :cond_c2
++
++    const/4 v3, 0x1
++
++    invoke-virtual {v1, v3}, Ljava/util/regex/Matcher;->group(I)Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-static {v1}, Ljava/lang/Long;->parseLong(Ljava/lang/String;)J
++
++    move-result-wide v8
++
++    cmp-long v1, v8, v6
++
++    if-nez v1, :cond_c2
++
++    .line 239
++    const-string v1, "<objectURI>.*?</objectURI>"
++
++    const/16 v3, 0x20
++
++    invoke-static {v1, v3}, Ljava/util/regex/Pattern;->compile(Ljava/lang/String;I)Ljava/util/regex/Pattern;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v0}, Ljava/util/regex/Pattern;->matcher(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;
++
++    move-result-object v0
++
++    .line 240
++    invoke-virtual {v0}, Ljava/util/regex/Matcher;->find()Z
++
++    move-result v1
++
++    if-eqz v1, :cond_ba
++
++    .line 243
++    const-string v1, "<objectURI>http://127.0.0.1:47821/unica/package.bin</objectURI>"
++
++    invoke-static {v1}, Ljava/util/regex/Matcher;->quoteReplacement(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-virtual {v0, v1}, Ljava/util/regex/Matcher;->replaceFirst(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v0
++
++    .line 247
++    :try_start_a9
++    invoke-static {p0, v0, v2}, Lio/unica/fota/PartProxy;->publish(Landroid/content/Context;Ljava/lang/String;Lorg/json/JSONArray;)V
++    :try_end_ac
++    .catch Ljava/lang/Exception; {:try_start_a9 .. :try_end_ac} :catch_b0
++
++    .line 250
++    nop
++
++    .line 251
++    const-string p0, "http://127.0.0.1:47821/unica/dd.xml"
++
++    return-object p0
++
++    .line 248
++    :catch_b0
++    move-exception v0
++
++    move-object p0, v0
++
++    .line 249
++    new-instance v0, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    const-string v1, "cannot start the part proxy"
++
++    invoke-direct {v0, v1, p0}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw v0
++
++    .line 241
++    :cond_ba
++    new-instance p0, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    const-string v0, "descriptor has no objectURI"
++
++    invoke-direct {p0, v0, v4}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw p0
++
++    .line 237
++    :cond_c2
++    new-instance p0, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    new-instance v0, Ljava/lang/StringBuilder;
++
++    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v1, "descriptor size does not match the parts ("
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0, v6, v7}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    const-string v1, ")"
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-direct {p0, v0, v4}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw p0
++
++    .line 232
++    :catch_e1
++    move-exception v0
++
++    move-object p0, v0
++
++    .line 233
++    new-instance v0, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    new-instance v1, Ljava/lang/StringBuilder;
++
++    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v2, "cannot read "
++
++    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    move-object/from16 v2, p2
++
++    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-direct {v0, v1, p0}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw v0
++
++    .line 216
++    :cond_fe
++    :try_start_fe
++    new-instance p0, Ljava/lang/Exception;
++
++    const-string v0, "empty part list"
++
++    invoke-direct {p0, v0}, Ljava/lang/Exception;-><init>(Ljava/lang/String;)V
++
++    throw p0
++    :try_end_106
++    .catch Ljava/lang/Exception; {:try_start_fe .. :try_end_106} :catch_106
++
++    .line 225
++    :catch_106
++    move-exception v0
++
++    move-object p0, v0
++
++    .line 226
++    new-instance v0, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    const-string v1, "bad part list"
++
++    invoke-direct {v0, v1, p0}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw v0
++.end method
++
++.method private static runUserCheck(Ljava/lang/String;)V
++    .registers 5
++
++    .line 347
++    const-string v0, "UnicaFota"
++
++    :try_start_2
++    invoke-static {}, Lcom/idm/fotaagent/IDMApplication;->idmGetContext()Landroid/content/Context;
++
++    move-result-object v1
++
++    invoke-static {v1}, Lio/unica/fota/UpdateChecker;->findUpdate(Landroid/content/Context;)Ljava/lang/String;
++
++    move-result-object v1
++    :try_end_a
++    .catch Lio/unica/fota/UpdateChecker$CheckFailed; {:try_start_2 .. :try_end_a} :catch_50
++    .catchall {:try_start_2 .. :try_end_a} :catchall_46
++
++    .line 358
++    nop
++
++    .line 362
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->finishSession(Ljava/lang/String;)V
++
++    .line 363
++    invoke-static {}, Lio/unica/fota/UpdateChecker;->waitForScheduler()V
++
++    .line 364
++    if-eqz v1, :cond_1f
++
++    invoke-static {}, Lio/unica/fota/UpdateChecker;->jobPending()Z
++
++    move-result p0
++
++    if-eqz p0, :cond_1f
++
++    .line 365
++    const-string p0, "update found, but an update job is already pending"
++
++    invoke-static {v0, p0}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 366
++    return-void
++
++    .line 368
++    :cond_1f
++    if-nez v1, :cond_39
++
++    .line 369
++    invoke-static {}, Lcom/idm/fotaagent/enabler/ui/IDMUIManager;->getInstance()Lcom/idm/fotaagent/enabler/ui/IDMUIManager;
++
++    move-result-object p0
++
++    sget-object v0, Lcom/idm/fotaagent/enabler/ui/interfaces/IDMUIEventInterface$UIACTIVITY;->NO_UPDATABLE_VERSION:Lcom/idm/fotaagent/enabler/ui/interfaces/IDMUIEventInterface$UIACTIVITY;
++
++    new-instance v1, Lcom/idm/fotaagent/BundleWrapper;
++
++    invoke-direct {v1}, Lcom/idm/fotaagent/BundleWrapper;-><init>()V
++
++    .line 371
++    const v2, 0x7f13006e
++
++    invoke-virtual {v1, v2}, Lcom/idm/fotaagent/BundleWrapper;->setResourceId(I)Lcom/idm/fotaagent/BundleWrapper;
++
++    move-result-object v1
++
++    .line 369
++    const-wide/16 v2, 0x29b
++
++    invoke-virtual {p0, v0, v1, v2, v3}, Lcom/idm/fotaagent/enabler/ui/IDMUIManager;->sendActivityMessageDelayed(Lcom/idm/fotaagent/enabler/ui/interfaces/IDMUIEventInterface$UIACTIVITY;Lcom/idm/fotaagent/BundleWrapper;J)V
++
++    .line 372
++    return-void
++
++    .line 374
++    :cond_39
++    new-instance p0, Lio/unica/fota/UpdateReceiver$Job;
++
++    invoke-static {}, Lcom/idm/fotaagent/IDMApplication;->idmGetContext()Landroid/content/Context;
++
++    move-result-object v0
++
++    invoke-direct {p0, v0, v1}, Lio/unica/fota/UpdateReceiver$Job;-><init>(Landroid/content/Context;Ljava/lang/String;)V
++
++    invoke-virtual {p0}, Lio/unica/fota/UpdateReceiver$Job;->run()V
++
++    .line 375
++    return-void
++
++    .line 354
++    :catchall_46
++    move-exception v1
++
++    .line 355
++    const-string v2, "update check crashed"
++
++    invoke-static {v0, v2, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 356
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->finishSession(Ljava/lang/String;)V
++
++    .line 357
++    return-void
++
++    .line 348
++    :catch_50
++    move-exception v1
++
++    .line 349
++    const-string v2, "update check failed"
++
++    invoke-static {v0, v2, v1}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 350
++    invoke-static {p0}, Lio/unica/fota/UpdateChecker;->finishSession(Ljava/lang/String;)V
++
++    .line 351
++    invoke-static {}, Lcom/idm/fotaagent/enabler/ui/IDMUIManager;->getInstance()Lcom/idm/fotaagent/enabler/ui/IDMUIManager;
++
++    move-result-object p0
++
++    sget-object v0, Lcom/idm/fotaagent/enabler/ui/interfaces/IDMUIEventInterface$UIDIALOG;->IDM_DIALOG_CONNECT_FAIL:Lcom/idm/fotaagent/enabler/ui/interfaces/IDMUIEventInterface$UIDIALOG;
++
++    invoke-virtual {p0, v0}, Lcom/idm/fotaagent/enabler/ui/IDMUIManager;->sendDialogMessage(Lcom/idm/fotaagent/enabler/ui/interfaces/IDMUIEventInterface$UIDIALOG;)V
++
++    .line 353
++    return-void
++.end method
++
++.method private static selectUpdate(Landroid/content/Context;)Ljava/lang/String;
++    .registers 23
++    .annotation system Ldalvik/annotation/Throws;
++        value = {
++            Lio/unica/fota/UpdateChecker$CheckFailed;
++        }
++    .end annotation
++
++    .line 135
++    const-string v0, "ro.unica.ota.manifest"
++
++    invoke-static {v0}, Lio/unica/fota/UpdateChecker;->getProp(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v1
++
++    .line 136
++    invoke-virtual {v1}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v0
++
++    const-string v2, "UnicaFota"
++
++    const/4 v3, 0x0
++
++    if-eqz v0, :cond_15
++
++    .line 137
++    const-string v0, "ro.unica.ota.manifest is not set; no ROM updates"
++
++    invoke-static {v2, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 138
++    return-object v3
++
++    .line 140
++    :cond_15
++    const-string v0, "ro.unica.timestamp"
++
++    invoke-static {v0}, Lio/unica/fota/UpdateChecker;->getProp(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-static {v0}, Lio/unica/fota/UpdateChecker;->parseLong(Ljava/lang/String;)J
++
++    move-result-wide v4
++
++    .line 141
++    const-wide/16 v6, 0x0
++
++    cmp-long v0, v4, v6
++
++    if-gtz v0, :cond_2b
++
++    .line 142
++    const-string v0, "ro.unica.timestamp is not set; no ROM updates"
++
++    invoke-static {v2, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 143
++    return-object v3
++
++    .line 145
++    :cond_2b
++    const-string v0, "ro.unica.device"
++
++    invoke-static {v0}, Lio/unica/fota/UpdateChecker;->getProp(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v0
++
++    .line 149
++    :try_start_31
++    new-instance v6, Lorg/json/JSONObject;
++
++    invoke-static {v1}, Lio/unica/fota/UpdateChecker;->fetch(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v7
++
++    invoke-direct {v6, v7}, Lorg/json/JSONObject;-><init>(Ljava/lang/String;)V
++    :try_end_3a
++    .catch Ljava/lang/Exception; {:try_start_31 .. :try_end_3a} :catch_1b1
++
++    .line 152
++    nop
++
++    .line 154
++    const-string v7, "device"
++
++    const-string v8, ""
++
++    invoke-virtual {v6, v7, v8}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v7
++
++    .line 155
++    invoke-virtual {v7}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v9
++
++    if-nez v9, :cond_76
++
++    invoke-virtual {v0}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v9
++
++    if-nez v9, :cond_76
++
++    invoke-virtual {v7, v0}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
++
++    move-result v9
++
++    if-nez v9, :cond_76
++
++    .line 156
++    new-instance v1, Ljava/lang/StringBuilder;
++
++    invoke-direct {v1}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v4, "manifest is for "
++
++    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v7}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    const-string v4, ", this is "
++
++    invoke-virtual {v1, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-static {v2, v0}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 157
++    return-object v3
++
++    .line 160
++    :cond_76
++    const-string v0, "builds"
++
++    invoke-virtual {v6, v0}, Lorg/json/JSONObject;->optJSONArray(Ljava/lang/String;)Lorg/json/JSONArray;
++
++    move-result-object v0
++
++    .line 161
++    if-eqz v0, :cond_1a5
++
++    .line 165
++    nop
++
++    .line 166
++    nop
++
++    .line 167
++    nop
++
++    .line 168
++    nop
++
++    .line 169
++    nop
++
++    .line 170
++    const/4 v6, 0x0
++
++    move-object v9, v3
++
++    move-object v12, v9
++
++    move-object v13, v12
++
++    move-wide v10, v4
++
++    move v7, v6
++
++    :goto_89
++    invoke-virtual {v0}, Lorg/json/JSONArray;->length()I
++
++    move-result v14
++
++    if-ge v6, v14, :cond_ed
++
++    .line 171
++    invoke-virtual {v0, v6}, Lorg/json/JSONArray;->optJSONObject(I)Lorg/json/JSONObject;
++
++    move-result-object v14
++
++    .line 172
++    if-nez v14, :cond_9a
++
++    move-object/from16 v16, v3
++
++    move-wide/from16 v17, v4
++
++    goto :goto_e6
++
++    .line 173
++    :cond_9a
++    const-string v15, "timestamp"
++
++    move-object/from16 v16, v3
++
++    move-wide/from16 v17, v4
++
++    const-wide/16 v3, -0x1
++
++    invoke-virtual {v14, v15, v3, v4}, Lorg/json/JSONObject;->optLong(Ljava/lang/String;J)J
++
++    move-result-wide v19
++
++    .line 174
++    const-string v5, "dd"
++
++    invoke-virtual {v14, v5, v8}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v5
++
++    .line 175
++    cmp-long v15, v19, v17
++
++    if-lez v15, :cond_e6
++
++    invoke-virtual {v5}, Ljava/lang/String;->isEmpty()Z
++
++    move-result v15
++
++    if-eqz v15, :cond_b7
++
++    goto :goto_e6
++
++    .line 176
++    :cond_b7
++    const-string v15, "base_timestamp"
++
++    invoke-virtual {v14, v15}, Lorg/json/JSONObject;->has(Ljava/lang/String;)Z
++
++    move-result v21
++
++    .line 177
++    if-eqz v21, :cond_c8
++
++    invoke-virtual {v14, v15, v3, v4}, Lorg/json/JSONObject;->optLong(Ljava/lang/String;J)J
++
++    move-result-wide v3
++
++    cmp-long v3, v3, v17
++
++    if-eqz v3, :cond_c8
++
++    goto :goto_e6
++
++    .line 178
++    :cond_c8
++    cmp-long v3, v19, v10
++
++    if-gtz v3, :cond_d2
++
++    if-nez v3, :cond_e6
++
++    if-eqz v21, :cond_e6
++
++    if-nez v7, :cond_e6
++
++    .line 179
++    :cond_d2
++    nop
++
++    .line 180
++    nop
++
++    .line 181
++    nop
++
++    .line 182
++    const-string v3, "version"
++
++    invoke-virtual {v14, v3, v8}, Lorg/json/JSONObject;->optString(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v12
++
++    .line 183
++    const-string v3, "parts"
++
++    invoke-virtual {v14, v3}, Lorg/json/JSONObject;->optJSONArray(Ljava/lang/String;)Lorg/json/JSONArray;
++
++    move-result-object v13
++
++    move-object v9, v5
++
++    move-wide/from16 v10, v19
++
++    move/from16 v7, v21
++
++    .line 170
++    :cond_e6
++    :goto_e6
++    add-int/lit8 v6, v6, 0x1
++
++    move-object/from16 v3, v16
++
++    move-wide/from16 v4, v17
++
++    goto :goto_89
++
++    .line 186
++    :cond_ed
++    move-object/from16 v16, v3
++
++    move-wide/from16 v17, v4
++
++    if-nez v9, :cond_112
++
++    .line 187
++    new-instance v0, Ljava/lang/StringBuilder;
++
++    invoke-direct {v0}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v1, "up to date ("
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    move-wide/from16 v3, v17
++
++    invoke-virtual {v0, v3, v4}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    const-string v1, ")"
++
++    invoke-virtual {v0, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-static {v2, v0}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 188
++    return-object v16
++
++    .line 191
++    :cond_112
++    :try_start_112
++    new-instance v0, Ljava/net/URL;
++
++    new-instance v3, Ljava/net/URL;
++
++    invoke-direct {v3, v1}, Ljava/net/URL;-><init>(Ljava/lang/String;)V
++
++    invoke-direct {v0, v3, v9}, Ljava/net/URL;-><init>(Ljava/net/URL;Ljava/lang/String;)V
++
++    invoke-virtual {v0}, Ljava/net/URL;->toString()Ljava/lang/String;
++
++    move-result-object v0
++    :try_end_120
++    .catch Ljava/lang/Exception; {:try_start_112 .. :try_end_120} :catch_18b
++
++    .line 194
++    nop
++
++    .line 195
++    nop
++
++    .line 196
++    if-eqz v7, :cond_127
++
++    const-string v3, "incremental"
++
++    goto :goto_129
++
++    :cond_127
++    const-string v3, "full"
++
++    .line 197
++    :goto_129
++    const-string v4, ", "
++
++    if-eqz v13, :cond_148
++
++    invoke-virtual {v13}, Lorg/json/JSONArray;->length()I
++
++    move-result v5
++
++    new-instance v6, Ljava/lang/StringBuilder;
++
++    invoke-direct {v6}, Ljava/lang/StringBuilder;-><init>()V
++
++    invoke-virtual {v6, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v6
++
++    invoke-virtual {v6, v5}, Ljava/lang/StringBuilder;->append(I)Ljava/lang/StringBuilder;
++
++    move-result-object v5
++
++    const-string v6, " parts"
++
++    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v5
++
++    invoke-virtual {v5}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v8
++
++    :cond_148
++    new-instance v5, Ljava/lang/StringBuilder;
++
++    invoke-direct {v5}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v6, "update "
++
++    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v5
++
++    invoke-virtual {v5, v12}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v5
++
++    const-string v6, " ("
++
++    invoke-virtual {v5, v6}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v5
++
++    invoke-virtual {v5, v10, v11}, Ljava/lang/StringBuilder;->append(J)Ljava/lang/StringBuilder;
++
++    move-result-object v5
++
++    invoke-virtual {v5, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v4
++
++    invoke-virtual {v4, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v8}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    const-string v4, ") dd="
++
++    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v3
++
++    .line 195
++    invoke-static {v2, v3}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    .line 199
++    if-nez v13, :cond_184
++
++    .line 200
++    invoke-static/range {p0 .. p0}, Lio/unica/fota/PartProxy;->clear(Landroid/content/Context;)V
++
++    .line 201
++    return-object v0
++
++    .line 203
++    :cond_184
++    move-object/from16 v2, p0
++
++    invoke-static {v2, v1, v0, v13}, Lio/unica/fota/UpdateChecker;->publishParts(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Lorg/json/JSONArray;)Ljava/lang/String;
++
++    move-result-object v0
++
++    return-object v0
++
++    .line 192
++    :catch_18b
++    move-exception v0
++
++    .line 193
++    new-instance v1, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    new-instance v2, Ljava/lang/StringBuilder;
++
++    invoke-direct {v2}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v3, "bad dd URL "
++
++    invoke-virtual {v2, v3}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2, v9}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v2
++
++    invoke-virtual {v2}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v2
++
++    invoke-direct {v1, v2, v0}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw v1
++
++    .line 162
++    :cond_1a5
++    move-object/from16 v16, v3
++
++    new-instance v0, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    const-string v1, "manifest has no builds"
++
++    move-object/from16 v2, v16
++
++    invoke-direct {v0, v1, v2}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw v0
++
++    .line 150
++    :catch_1b1
++    move-exception v0
++
++    .line 151
++    new-instance v2, Lio/unica/fota/UpdateChecker$CheckFailed;
++
++    new-instance v3, Ljava/lang/StringBuilder;
++
++    invoke-direct {v3}, Ljava/lang/StringBuilder;-><init>()V
++
++    const-string v4, "cannot read "
++
++    invoke-virtual {v3, v4}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v3
++
++    invoke-virtual {v3, v1}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    move-result-object v1
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-direct {v2, v1, v0}, Lio/unica/fota/UpdateChecker$CheckFailed;-><init>(Ljava/lang/String;Ljava/lang/Throwable;)V
++
++    throw v2
++.end method
++
++.method public static startDMTask(Lcom/idm/service/actioninfo/IDMActionInfo;)V
++    .registers 3
++
++    .line 308
++    invoke-virtual {p0}, Lcom/idm/service/actioninfo/IDMActionInfo;->idmGetSessionId()Ljava/lang/String;
++
++    move-result-object p0
++
++    .line 309
++    new-instance v0, Ljava/lang/Thread;
++
++    new-instance v1, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda2;
++
++    invoke-direct {v1, p0}, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda2;-><init>(Ljava/lang/String;)V
++
++    const-string p0, "UnicaFotaCheck"
++
++    invoke-direct {v0, v1, p0}, Ljava/lang/Thread;-><init>(Ljava/lang/Runnable;Ljava/lang/String;)V
++
++    invoke-virtual {v0}, Ljava/lang/Thread;->start()V
++
++    .line 310
++    return-void
++.end method
++
++.method private static waitForScheduler()V
++    .registers 6
++
++    .line 326
++    const-string v0, "UnicaFota"
++
++    :try_start_2
++    const-class v1, Lcom/idm/fotaagent/scheduler/IDMSchedulerHandler;
++
++    const-string v2, "handler"
++
++    invoke-virtual {v1, v2}, Ljava/lang/Class;->getDeclaredField(Ljava/lang/String;)Ljava/lang/reflect/Field;
++
++    move-result-object v1
++
++    .line 327
++    const/4 v2, 0x1
++
++    invoke-virtual {v1, v2}, Ljava/lang/reflect/Field;->setAccessible(Z)V
++
++    .line 328
++    invoke-static {}, Lcom/idm/fotaagent/scheduler/IDMSchedulerHandler;->getInstance()Lcom/idm/fotaagent/scheduler/IDMSchedulerHandler;
++
++    move-result-object v3
++
++    invoke-virtual {v1, v3}, Ljava/lang/reflect/Field;->get(Ljava/lang/Object;)Ljava/lang/Object;
++
++    move-result-object v1
++
++    check-cast v1, Landroid/os/Handler;
++
++    .line 329
++    new-instance v3, Ljava/util/concurrent/CountDownLatch;
++
++    invoke-direct {v3, v2}, Ljava/util/concurrent/CountDownLatch;-><init>(I)V
++
++    .line 330
++    new-instance v2, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;
++
++    invoke-direct {v2, v1, v3}, Lio/unica/fota/UpdateChecker$$ExternalSyntheticLambda1;-><init>(Landroid/os/Handler;Ljava/util/concurrent/CountDownLatch;)V
++
++    invoke-virtual {v1, v2}, Landroid/os/Handler;->post(Ljava/lang/Runnable;)Z
++
++    .line 331
++    sget-object v1, Ljava/util/concurrent/TimeUnit;->SECONDS:Ljava/util/concurrent/TimeUnit;
++
++    const-wide/16 v4, 0xf
++
++    invoke-virtual {v3, v4, v5, v1}, Ljava/util/concurrent/CountDownLatch;->await(JLjava/util/concurrent/TimeUnit;)Z
++
++    move-result v1
++
++    if-eqz v1, :cond_30
++
++    .line 332
++    return-void
++
++    .line 334
++    :cond_30
++    const-string v1, "scheduler still busy, starting the job anyway"
++
++    invoke-static {v0, v1}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;)I
++    :try_end_35
++    .catchall {:try_start_2 .. :try_end_35} :catchall_36
++
++    .line 341
++    goto :goto_43
++
++    .line 335
++    :catchall_36
++    move-exception v1
++
++    .line 336
++    const-string v2, "cannot reach the scheduler queue; waiting instead"
++
++    invoke-static {v0, v2, v1}, Landroid/util/Log;->w(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    .line 338
++    const-wide/16 v0, 0xbb8
++
++    :try_start_3e
++    invoke-static {v0, v1}, Ljava/lang/Thread;->sleep(J)V
++    :try_end_41
++    .catch Ljava/lang/InterruptedException; {:try_start_3e .. :try_end_41} :catch_42
++
++    .line 340
++    goto :goto_43
++
++    .line 339
++    :catch_42
++    move-exception v0
++
++    .line 342
++    :goto_43
++    return-void
++.end method

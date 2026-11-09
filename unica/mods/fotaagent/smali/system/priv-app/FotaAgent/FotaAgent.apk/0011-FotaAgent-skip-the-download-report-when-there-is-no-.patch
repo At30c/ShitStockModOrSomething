@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:41:41 -0300
+Subject: [PATCH] FotaAgent: skip the download report when there is no report
+ URL
+
+---
+ smali/com/idm/agent/dl/DlAgent.smali | 42 ++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/smali/com/idm/agent/dl/DlAgent.smali b/smali/com/idm/agent/dl/DlAgent.smali
+index a6273f2..d4e8a11 100644
+--- a/smali/com/idm/agent/dl/DlAgent.smali
++++ b/smali/com/idm/agent/dl/DlAgent.smali
+@@ -3058,6 +3058,48 @@
+ 
+     move-result-object v5
+ 
++    # UN1CA: ROM updater descriptors carry no installNotifyURI. With no URL,
++    # skip the download report and finish as if it was delivered.
++    invoke-static {v5}, Landroid/text/TextUtils;->isEmpty(Ljava/lang/CharSequence;)Z
++
++    move-result v0
++
++    if-eqz v0, :unica_has_url
++
++    iget-object v0, p0, Lcom/idm/agent/dl/DlAgent;->actionInfo:Lcom/idm/service/actioninfo/IDMActionInfo;
++
++    invoke-virtual {v0}, Lcom/idm/service/actioninfo/IDMActionInfo;->idmGetCommand()I
++
++    move-result v0
++
++    invoke-direct {p0, v0}, Lcom/idm/agent/dl/DlAgent;->getVerifyCommand(I)I
++
++    move-result v0
++
++    const/4 v1, 0x3
++
++    if-ne v0, v1, :unica_has_url
++
++    const-string v0, "UN1CA: no report URL, skip the download report"
++
++    invoke-static {v0}, Lcom/idm/adapter/logmanager/IDMDebug;->I(Ljava/lang/String;)V
++
++    iget-object v0, p0, Lcom/idm/agent/dl/DlAgent;->messageHandler:Lcom/idm/agent/IDMAgentMessageHandler;
++
++    sget-object v1, Lcom/idm/agent/interfaces/IDMEventInterface$IDM_DL_TASK_EVENT;->IDM_DL_TASK_EVENT_FINISH:Lcom/idm/agent/interfaces/IDMEventInterface$IDM_DL_TASK_EVENT;
++
++    iget-object v2, p0, Lcom/idm/agent/dl/DlAgent;->actionInfo:Lcom/idm/service/actioninfo/IDMActionInfo;
++
++    invoke-virtual {v2}, Lcom/idm/service/actioninfo/IDMActionInfo;->idmGetDlNotifyDownloadReportCode()I
++
++    move-result v2
++
++    invoke-virtual {v0, v1, v2}, Lcom/idm/agent/IDMAgentMessageHandler;->idmSendMessage(Ljava/lang/Enum;I)V
++
++    return-void
++
++    :unica_has_url
++
+     new-instance v0, Ljava/lang/StringBuilder;
+ 
+     const-string v1, "Uri : "

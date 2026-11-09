@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:26:31 -0300
+Subject: [PATCH 4/8] FotaAgent: block Samsung Analytics uploads
+
+---
+ .../sdk/samsunganalytics/internal/policy/PolicyClient.smali   | 4 ++++
+ .../samsunganalytics/internal/sender/DLS/DLSAPIClient.smali   | 4 ++++
+ .../sdk/samsunganalytics/internal/terms/RegisterTask.smali    | 4 ++++
+ 3 files changed, 12 insertions(+)
+
+diff --git a/smali/com/samsung/context/sdk/samsunganalytics/internal/policy/PolicyClient.smali b/smali/com/samsung/context/sdk/samsunganalytics/internal/policy/PolicyClient.smali
+index f5d3c62..cfc042c 100644
+--- a/smali/com/samsung/context/sdk/samsunganalytics/internal/policy/PolicyClient.smali
++++ b/smali/com/samsung/context/sdk/samsunganalytics/internal/policy/PolicyClient.smali
+@@ -665,6 +665,10 @@
+ .method public run()V
+     .locals 4
+ 
++    # UN1CA: Samsung Analytics never uploads, registers or fetches policy.
++    return-void
++
++
+     :try_start_0
+     iget-object v0, p0, Lcom/samsung/context/sdk/samsunganalytics/internal/policy/PolicyClient;->api:Lcom/samsung/context/sdk/samsunganalytics/internal/connection/API;
+ 
+diff --git a/smali/com/samsung/context/sdk/samsunganalytics/internal/sender/DLS/DLSAPIClient.smali b/smali/com/samsung/context/sdk/samsunganalytics/internal/sender/DLS/DLSAPIClient.smali
+index 92b5aa9..221db42 100644
+--- a/smali/com/samsung/context/sdk/samsunganalytics/internal/sender/DLS/DLSAPIClient.smali
++++ b/smali/com/samsung/context/sdk/samsunganalytics/internal/sender/DLS/DLSAPIClient.smali
+@@ -574,6 +574,10 @@
+ .method public run()V
+     .locals 8
+ 
++    # UN1CA: Samsung Analytics never uploads, registers or fetches policy.
++    return-void
++
++
+     const-string v0, "[DLS Client] Send to DLS : "
+ 
+     :try_start_0
+diff --git a/smali/com/samsung/context/sdk/samsunganalytics/internal/terms/RegisterTask.smali b/smali/com/samsung/context/sdk/samsunganalytics/internal/terms/RegisterTask.smali
+index 0451e79..8eba5f7 100644
+--- a/smali/com/samsung/context/sdk/samsunganalytics/internal/terms/RegisterTask.smali
++++ b/smali/com/samsung/context/sdk/samsunganalytics/internal/terms/RegisterTask.smali
+@@ -413,6 +413,10 @@
+ .method public run()V
+     .locals 6
+ 
++    # UN1CA: Samsung Analytics never uploads, registers or fetches policy.
++    return-void
++
++
+     :try_start_0
+     iget-object v0, p0, Lcom/samsung/context/sdk/samsunganalytics/internal/terms/RegisterTask;->api:Lcom/samsung/context/sdk/samsunganalytics/internal/connection/API;
+ 

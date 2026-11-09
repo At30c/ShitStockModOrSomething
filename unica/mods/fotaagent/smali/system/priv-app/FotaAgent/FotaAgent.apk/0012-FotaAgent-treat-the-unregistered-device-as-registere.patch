@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:50:02 -0300
+Subject: [PATCH] FotaAgent: treat the unregistered device as registered
+
+---
+ smali/com/idm/fotaagent/scheduler/DeviceInfoState.smali | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/scheduler/DeviceInfoState.smali b/smali/com/idm/fotaagent/scheduler/DeviceInfoState.smali
+index d8986f4..7e23aca 100644
+--- a/smali/com/idm/fotaagent/scheduler/DeviceInfoState.smali
++++ b/smali/com/idm/fotaagent/scheduler/DeviceInfoState.smali
+@@ -132,6 +132,14 @@
+ .method public static get()Lcom/idm/fotaagent/scheduler/DeviceInfoState;
+     .locals 4
+ 
++    # UN1CA: the device is never registered with Samsung (0001 blocks it).
++    # Report the registration state as current, or the scheduler resets the
++    # app state, dropping a downloaded update, to re-register the device.
++    sget-object v0, Lcom/idm/fotaagent/scheduler/DeviceInfoState;->RUNNABLE:Lcom/idm/fotaagent/scheduler/DeviceInfoState;
++
++    return-object v0
++
++
+     const-string v0, ""
+ 
+     invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V

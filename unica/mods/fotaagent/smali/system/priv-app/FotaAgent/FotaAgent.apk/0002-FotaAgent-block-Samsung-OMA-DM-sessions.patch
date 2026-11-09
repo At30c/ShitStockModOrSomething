@@ -1,0 +1,35 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:26:31 -0300
+Subject: [PATCH 2/8] FotaAgent: block Samsung OMA-DM sessions
+
+---
+ smali/com/idm/agent/dm/IDMDmAgent.smali | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/smali/com/idm/agent/dm/IDMDmAgent.smali b/smali/com/idm/agent/dm/IDMDmAgent.smali
+index 7ee3a0b..61696ea 100644
+--- a/smali/com/idm/agent/dm/IDMDmAgent.smali
++++ b/smali/com/idm/agent/dm/IDMDmAgent.smali
+@@ -5297,6 +5297,21 @@
+ .method private idmSendPackage(ILjava/lang/String;[BLcom/idm/agent/dm/IDMDmAbortInfo;)Lcom/idm/network/IDMNetworkSendRecvState;
+     .locals 8
+ 
++    # UN1CA: never open an OMA-DM session with the Samsung DM server. Fail
++    # like a send error (0x1f6) so the agent ends the session.
++    const-string v0, "UN1CA: Samsung DM session blocked"
++
++    invoke-static {v0}, Lcom/idm/adapter/logmanager/IDMDebug;->I(Ljava/lang/String;)V
++
++    const/16 v0, 0x1f6
++
++    invoke-virtual {p4, v0}, Lcom/idm/agent/dm/IDMDmAbortInfo;->idmSetErrorCode(I)V
++
++    sget-object v0, Lcom/idm/network/IDMNetworkSendRecvHandler;->RETRY:Lcom/idm/network/IDMNetworkSendRecvHandler;
++
++    return-object v0
++
++
+     const-string v0, "idmSendPackage for DM"
+ 
+     invoke-static {v0}, Lcom/idm/adapter/logmanager/IDMDebug;->I(Ljava/lang/String;)V

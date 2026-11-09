@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:58:42 -0300
+Subject: [PATCH] FotaAgent: do not refuse to install on a custom binary
+
+---
+ .../idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali   | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali b/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali
+index 08ff7b2..d9ead99 100644
+--- a/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali
++++ b/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali
+@@ -149,6 +149,11 @@
+ .method private checkRootingDevice()V
+     .locals 1
+ 
++    # UN1CA: a custom ROM is never an "official binary"; do not refuse to
++    # install the ROM's own update package for that.
++    return-void
++
++
+     new-instance v0, Lcom/idm/fotaagent/database/sqlite/database/mo/MoFumoExtDao;
+ 
+     iget-object p0, p0, Lcom/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler;->actionInfoDao:Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;

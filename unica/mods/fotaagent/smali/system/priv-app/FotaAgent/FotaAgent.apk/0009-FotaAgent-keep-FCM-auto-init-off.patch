@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:32:21 -0300
+Subject: [PATCH] FotaAgent: keep FCM auto-init off
+
+---
+ .../restapi/restclient/push/message/PushType$1.smali         | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali b/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali
+index ace34b9..01b97c0 100644
+--- a/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali
++++ b/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali
+@@ -48,6 +48,11 @@
+ .method public configFcmAutoInit()V
+     .locals 1
+ 
++    # UN1CA: keep FCM auto-init off; with it on, Firebase fetches a token
++    # from Google even though no push channel is registered.
++    return-void
++
++
+     invoke-static {}, Lcom/google/firebase/messaging/FirebaseMessaging;->c()Lcom/google/firebase/messaging/FirebaseMessaging;
+ 
+     move-result-object p0

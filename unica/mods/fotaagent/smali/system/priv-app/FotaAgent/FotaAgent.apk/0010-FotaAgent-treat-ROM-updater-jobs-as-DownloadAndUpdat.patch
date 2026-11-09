@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:33:44 -0300
+Subject: [PATCH] FotaAgent: treat ROM updater jobs as DownloadAndUpdate
+
+---
+ .../fotaagent/enabler/fumo/IDMFumoExecuteHandler.smali | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/enabler/fumo/IDMFumoExecuteHandler.smali b/smali/com/idm/fotaagent/enabler/fumo/IDMFumoExecuteHandler.smali
+index e6fe690..1ab3a35 100644
+--- a/smali/com/idm/fotaagent/enabler/fumo/IDMFumoExecuteHandler.smali
++++ b/smali/com/idm/fotaagent/enabler/fumo/IDMFumoExecuteHandler.smali
+@@ -377,6 +377,16 @@
+ 
+     move-result-object v0
+ 
++    # UN1CA: jobs created by the ROM updater have no DM Exec command; they
++    # are ./FUMO/DownloadAndUpdate (1).
++    if-nez v0, :unica_has_exec
++
++    const/4 v0, 0x1
++
++    return v0
++
++    :unica_has_exec
++
+     invoke-static {v0}, Ljava/util/Optional;->ofNullable(Ljava/lang/Object;)Ljava/util/Optional;
+ 
+     move-result-object v0

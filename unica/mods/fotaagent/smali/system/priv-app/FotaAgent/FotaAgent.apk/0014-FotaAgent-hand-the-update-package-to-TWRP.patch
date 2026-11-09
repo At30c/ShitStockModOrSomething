@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 19:06:04 -0300
+Subject: [PATCH] FotaAgent: hand the update package to TWRP
+
+---
+ .../enabler/fumo/IDMFumoInstallHandler.smali  |  3 +
+ .../io/unica/fota/RecoveryScript.smali        | 66 +++++++++++++++++++
+ 2 files changed, 69 insertions(+)
+ create mode 100644 smali_classes2/io/unica/fota/RecoveryScript.smali
+
+diff --git a/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali b/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali
+index d9ead99..a52935a 100644
+--- a/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali
++++ b/smali/com/idm/fotaagent/enabler/fumo/IDMFumoInstallHandler.smali
+@@ -276,6 +276,9 @@
+ 
+     invoke-direct {v1, p0}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+ 
++    # UN1CA: also hand the package to TWRP (see io.unica.fota.RecoveryScript).
++    invoke-static {p0}, Lio/unica/fota/RecoveryScript;->write(Ljava/lang/String;)V
++
+     invoke-static {v0, v1}, Landroid/os/RecoverySystem;->installPackage(Landroid/content/Context;Ljava/io/File;)V
+ 
+     return-void
+diff --git a/smali_classes2/io/unica/fota/RecoveryScript.smali b/smali_classes2/io/unica/fota/RecoveryScript.smali
+new file mode 100644
+index 0000000..e5f924b
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/RecoveryScript.smali
+@@ -0,0 +1,66 @@
++.class public final Lio/unica/fota/RecoveryScript;
++.super Ljava/lang/Object;
++.source "RecoveryScript.java"
++
++# UN1CA: TWRP reads its startup commands before /cache is mounted, so the
++# --update_package written to /cache/recovery/command by RecoverySystem is
++# never seen. TWRP always runs /cache/recovery/openrecoveryscript once the
++# partitions are up: install the package there, then boot back to system.
++
++.method private constructor <init>()V
++    .locals 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++    return-void
++.end method
++
++.method public static write(Ljava/lang/String;)V
++    .locals 3
++
++    :try_start_0
++    new-instance v0, Ljava/io/FileWriter;
++
++    const-string v1, "/cache/recovery/openrecoveryscript"
++
++    invoke-direct {v0, v1}, Ljava/io/FileWriter;-><init>(Ljava/lang/String;)V
++
++    new-instance v1, Ljava/lang/StringBuilder;
++
++    const-string v2, "install "
++
++    invoke-direct {v1, v2}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
++
++    invoke-virtual {v1, p0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    const-string v2, "\nreboot\n"
++
++    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-virtual {v0, v1}, Ljava/io/Writer;->write(Ljava/lang/String;)V
++
++    invoke-virtual {v0}, Ljava/io/Writer;->close()V
++    :try_end_0
++    .catch Ljava/io/IOException; {:try_start_0 .. :try_end_0} :catch_0
++
++    const-string v0, "UnicaFota"
++
++    const-string v1, "openrecoveryscript written"
++
++    invoke-static {v0, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    return-void
++
++    :catch_0
++    move-exception v0
++
++    const-string v1, "UnicaFota"
++
++    const-string v2, "failed to write openrecoveryscript"
++
++    invoke-static {v1, v2, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    return-void
++.end method

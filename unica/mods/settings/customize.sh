@@ -21,8 +21,10 @@ SMALI_PATCH "system" "system/framework/framework.jar" \
 DECODE_APK "system" "system/priv-app/SecSettings/SecSettings.apk"
 SECSETTINGS_APK="$APKTOOL_DIR/system/priv-app/SecSettings/SecSettings.apk"
 
-# Disable stock OTA references
-if [ ! -f "$WORK_DIR/system/system/priv-app/ChoiDujour/ChoiDujour.apk" ]; then
+# Disable stock OTA references, unless the ROM ships an updater: ChoiDujour,
+# or FotaAgent patched by unica/mods/fotaagent into the ROM update downloader.
+if [ ! -f "$WORK_DIR/system/system/priv-app/ChoiDujour/ChoiDujour.apk" ] && \
+        [ ! -f "$WORK_DIR/system/system/priv-app/FotaAgent/FotaAgent.apk" ]; then
     SOFTWARE_UPDATE_UTILS="$(find "$SECSETTINGS_APK" \
         -type f -path '*/com/samsung/android/settings/softwareupdate/SoftwareUpdateUtils.smali' -printf '%P\n' -quit)"
     [ "$SOFTWARE_UPDATE_UTILS" ] || ABORT "SoftwareUpdateUtils.smali not found"

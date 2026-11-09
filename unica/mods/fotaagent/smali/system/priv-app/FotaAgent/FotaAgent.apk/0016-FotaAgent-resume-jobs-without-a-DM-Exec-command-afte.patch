@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 19:28:51 -0300
+Subject: [PATCH] FotaAgent: resume jobs without a DM Exec command after boot
+
+---
+ .../scheduler/intentresume/IDMIntentBootResume.smali         | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/smali/com/idm/fotaagent/scheduler/intentresume/IDMIntentBootResume.smali b/smali/com/idm/fotaagent/scheduler/intentresume/IDMIntentBootResume.smali
+index 7096a92..9e155a9 100644
+--- a/smali/com/idm/fotaagent/scheduler/intentresume/IDMIntentBootResume.smali
++++ b/smali/com/idm/fotaagent/scheduler/intentresume/IDMIntentBootResume.smali
+@@ -192,7 +192,10 @@
+ 
+     move-result-object p0
+ 
+-    if-nez p0, :cond_3
++    # UN1CA: ROM updater jobs have no DM Exec command (and DM sessions are
++    # blocked), so never drop a job for that: resume it, which also reads
++    # the install result after an update.
++    goto :cond_3
+ 
+     new-instance p0, Lcom/idm/fotaagent/database/sqlite/database/mo/MoFumoExtDao;
+ 

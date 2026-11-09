@@ -134,6 +134,9 @@ GENERATE_UPDATER_SCRIPT()
         PRINT_ASSERTIONS "$BUILD_INFO" || exit 1
 
         PRINT_HEADER "$BUILD_INFO" || exit 1
+        if ${FOTA_STATUS_IN_FULL_ZIP:-false}; then
+            PRINT_FOTA_STATUS "FAIL" || exit 1
+        fi
 
         if $TARGET_USE_DYNAMIC_PARTITIONS; then
             # https://android.googlesource.com/platform/build/+/refs/tags/android-15.0.0_r1/tools/releasetools/common.py#4007
@@ -207,6 +210,9 @@ GENERATE_UPDATER_SCRIPT()
             cat "$SRC_DIR/target/$TARGET_CODENAME/installer/install-end.edify"
         fi
 
+        if ${FOTA_STATUS_IN_FULL_ZIP:-false}; then
+            PRINT_FOTA_STATUS "DONE" || exit 1
+        fi
         echo    'set_progress(1.000000);'
 
         PRINT_SEPARATOR

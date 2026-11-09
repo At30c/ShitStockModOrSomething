@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:26:31 -0300
+Subject: [PATCH 5/8] FotaAgent: do not set up DiagMon reporting
+
+---
+ smali/com/idm/fotaagent/analytics/diagmon/DiagMon.smali | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/analytics/diagmon/DiagMon.smali b/smali/com/idm/fotaagent/analytics/diagmon/DiagMon.smali
+index 230f034..4563a60 100644
+--- a/smali/com/idm/fotaagent/analytics/diagmon/DiagMon.smali
++++ b/smali/com/idm/fotaagent/analytics/diagmon/DiagMon.smali
+@@ -198,6 +198,10 @@
+ .method public static setup(Landroid/content/Context;)V
+     .locals 3
+ 
++    # UN1CA: no DiagMon crash or log reporting to Samsung.
++    return-void
++
++
+     new-instance v0, Ljava/lang/Thread;
+ 
+     new-instance v1, Lcom/idm/fotaagent/analytics/diagmon/b;

@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:25:36 -0300
+Subject: [PATCH 1/8] FotaAgent: block the Samsung FOTA REST API
+
+---
+ .../restapi/restclient/BaseRestClient.smali          | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/restapi/restclient/BaseRestClient.smali b/smali/com/idm/fotaagent/restapi/restclient/BaseRestClient.smali
+index b9f7858..1f6bfe6 100644
+--- a/smali/com/idm/fotaagent/restapi/restclient/BaseRestClient.smali
++++ b/smali/com/idm/fotaagent/restapi/restclient/BaseRestClient.smali
+@@ -618,6 +618,18 @@
+ .method public execute()Z
+     .locals 3
+ 
++    # UN1CA: never contact the Samsung FOTA REST API (device registration,
++    # push registration, polling, heartbeat and campaigns). Callers handle a
++    # false result as a failed request.
++    const-string v0, "UN1CA: Samsung FOTA REST API blocked"
++
++    invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->W(Ljava/lang/Object;)V
++
++    const/4 v0, 0x0
++
++    return v0
++
++
+     invoke-virtual {p0}, Lcom/idm/fotaagent/restapi/restclient/BaseRestClient;->onSetUp()Z
+ 
+     move-result v0

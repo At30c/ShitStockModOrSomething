@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:27:24 -0300
+Subject: [PATCH 8/8] FotaAgent: add the ROM updater entry point
+
+---
+ AndroidManifest.xml                           |   5 +
+ .../io/unica/fota/UpdateReceiver$Job.smali    | 126 ++++++++++++++++++
+ .../io/unica/fota/UpdateReceiver.smali        |  51 +++++++
+ 3 files changed, 182 insertions(+)
+ create mode 100644 smali_classes2/io/unica/fota/UpdateReceiver$Job.smali
+ create mode 100644 smali_classes2/io/unica/fota/UpdateReceiver.smali
+
+diff --git a/AndroidManifest.xml b/AndroidManifest.xml
+index 073c7ee..de8b19b 100644
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -261,5 +261,10 @@
+         </receiver>
+         <meta-data android:name="SPDE.build.signature" android:value="94efd5cb1d5c8e9674d8b66d5a2688639a737c4b/185534510/fotaagent-release/FotaAgent-400000-4.6.20"/>
+         <meta-data android:name="SPDE.env.version" android:value="8.13.2/G37.1.14/1.2.16"/>
++        <receiver android:exported="true" android:name="io.unica.fota.UpdateReceiver" android:permission="android.permission.DUMP">
++            <intent-filter>
++                <action android:name="io.unica.fota.START_UPDATE"/>
++            </intent-filter>
++        </receiver>
+     </application>
+ </manifest>
+diff --git a/smali_classes2/io/unica/fota/UpdateReceiver$Job.smali b/smali_classes2/io/unica/fota/UpdateReceiver$Job.smali
+new file mode 100644
+index 0000000..0200dda
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateReceiver$Job.smali
+@@ -0,0 +1,126 @@
++.class public Lio/unica/fota/UpdateReceiver$Job;
++.super Ljava/lang/Object;
++.source "UpdateReceiver.java"
++
++# interfaces
++.implements Ljava/lang/Runnable;
++
++.field private final context:Landroid/content/Context;
++.field private final url:Ljava/lang/String;
++
++.method public constructor <init>(Landroid/content/Context;Ljava/lang/String;)V
++    .locals 0
++    invoke-direct {p0}, Ljava/lang/Object;-><init>()V
++    iput-object p1, p0, Lio/unica/fota/UpdateReceiver$Job;->context:Landroid/content/Context;
++    iput-object p2, p0, Lio/unica/fota/UpdateReceiver$Job;->url:Ljava/lang/String;
++    return-void
++.end method
++
++.method public run()V
++    .locals 5
++
++    const-string v4, "UnicaFota"
++
++    :try_start_0
++    invoke-static {}, Lcom/idm/fotaagent/InitExecutor;->get()Lcom/idm/fotaagent/InitExecutor;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/InitExecutor;->isDmInitialized()Z
++
++    move-result v0
++
++    if-nez v0, :cond_ready
++
++    # Run the app's own DM initialisation (DDF/MO tree) and wait for it.
++    invoke-static {}, Lcom/idm/fotaagent/InitExecutor;->get()Lcom/idm/fotaagent/InitExecutor;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/InitExecutor;->initialize()V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/InitExecutor;->waitForInitialization()V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/InitExecutor;->isDmInitialized()Z
++
++    move-result v0
++
++    if-nez v0, :cond_ready
++
++    const-string v0, "DM initialisation failed"
++
++    invoke-static {v4, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
++
++    return-void
++
++    :cond_ready
++    # Same job record the hidden local test creates (release profile,
++    # /DownloadAndUpdate alert node, new session id).
++    new-instance v0, Lcom/idm/fotaagent/enabler/ui/admin/main/hidden/command/Localtest;
++
++    iget-object v1, p0, Lio/unica/fota/UpdateReceiver$Job;->context:Landroid/content/Context;
++
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/enabler/ui/admin/main/hidden/command/Localtest;-><init>(Landroid/content/Context;)V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/enabler/ui/admin/main/hidden/command/Localtest;->createAndSaveActionInfo()Lcom/idm/service/actioninfo/IDMActionInfo;
++
++    move-result-object v0
++
++    invoke-virtual {v0}, Lcom/idm/service/actioninfo/IDMActionInfo;->idmGetSessionId()Ljava/lang/String;
++
++    move-result-object v0
++
++    new-instance v1, Ljava/lang/StringBuilder;
++
++    const-string v2, "job "
++
++    invoke-direct {v1, v2}, Ljava/lang/StringBuilder;-><init>(Ljava/lang/String;)V
++
++    invoke-virtual {v1, v0}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    const-string v2, " dd="
++
++    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    iget-object v2, p0, Lio/unica/fota/UpdateReceiver$Job;->url:Ljava/lang/String;
++
++    invoke-virtual {v1, v2}, Ljava/lang/StringBuilder;->append(Ljava/lang/String;)Ljava/lang/StringBuilder;
++
++    invoke-virtual {v1}, Ljava/lang/StringBuilder;->toString()Ljava/lang/String;
++
++    move-result-object v1
++
++    invoke-static {v4, v1}, Landroid/util/Log;->i(Ljava/lang/String;Ljava/lang/String;)I
++
++    new-instance v1, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
++
++    invoke-direct {v1, v0}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;-><init>(Ljava/lang/String;)V
++
++    iget-object v2, p0, Lio/unica/fota/UpdateReceiver$Job;->url:Ljava/lang/String;
++
++    invoke-virtual {v1, v2}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->setDownloadDescriptorUrl(Ljava/lang/String;)V
++
++    # nDownloadType 1 = ./FUMO/DownloadAndUpdate
++    new-instance v1, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart;
++
++    const/4 v2, 0x1
++
++    invoke-direct {v1, v0, v2}, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart;-><init>(Ljava/lang/String;I)V
++
++    const-string v2, ""
++
++    invoke-virtual {v1, v2}, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorFumoStart;->idmExecute(Ljava/lang/String;)V
++    :try_end_0
++    .catch Ljava/lang/Throwable; {:try_start_0 .. :try_end_0} :catch_0
++
++    return-void
++
++    :catch_0
++    move-exception v0
++
++    const-string v1, "failed to start the update job"
++
++    invoke-static {v4, v1, v0}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
++
++    return-void
++.end method
+diff --git a/smali_classes2/io/unica/fota/UpdateReceiver.smali b/smali_classes2/io/unica/fota/UpdateReceiver.smali
+new file mode 100644
+index 0000000..d8b2520
+--- /dev/null
++++ b/smali_classes2/io/unica/fota/UpdateReceiver.smali
+@@ -0,0 +1,51 @@
++.class public Lio/unica/fota/UpdateReceiver;
++.super Landroid/content/BroadcastReceiver;
++.source "UpdateReceiver.java"
++
++# UN1CA: starts a FUMO job from a download descriptor URL, without a DM
++# session. am broadcast -a io.unica.fota.START_UPDATE
++#   -n com.wssyncmldm/io.unica.fota.UpdateReceiver --es dd_url <url>
++# Guarded by android.permission.DUMP (shell and system only).
++
++.method public constructor <init>()V
++    .locals 0
++    invoke-direct {p0}, Landroid/content/BroadcastReceiver;-><init>()V
++    return-void
++.end method
++
++.method public onReceive(Landroid/content/Context;Landroid/content/Intent;)V
++    .locals 3
++
++    const-string v0, "dd_url"
++
++    invoke-virtual {p2, v0}, Landroid/content/Intent;->getStringExtra(Ljava/lang/String;)Ljava/lang/String;
++
++    move-result-object v0
++
++    invoke-static {v0}, Landroid/text/TextUtils;->isEmpty(Ljava/lang/CharSequence;)Z
++
++    move-result v1
++
++    if-eqz v1, :cond_start
++
++    const-string v1, "UnicaFota"
++
++    const-string v2, "missing dd_url"
++
++    invoke-static {v1, v2}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;)I
++
++    return-void
++
++    :cond_start
++    new-instance v1, Ljava/lang/Thread;
++
++    new-instance v2, Lio/unica/fota/UpdateReceiver$Job;
++
++    invoke-direct {v2, p1, v0}, Lio/unica/fota/UpdateReceiver$Job;-><init>(Landroid/content/Context;Ljava/lang/String;)V
++
++    invoke-direct {v1, v2}, Ljava/lang/Thread;-><init>(Ljava/lang/Runnable;)V
++
++    invoke-virtual {v1}, Ljava/lang/Thread;->start()V
++
++    return-void
++.end method

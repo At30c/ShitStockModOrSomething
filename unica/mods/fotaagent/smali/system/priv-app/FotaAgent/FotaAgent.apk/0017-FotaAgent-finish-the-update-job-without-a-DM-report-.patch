@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 20:54:46 -0300
+Subject: [PATCH] FotaAgent: finish the update job without a DM report session
+
+---
+ .../IDMFumoExecutorUpdateFailedNodata.smali   | 39 ++++++++++++++++---
+ ...DMFumoExecutorUpdateSuccessfulNodata.smali | 37 +++++++++++++++---
+ 2 files changed, 65 insertions(+), 11 deletions(-)
+
+diff --git a/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateFailedNodata.smali b/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateFailedNodata.smali
+index fc26f1f..09ebdea 100644
+--- a/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateFailedNodata.smali
++++ b/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateFailedNodata.smali
+@@ -78,21 +78,48 @@
+ .end method
+ 
+ .method public idmFumoStart()V
+-    .locals 1
++    .locals 2
+ 
+     const-string v0, ""
+ 
+     invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+ 
+-    iget-object v0, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->actionInfoDao:Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
++    invoke-direct {p0}, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateFailedNodata;->reportSystemUpdateApplyPreventedIfNeeded()V
+ 
+-    invoke-virtual {v0}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->getActionInfo()Lcom/idm/service/actioninfo/IDMActionInfo;
++    # UN1CA: Samsung DM sessions are blocked, so the session that reports
++    # the install result never runs. Do what follows it when the server
++    # ends that session with FINISH: delete the update package, drop the
++    # job's update data and close the job (IDMFumoTaskDmFinish cancels the
++    # "connecting to server" notification and sends SCHEDULE_FINISH).
++    # FINISH_AND_EXECUTE would instead wait for a next package from the
++    # session (execInfo) and leave the job open.
++    new-instance v0, Lcom/idm/fotaagent/utils/storage/FileManager;
+ 
+-    move-result-object v0
++    invoke-direct {v0}, Lcom/idm/fotaagent/utils/storage/FileManager;-><init>()V
+ 
+-    invoke-static {v0}, Lcom/idm/fotaagent/LibraryStarter;->startDMTask(Lcom/idm/service/actioninfo/IDMActionInfo;)V
++    invoke-virtual {v0}, Lcom/idm/fotaagent/utils/storage/FileManager;->deleteDeltaAndMetadataFiles()V
+ 
+-    invoke-direct {p0}, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateFailedNodata;->reportSystemUpdateApplyPreventedIfNeeded()V
++    iget-object v1, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->context:Landroid/content/Context;
++
++    new-instance v0, Lcom/idm/fotaagent/database/room/data/repository/FotaJobRepository;
++
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/database/room/data/repository/FotaJobRepository;-><init>(Landroid/content/Context;)V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/database/room/data/repository/FotaJobRepository;->resetUpdateInfo()V
++
++    new-instance v0, Lcom/idm/fotaagent/database/room/data/repository/InstallParamRepository;
++
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/database/room/data/repository/InstallParamRepository;-><init>(Landroid/content/Context;)V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/database/room/data/repository/InstallParamRepository;->clear()V
++
++    new-instance v0, Lcom/idm/fotaagent/enabler/fumo/uimanager/taskevent/IDMFumoTaskDmFinish;
++
++    iget-object v1, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->taskId:Ljava/lang/String;
++
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/enabler/fumo/uimanager/taskevent/IDMFumoTaskDmFinish;-><init>(Ljava/lang/String;)V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/enabler/fumo/uimanager/IDMFumoTaskCommon;->execute()V
+ 
+     return-void
+ .end method
+diff --git a/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateSuccessfulNodata.smali b/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateSuccessfulNodata.smali
+index afb433d..92e7775 100644
+--- a/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateSuccessfulNodata.smali
++++ b/smali/com/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutorUpdateSuccessfulNodata.smali
+@@ -47,19 +47,46 @@
+ .end method
+ 
+ .method public idmFumoStart()V
+-    .locals 1
++    .locals 2
+ 
+     const-string v0, ""
+ 
+     invoke-static {v0}, Lcom/samsung/android/fotaagent/common/log/Log;->I(Ljava/lang/Object;)V
+ 
+-    iget-object p0, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->actionInfoDao:Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;
++    # UN1CA: Samsung DM sessions are blocked, so the session that reports
++    # the install result never runs. Do what follows it when the server
++    # ends that session with FINISH: delete the update package, drop the
++    # job's update data and close the job (IDMFumoTaskDmFinish cancels the
++    # "connecting to server" notification and sends SCHEDULE_FINISH).
++    # FINISH_AND_EXECUTE would instead wait for a next package from the
++    # session (execInfo) and leave the job open.
++    new-instance v0, Lcom/idm/fotaagent/utils/storage/FileManager;
++
++    invoke-direct {v0}, Lcom/idm/fotaagent/utils/storage/FileManager;-><init>()V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/utils/storage/FileManager;->deleteDeltaAndMetadataFiles()V
++
++    iget-object v1, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->context:Landroid/content/Context;
++
++    new-instance v0, Lcom/idm/fotaagent/database/room/data/repository/FotaJobRepository;
++
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/database/room/data/repository/FotaJobRepository;-><init>(Landroid/content/Context;)V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/database/room/data/repository/FotaJobRepository;->resetUpdateInfo()V
++
++    new-instance v0, Lcom/idm/fotaagent/database/room/data/repository/InstallParamRepository;
++
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/database/room/data/repository/InstallParamRepository;-><init>(Landroid/content/Context;)V
++
++    invoke-virtual {v0}, Lcom/idm/fotaagent/database/room/data/repository/InstallParamRepository;->clear()V
++
++    new-instance v0, Lcom/idm/fotaagent/enabler/fumo/uimanager/taskevent/IDMFumoTaskDmFinish;
+ 
+-    invoke-virtual {p0}, Lcom/idm/fotaagent/database/sqlite/database/dao/ActionInfoDao;->getActionInfo()Lcom/idm/service/actioninfo/IDMActionInfo;
++    iget-object v1, p0, Lcom/idm/fotaagent/enabler/fumo/executor/IDMFumoExecutor;->taskId:Ljava/lang/String;
+ 
+-    move-result-object p0
++    invoke-direct {v0, v1}, Lcom/idm/fotaagent/enabler/fumo/uimanager/taskevent/IDMFumoTaskDmFinish;-><init>(Ljava/lang/String;)V
+ 
+-    invoke-static {p0}, Lcom/idm/fotaagent/LibraryStarter;->startDMTask(Lcom/idm/service/actioninfo/IDMActionInfo;)V
++    invoke-virtual {v0}, Lcom/idm/fotaagent/enabler/fumo/uimanager/IDMFumoTaskCommon;->execute()V
+ 
+     return-void
+ .end method

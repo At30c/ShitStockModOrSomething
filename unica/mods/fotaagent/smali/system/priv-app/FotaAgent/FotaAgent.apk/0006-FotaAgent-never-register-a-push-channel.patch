@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: At30c <173511395+At30c@users.noreply.github.com>
+Date: Sat, 7 Nov 2026 18:26:31 -0300
+Subject: [PATCH 6/8] FotaAgent: never register a push channel
+
+---
+ .../restapi/restclient/push/message/PushType$1.smali        | 6 ++++++
+ .../restapi/restclient/push/message/PushType$2.smali        | 6 ++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali b/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali
+index 511dd4d..ace34b9 100644
+--- a/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali
++++ b/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$1.smali
+@@ -189,6 +189,12 @@
+ .method public isAvailable(Landroid/content/Context;)Z
+     .locals 1
+ 
++    # UN1CA: no push channel (FCM or Samsung SPP) is ever registered.
++    const/4 p0, 0x0
++
++    return p0
++
++
+     sget-object p0, Lb4/d;->d:Lb4/d;
+ 
+     sget v0, Lb4/e;->a:I
+diff --git a/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$2.smali b/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$2.smali
+index b1eeb0e..c122ab5 100644
+--- a/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$2.smali
++++ b/smali/com/idm/fotaagent/restapi/restclient/push/message/PushType$2.smali
+@@ -252,6 +252,12 @@
+ .method public isAvailable(Landroid/content/Context;)Z
+     .locals 0
+ 
++    # UN1CA: no push channel (FCM or Samsung SPP) is ever registered.
++    const/4 p0, 0x0
++
++    return p0
++
++
+     const/4 p0, 0x1
+ 
+     return p0

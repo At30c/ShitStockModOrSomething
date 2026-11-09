@@ -1,0 +1,4 @@
+id=fotaagent
+name=FotaAgent ROM updater
+author=At30c
+description=Patches Samsung FotaAgent into the ROM update downloader and removes every Samsung network path (REST, OMA-DM, reports, analytics, DiagMon, push).
