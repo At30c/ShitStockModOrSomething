@@ -92,6 +92,11 @@ BUILD_IMAGE_MKFS()
             BUILD_CMD+="--file-contexts \"$FILE_CONTEXT_FILE\" "
             # Samsung uses a different default fixed timestamp for erofs/f2fs
             BUILD_CMD+="-T \"1640995200\" "
+            # mkfs.erofs picks a random UUID by default, so the same work dir
+            # gave a different superblock on every build and an incremental
+            # (or kernel-only) update could not be made against a rebuilt
+            # baseline.  Derive a fixed UUID from the mount point instead.
+            BUILD_CMD+="-U \"$(uuidgen --sha1 --namespace @url --name "unica-erofs:$MOUNT_POINT")\" "
             if $MAP_FILE; then
                 BUILD_CMD+="--block-list-file \"${OUTPUT_FILE//.img/.map}\" "
             fi

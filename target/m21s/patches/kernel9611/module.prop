@@ -5,3 +5,4 @@ version=1.0
 versionCode=1
 author=Exynos9611Development, At30c
 description=Builds the pinned One UI universal9611 kernel with the M21 board profile, applies the Android 17 capability ABI backport, and repacks the target boot image.
+kernel=true

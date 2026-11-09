@@ -25,6 +25,12 @@ USE_APK_CACHE=false
 BUILD_ROM=false
 BUILD_ZIP=true
 BUILD_INCREMENTAL=false
+# -k: reuse the work dir of the last build, rebuild only the kernel modules
+# (module.prop "kernel=true") and make an incremental zip against it.
+KERNEL_ONLY=false
+# FotaAgent result (/cache/fota/fota.status): incremental zips always record
+# it; full zips only with -u/--fota-status (exported for the zip generators).
+export FOTA_STATUS_IN_FULL_ZIP=false
 SKIP_DEBUG_INSTALL=false
 
 START_TIME="$(date +%s)"
@@ -225,6 +231,11 @@ PREPARE_SCRIPT()
             BUILD_ZIP=false
         elif [[ "$1" == "--incremental" ]] || [[ "$1" == "-i" ]]; then
             BUILD_INCREMENTAL=true
+        elif [[ "$1" == "--fota-status" ]] || [[ "$1" == "-u" ]]; then
+            FOTA_STATUS_IN_FULL_ZIP=true
+        elif [[ "$1" == "--kernel-only" ]] || [[ "$1" == "-k" ]]; then
+            KERNEL_ONLY=true
+            BUILD_INCREMENTAL=true
         else
             if [[ "$1" == "-"* ]]; then
                 LOGE "Unknown option: $1"
@@ -264,6 +275,8 @@ PRINT_USAGE()
     echo " -f, --force : Force ROM build" >&2
     echo " -c, --use-apk-cache : Incrementally rebuild only changed APKs/JARs" >&2
     echo " -i, --incremental : Build a block-level update from the previous target-files snapshot" >&2
+    echo " -u, --fota-status : Also record the FotaAgent install result in full ROM zips" >&2
+    echo " -k, --kernel-only : Rebuild only the kernel (boot/dtbo) on the last build and make an incremental zip" >&2
     echo " --no-rom-zip : Do not build ROM zip" >&2
 }
 # ]
@@ -284,7 +297,31 @@ fi
 # are unchanged. This keeps the expensive extraction/patch/APK phase out of a
 # packaging-only rerun; -c still controls only the separate APK/JAR cache.
 BUILD_ROM=true
-if ! $FORCE && [ -d "$WORK_DIR" ] && [ -f "$WORK_DIR/.completed" ]; then
+if $KERNEL_ONLY; then
+    # The kernel-only update is a diff against the last build, which must be
+    # both the reused work dir and the incremental baseline (the build that is
+    # installed on the device).  Other source changes are left out on purpose
+    # and .completed is not refreshed, so the next normal build rebuilds them.
+    if [ ! -f "$WORK_DIR/.completed" ]; then
+        LOGE "-k needs the work dir of a completed build: ${WORK_DIR//$SRC_DIR\//}"
+        exit 1
+    fi
+    if [ ! -f "$INCREMENTAL_BASE/build_info.txt" ]; then
+        LOGE "-k needs the incremental baseline of the installed build: ${INCREMENTAL_BASE//$SRC_DIR\//}"
+        exit 1
+    fi
+    WORK_DIR_TIMESTAMP="$(sed -n "s/^ro.unica.timestamp=//p" "$WORK_DIR/system/system/build.prop" | head -n 1)"
+    BASE_TIMESTAMP="$(sed -n "s/^timestamp=//p" "$INCREMENTAL_BASE/build_info.txt" | head -n 1)"
+    if [ ! "$WORK_DIR_TIMESTAMP" ] || [[ "$WORK_DIR_TIMESTAMP" != "$BASE_TIMESTAMP" ]]; then
+        LOGE "The work dir (timestamp ${WORK_DIR_TIMESTAMP:-none}) is not the incremental baseline (timestamp ${BASE_TIMESTAMP:-none})"
+        LOGE "Build and install a full or incremental update with this version of make_rom.sh first"
+        exit 1
+    fi
+    if [[ "$(cat "$WORK_DIR/.completed")" != "$(GET_WORK_DIR_HASH)" ]]; then
+        LOGW "Source changes outside the kernel modules are not part of a kernel-only update"
+    fi
+    BUILD_ROM=false
+elif ! $FORCE && [ -d "$WORK_DIR" ] && [ -f "$WORK_DIR/.completed" ]; then
     if [[ "$(cat "$WORK_DIR/.completed")" == "$(GET_WORK_DIR_HASH)" ]]; then
         LOGW "No changes have been detected in the build environment; reusing work dir"
         BUILD_ROM=false
@@ -367,6 +404,25 @@ if $BUILD_ROM; then
     echo -n "$(GET_WORK_DIR_HASH)" > "$WORK_DIR/.completed"
 fi
 
+if $KERNEL_ONLY; then
+    LOG_STEP_IN true "Rebuilding kernel modules"
+    KERNEL_MODULES=0
+    for MODULES_DIR in "$SRC_DIR/platform/$TARGET_PLATFORM/patches" "$SRC_DIR/target/$TARGET_CODENAME/patches"; do
+        [ -d "$MODULES_DIR" ] || continue
+        while IFS= read -r MODULE_PROP; do
+            grep -q "^kernel=true$" "$MODULE_PROP" || continue
+            [ -f "$(dirname "$MODULE_PROP")/disable" ] && continue
+            "$SRC_DIR/scripts/internal/apply_modules.sh" "$(dirname "$MODULE_PROP")" || exit 1
+            KERNEL_MODULES=$((KERNEL_MODULES + 1))
+        done < <(find "$MODULES_DIR" -mindepth 2 -maxdepth 2 -name module.prop | sort)
+    done
+    if [[ "$KERNEL_MODULES" == "0" ]]; then
+        LOGE "No kernel module (module.prop \"kernel=true\") for $TARGET_CODENAME"
+        exit 1
+    fi
+    LOG_STEP_OUT
+fi
+
 # Runs on every build, also when the work dir is reused: the source commit
 # can change without changing the contents GET_WORK_DIR_HASH looks at.
 if [ -d "$WORK_DIR" ]; then
@@ -376,50 +432,51 @@ if [ -d "$WORK_DIR" ]; then
 fi
 
 if $BUILD_ZIP; then
-    if $BUILD_INCREMENTAL; then
-        mkdir -p "$INCREMENTAL_DIR"
-        rm -rf "$INCREMENTAL_TARGET" "$INCREMENTAL_DIR/target-files.zip"
+    mkdir -p "$INCREMENTAL_DIR"
+    rm -rf "$INCREMENTAL_TARGET" "$INCREMENTAL_DIR/target-files.zip"
 
-        INCREMENTAL_SOURCE=""
+    INCREMENTAL_SOURCE=""
+    if $BUILD_INCREMENTAL; then
         if [ -d "$INCREMENTAL_BASE" ]; then
             INCREMENTAL_SOURCE="$INCREMENTAL_BASE"
         elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
             INCREMENTAL_SOURCE="$INCREMENTAL_LEGACY_BASE"
         fi
-
-        LOG_STEP_IN true "Creating incremental target-files"
-        "$SRC_DIR/scripts/internal/create_target_files_zip.sh" "$INCREMENTAL_TARGET" || exit 1
-        LOG_STEP_OUT
-
-        LOG_STEP_IN true "Creating incremental ROM zip"
-        if [ "$INCREMENTAL_SOURCE" ]; then
-            "$SRC_DIR/scripts/build_flashable_zip.sh" \
-                --incremental "$INCREMENTAL_SOURCE" "$INCREMENTAL_TARGET" || exit 1
-        else
-            LOGW "No incremental base exists; creating a full ZIP and establishing the baseline"
-            "$SRC_DIR/scripts/build_flashable_zip.sh" "$INCREMENTAL_TARGET" || exit 1
-        fi
-        LOG_STEP_OUT
-
-        # Promote the target only after the ZIP was generated successfully. A
-        # failed build must never destroy the last known installable baseline.
-        # The previous baseline is kept: if the ZIP just built is never
-        # installed, the next one can be rebuilt against it with
-        # build_flashable_zip.sh -i.
-        if [ -d "$INCREMENTAL_BASE" ]; then
-            rm -rf "$INCREMENTAL_PREV"
-            rm -f "$INCREMENTAL_LEGACY_PREV" "$INCREMENTAL_LEGACY_BASE"
-            mv -f "$INCREMENTAL_BASE" "$INCREMENTAL_PREV"
-        elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
-            mv -f "$INCREMENTAL_LEGACY_BASE" "$INCREMENTAL_LEGACY_PREV"
-        fi
-        mv -f "$INCREMENTAL_TARGET" "$INCREMENTAL_BASE"
-        LOG "- Updated incremental baseline: ${INCREMENTAL_BASE//$SRC_DIR\//}"
-    else
-        LOG_STEP_IN true "Creating zip"
-        "$SRC_DIR/scripts/internal/build_flashable_zip.sh" || exit 1
-        LOG_STEP_OUT
     fi
+
+    # Every zip is built from target-files, which then become the baseline
+    # of the next incremental (and -k) update.  Full builds used to skip this,
+    # so after installing one the baseline no longer matched the device.
+    LOG_STEP_IN true "Creating target-files"
+    "$SRC_DIR/scripts/internal/create_target_files_zip.sh" "$INCREMENTAL_TARGET" || exit 1
+    LOG_STEP_OUT
+
+    if [ "$INCREMENTAL_SOURCE" ]; then
+        LOG_STEP_IN true "Creating incremental ROM zip"
+        "$SRC_DIR/scripts/build_flashable_zip.sh" \
+            --incremental "$INCREMENTAL_SOURCE" "$INCREMENTAL_TARGET" || exit 1
+    else
+        $BUILD_INCREMENTAL && \
+            LOGW "No incremental base exists; creating a full ZIP and establishing the baseline"
+        LOG_STEP_IN true "Creating zip"
+        "$SRC_DIR/scripts/build_flashable_zip.sh" "$INCREMENTAL_TARGET" || exit 1
+    fi
+    LOG_STEP_OUT
+
+    # Promote the target only after the ZIP was generated successfully. A
+    # failed build must never destroy the last known installable baseline.
+    # The previous baseline is kept: if the ZIP just built is never
+    # installed, the next one can be rebuilt against it with
+    # build_flashable_zip.sh -i.
+    if [ -d "$INCREMENTAL_BASE" ]; then
+        rm -rf "$INCREMENTAL_PREV"
+        rm -f "$INCREMENTAL_LEGACY_PREV" "$INCREMENTAL_LEGACY_BASE"
+        mv -f "$INCREMENTAL_BASE" "$INCREMENTAL_PREV"
+    elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
+        mv -f "$INCREMENTAL_LEGACY_BASE" "$INCREMENTAL_LEGACY_PREV"
+    fi
+    mv -f "$INCREMENTAL_TARGET" "$INCREMENTAL_BASE"
+    LOG "- Updated incremental baseline: ${INCREMENTAL_BASE//$SRC_DIR\//}"
 fi
 
 exit 0

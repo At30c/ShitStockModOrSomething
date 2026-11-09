@@ -126,11 +126,17 @@ READ_AND_APPLY_PROPS()
 #]
 
 if [ "$#" != "1" ]; then
-    echo "Usage: apply_modules <folder>" >&2
+    echo "Usage: apply_modules <folder | module folder>" >&2
     exit 1
 elif [ ! -d "$1" ]; then
     LOGE "Folder not found: ${1//$SRC_DIR\//}"
     exit 1
+fi
+
+# A single module (make_rom.sh -k reapplies only the kernel modules).
+if [ -f "$1/module.prop" ] || [ -f "$1/$TARGET_OS_SINGLE_SYSTEM_IMAGE/module.prop" ]; then
+    APPLY_MODULE "$1"
+    exit 0
 fi
 
 # Modules normally use the directory name only as a label.  A module may set
