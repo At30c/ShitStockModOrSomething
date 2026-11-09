@@ -311,7 +311,11 @@ if $KERNEL_ONLY; then
         exit 1
     fi
     WORK_DIR_TIMESTAMP="$(sed -n "s/^ro.unica.timestamp=//p" "$WORK_DIR/system/system/build.prop" | head -n 1)"
-    BASE_TIMESTAMP="$(sed -n "s/^timestamp=//p" "$INCREMENTAL_BASE/build_info.txt" | head -n 1)"
+    # After a kernel-only update the baseline keeps the system timestamp
+    # apart from its own (the kernel's).
+    BASE_TIMESTAMP="$(sed -n "s/^system_timestamp=//p" "$INCREMENTAL_BASE/build_info.txt" | head -n 1)"
+    [ "$BASE_TIMESTAMP" ] || \
+        BASE_TIMESTAMP="$(sed -n "s/^timestamp=//p" "$INCREMENTAL_BASE/build_info.txt" | head -n 1)"
     if [ ! "$WORK_DIR_TIMESTAMP" ] || [[ "$WORK_DIR_TIMESTAMP" != "$BASE_TIMESTAMP" ]]; then
         LOGE "The work dir (timestamp ${WORK_DIR_TIMESTAMP:-none}) is not the incremental baseline (timestamp ${BASE_TIMESTAMP:-none})"
         LOGE "Build and install a full or incremental update with this version of make_rom.sh first"
@@ -425,7 +429,9 @@ fi
 
 # Runs on every build, also when the work dir is reused: the source commit
 # can change without changing the contents GET_WORK_DIR_HASH looks at.
-if [ -d "$WORK_DIR" ]; then
+# Kernel-only updates leave the system partition as installed; their build
+# identity goes into the boot image (create_kernel_only_target_files.sh).
+if [ -d "$WORK_DIR" ] && ! $KERNEL_ONLY; then
     LOG_STEP_IN true "Stamping build commit"
     "$SRC_DIR/scripts/internal/stamp_build_info.sh" || exit 1
     LOG_STEP_OUT
@@ -448,7 +454,14 @@ if $BUILD_ZIP; then
     # of the next incremental (and -k) update.  Full builds used to skip this,
     # so after installing one the baseline no longer matched the device.
     LOG_STEP_IN true "Creating target-files"
-    "$SRC_DIR/scripts/internal/create_target_files_zip.sh" "$INCREMENTAL_TARGET" || exit 1
+    if $KERNEL_ONLY; then
+        # Only the kernel images change: link the baseline instead of
+        # rebuilding every partition image just to diff them as unchanged.
+        "$SRC_DIR/scripts/internal/create_kernel_only_target_files.sh" \
+            "$INCREMENTAL_BASE" "$INCREMENTAL_TARGET" || exit 1
+    else
+        "$SRC_DIR/scripts/internal/create_target_files_zip.sh" "$INCREMENTAL_TARGET" || exit 1
+    fi
     LOG_STEP_OUT
 
     if [ "$INCREMENTAL_SOURCE" ]; then

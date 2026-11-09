@@ -138,6 +138,13 @@ public final class UpdateChecker {
             return null;
         }
         long current = parseLong(getProp("ro.unica.timestamp"));
+        // Kernel-only updates (make_rom.sh -k) leave system untouched and
+        // stamp their timestamp on the kernel command line instead.
+        long kernel = parseLong(getProp("ro.boot.unica.timestamp"));
+        if (current > 0 && kernel > current) {
+            Log.i(TAG, "kernel-only update installed (" + kernel + ")");
+            current = kernel;
+        }
         if (current <= 0) {
             Log.w(TAG, "ro.unica.timestamp is not set; no ROM updates");
             return null;

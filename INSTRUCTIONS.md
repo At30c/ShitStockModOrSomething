@@ -13080,3 +13080,43 @@ Requisitos e garantias:
 * A build full de 08/11 instalada no aparelho foi gerada antes disso (sem
   baseline e com UUID aleatório), então o `-k` só vale a partir da próxima
   build full.
+
+## EMS do S26+ portado, SIOP e `-k` enxuto (09/11/2026)
+
+* **`max-freq` do DT não limita o cluster big.** O exynos-acme lê o
+  `max-freq` e logo depois sobe `domain->max_freq` de volta para a boost freq
+  do pstate (`exynos_pstate_get_boost_freq`). O limite de 2,21 GHz da build de
+  09/11 nunca funcionou (o teste ao vivo de 08/11 tinha `scaling_max_freq`
+  escrito à mão). Limites de frequência têm que ir por PM QoS.
+* **Patch 0018 (teto adaptativo, do EMS do S5E9965):** nó `fmax` por set do
+  emstune (um teto por cluster, 0 = sem teto), aplicado como PM QoS max em
+  `PM_QOS_CLUSTER0..2_FREQ_MAX` por um work (o PM QoS pode dormir). Sets sem
+  `fmax` herdam o default do modo. Normal, power-scenario, light-video,
+  balance e pinned: big a 2,21 GHz no default/med/touch; big boost, game,
+  light-game e performance: sem teto. `emstune/fmax_enabled` desliga;
+  `emstune/cur_set` mostra o teto ativo.
+* **Patch 0019 (margem do ESG):** `pelt-margin`/`pelt-margin-freq` por
+  domínio do `esg` no DT; 25/20/15/12% a partir de 0/~60/~75/~90% do máximo
+  de cada cluster (antes 25% fixo). Desliga em
+  `energy_step/coregroupN/margin_enabled`. Conferido pelo tracepoint
+  `ems_debug/esg_cpu_util` (exige `tracing_on=1`).
+* **Patch 0020 (ECS por set):** o governor ECS (`sparing.c`) existia sem nó
+  no DT. Agora tem modo `saving` nos CPUs 0-5 (o Mongoose só recebe tarefas
+  com os 6 ocupados), ligado por set via nó `ecs` (normal, power-scenario e
+  light-video em default/med boost). `emstune/ecs_enabled` desliga.
+  Capacidades (tabela de energia): little 251, mid 814, big 1024.
+* **Mudou a tabela virtual da UFC? Atualize quem a referencia.** O SDHMS
+  exige valores exatos da tabela nos `siop_model.xml`; um valor inexistente
+  derruba a política inteira ("SSRM Warning: Fails to parse policy XML") e
+  o aparelho fica sem os limitadores térmicos de CPU. O hyper arredonda
+  pedidos de mínimo para cima, mas o módulo `hyper_boost_tuning` usa os
+  valores exatos. Validar contra `su -c cat /sys/power/cpufreq_table`.
+* **`-k` enxuto:** `create_kernel_only_target_files.sh` faz hardlink do
+  baseline e só troca as imagens do kernel; nenhuma partição é refeita.
+  A identidade vai no boot: `stamp_boot_bootargs.py` acrescenta
+  `androidboot.unica.timestamp` ao `/chosen/bootargs` do DTB do boot.img
+  (o bootloader da Samsung ignora a cmdline do cabeçalho, e o init de
+  primeiro estágio do ramdisk é Android 11, sem `second_stage_resources`).
+  O UpdateChecker usa o maior entre `ro.unica.timestamp` e
+  `ro.boot.unica.timestamp`; o `build_info.txt` do `-k` guarda
+  `system_timestamp` para encadear vários `-k`.
