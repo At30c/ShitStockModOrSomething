@@ -276,6 +276,30 @@ for LEGACY_MAPPING in 29.0.cil 29.0.compat.cil 30.0.cil 30.0.compat.cil; do
     fi
 done
 
+# The legacy mappings above come from the target firmware and predate the
+# per-SDK app domains of the Android 17 platform (platform_app_36,
+# priv_app_36). The source's own 31.0+ mappings add those domains to the
+# versioned attributes, but the imported 29.0/30.0 ones only list the base
+# domain, so no vendor rule written for platform_app_30_0 or priv_app_30_0
+# reaches apps running in the new domains. GOS (platform_app_36) is one of
+# them: it cannot read sysfs_thermal, IPM fails "SLSI temp heuristics" and
+# Game Booster's performance monitor gets no FPS/CPU/GPU data. Copy the
+# domain lists from the source's 31.0 mapping into the target's mapping.
+PLAT_MAPPING_DIR="$WORK_DIR/system/system/etc/selinux/mapping"
+if [ -f "$PLAT_MAPPING_DIR/31.0.cil" ] && [ -f "$PLAT_MAPPING_DIR/$CIL_NAME.cil" ] && \
+        [ "$CIL_NAME" != "31.0" ]; then
+    while read -r APP_DOMAIN SDK_DOMAIN; do
+        VERSIONED_ATTR="${APP_DOMAIN}_${CIL_NAME//./_}"
+        if grep -q -F "(typeattributeset $VERSIONED_ATTR ($APP_DOMAIN))" "$PLAT_MAPPING_DIR/$CIL_NAME.cil"; then
+            LOG "- Mapping $SDK_DOMAIN to $VERSIONED_ATTR"
+            sed -i "s/^(typeattributeset $VERSIONED_ATTR ($APP_DOMAIN))$/(typeattributeset $VERSIONED_ATTR ($APP_DOMAIN $SDK_DOMAIN))/" \
+                "$PLAT_MAPPING_DIR/$CIL_NAME.cil"
+            PATCHED=true
+        fi
+    done < <(sed -n -E 's/^\(typeattributeset ([a-z_0-9]+)_31_0 \(([a-z_0-9]+) (\2_[0-9]+)\)\)$/\2 \3/p' \
+        "$PLAT_MAPPING_DIR/31.0.cil")
+fi
+
 if ! $PATCHED; then
     LOG "\033[0;33m! Nothing to do\033[0m"
 fi
@@ -284,4 +308,5 @@ unset ENTRIES DUPLICATES CIL_NAME CIL_FILE PATCHED SYSTEM_EXT_SELINUX VENDOR_FIL
 unset ION_ALLOCATOR_TYPE ION_ALLOCATOR_RULE SUSPEND_REQUIRED_RULES SUSPEND_PLATFORM_POLICY \
     SUSPEND_PLATFORM_RULES SUSPEND_VENDOR_RULES SUSPEND_RULE VENDOR_API_LIST LEGACY_MAPPING
 unset SYSTEMUI_FOD_POSITION_RULES SYSTEMUI_FOD_POSITION_RULE
+unset PLAT_MAPPING_DIR APP_DOMAIN SDK_DOMAIN VERSIONED_ATTR
 unset -f GET_SYSTEM_EXT
