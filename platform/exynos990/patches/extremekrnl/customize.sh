@@ -250,6 +250,46 @@ APPLY_KERNEL_PATCHES()
         elif git -C "$KERNEL_TMP_DIR" apply --reverse --check "$PATCH" > /dev/null 2>&1; then
             LOG "- Kernel compatibility patch already applied: $(basename "$PATCH")"
         else
+            # A patch that later patches modify again (0018 and 0020 both
+            # touch ems.h/tune.c) neither applies nor reverts on its own once
+            # the stack is applied, and a changed stack leaves the tree in
+            # between. Restore what the stack touches and apply it again.
+            REAPPLY_KERNEL_PATCHES "${PATCHES[@]}" || return 1
+            return 0
+        fi
+    done
+}
+
+REAPPLY_KERNEL_PATCHES()
+{
+    local PATCH
+    local FILE
+    local FILES=()
+
+    LOG "- Kernel patches overlap; restoring the files they touch and applying them in order"
+    while IFS= read -r FILE; do
+        FILES+=("$FILE")
+    done < <(for PATCH in "$@"; do
+                 git -C "$KERNEL_TMP_DIR" apply --numstat "$PATCH" | cut -f 3-
+             done | sort -u)
+
+    for FILE in "${FILES[@]}"; do
+        if git -C "$KERNEL_TMP_DIR" ls-files --error-unmatch -- "$FILE" > /dev/null 2>&1; then
+            git -C "$KERNEL_TMP_DIR" checkout -q -- "$FILE" || return 1
+        else
+            # Created by a patch: not in the upstream tree.
+            rm -f -- "${KERNEL_TMP_DIR:?}/$FILE"
+        fi
+    done
+
+    for PATCH in "$@"; do
+        if git -C "$KERNEL_TMP_DIR" apply --check "$PATCH" > /dev/null 2>&1; then
+            LOG "- Applying kernel compatibility patch: $(basename "$PATCH")"
+            EVAL "git -C \"$KERNEL_TMP_DIR\" apply \"$PATCH\""
+        elif git -C "$KERNEL_TMP_DIR" apply --reverse --check "$PATCH" > /dev/null 2>&1; then
+            # Already part of the upstream commit (merged by ExtremeKRNL).
+            LOG "- Kernel compatibility patch already upstream: $(basename "$PATCH")"
+        else
             ABORT "Could not apply kernel compatibility patch $(basename "$PATCH") to the ExtremeKRNL source."
             return 1
         fi
