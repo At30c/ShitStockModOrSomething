@@ -244,6 +244,10 @@ O `upload` sem argumentos envia o último `prepare`. Tudo pode ser trocado:
   build: a `base-target-files` acompanha toda build, inclusive as de teste
   nunca publicadas, e em 09/11 a base publicada chegou a ser apagada.
   Sem nenhuma publicada, volta à última build e avisa.
+- **Completa junto.** O `make_rom.sh -i` (e o `-k`) também gera o zip
+  completo da mesma build, já com o `fota.status`, e o `prepare` envia os
+  dois: o aparelho numa base fixada recebe o incremental e qualquer outro
+  recebe a completa. `--no-full-zip` pula a completa (build de teste).
 
 ## Hospedagem
 

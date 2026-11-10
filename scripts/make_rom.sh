@@ -31,6 +31,9 @@ KERNEL_ONLY=false
 # FotaAgent result (/cache/fota/fota.status): incremental zips always record
 # it; full zips only with -u/--fota-status (exported for the zip generators).
 export FOTA_STATUS_IN_FULL_ZIP=false
+# -i/-k also build the full zip of the same build, so a release offers it to
+# devices on builds older than the incremental bases (--no-full-zip skips it).
+BUILD_FULL_WITH_INCREMENTAL=true
 SKIP_DEBUG_INSTALL=false
 
 START_TIME="$(date +%s)"
@@ -241,6 +244,8 @@ PREPARE_SCRIPT()
         elif [[ "$1" == "--kernel-only" ]] || [[ "$1" == "-k" ]]; then
             KERNEL_ONLY=true
             BUILD_INCREMENTAL=true
+        elif [[ "$1" == "--no-full-zip" ]]; then
+            BUILD_FULL_WITH_INCREMENTAL=false
         else
             if [[ "$1" == "-"* ]]; then
                 LOGE "Unknown option: $1"
@@ -282,6 +287,7 @@ PRINT_USAGE()
     echo " -i, --incremental : Build a block-level update from the previous target-files snapshot" >&2
     echo " -u, --fota-status : Also record the FotaAgent install result in full ROM zips" >&2
     echo " -k, --kernel-only : Rebuild only the kernel (boot/dtbo) on the last build and make an incremental zip" >&2
+    echo " --no-full-zip : With -i/-k, build only the incremental zips, not the full zip of the same build" >&2
     echo " --no-rom-zip : Do not build ROM zip" >&2
 }
 # ]
@@ -494,6 +500,15 @@ if $BUILD_ZIP; then
                 --incremental "$INCREMENTAL_SOURCE" "$INCREMENTAL_TARGET" || exit 1
             LOG_STEP_OUT
         done
+        # The full zip of the same build goes into the same release, for
+        # devices on any build that is not an incremental base. It is an OTA
+        # package too, so it records the FotaAgent result.
+        if $BUILD_FULL_WITH_INCREMENTAL; then
+            LOG_STEP_IN true "Creating zip"
+            FOTA_STATUS_IN_FULL_ZIP=true \
+                "$SRC_DIR/scripts/build_flashable_zip.sh" "$INCREMENTAL_TARGET" || exit 1
+            LOG_STEP_OUT
+        fi
     else
         $BUILD_INCREMENTAL && \
             LOGW "No incremental base exists; creating a full ZIP and establishing the baseline"
