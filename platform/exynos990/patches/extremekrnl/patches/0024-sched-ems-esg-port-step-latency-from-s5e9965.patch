@@ -1,0 +1,177 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: esg: port step latency from the S5E9965
+
+The S5E9965 EGO delays frequency raises by the level the raise asks for
+(step-latency 4/7/11/15 ms from step-latency-freq): the higher the target
+frequency, the longer the cluster must hold after its last frequency
+change, so it climbs into the inefficient top range only under sustained
+load. A raise from below the level start goes to that start at once, and
+lowering is never delayed. The energy step governor had no time based
+control on raises.
+
+Port it: an esg domain may give step-latency (ms) and step-latency-freq
+(up to four steps); coregroupN/latency_enabled in the esg sysfs turns it
+off at runtime. PM QoS minimum requests (touch, app launch boosts) do not
+go through the governor and are not delayed.
+
+Exynos 990: 4/7/11/15 ms from the pelt-margin steps (0 and ~60/75/90%
+of each cluster's maximum).
+---
+diff --git a/arch/arm64/boot/dts/exynos/exynos9830.dts b/arch/arm64/boot/dts/exynos/exynos9830.dts
+index a03058c..f179273 100644
+--- a/arch/arm64/boot/dts/exynos/exynos9830.dts
++++ b/arch/arm64/boot/dts/exynos/exynos9830.dts
+@@ -707,6 +707,9 @@
+ 			/* S5E9965-style margin: 25/20/15/12% from ~0/60/75/90% of max (little, max 2.00 GHz) */
+ 			pelt-margin = <25 20 15 12>;
+ 			pelt-margin-freq = <0 1200000 1500000 1800000>;
++			/* S5E9965 step latency: raises wait 4/7/11/15 ms from the same steps */
++			step-latency = <4 7 11 15>;
++			step-latency-freq = <0 1200000 1500000 1800000>;
+ 		};
+ 		domain@1 {
+ 			device_type = "esgov-pol4";
+@@ -718,6 +721,9 @@
+ 			/* S5E9965-style margin: 25/20/15/12% from ~0/60/75/90% of max (mid, max 2.60 GHz) */
+ 			pelt-margin = <25 20 15 12>;
+ 			pelt-margin-freq = <0 1560000 1950000 2340000>;
++			/* S5E9965 step latency: raises wait 4/7/11/15 ms from the same steps */
++			step-latency = <4 7 11 15>;
++			step-latency-freq = <0 1560000 1950000 2340000>;
+ 		};
+ 		domain@2 {
+ 			device_type = "esgov-pol6";
+@@ -729,6 +735,9 @@
+ 			/* S5E9965-style margin: 25/20/15/12% from ~0/60/75/90% of max (big, max 2.73 GHz) */
+ 			pelt-margin = <25 20 15 12>;
+ 			pelt-margin-freq = <0 1640000 2050000 2460000>;
++			/* S5E9965 step latency: raises wait 4/7/11/15 ms from the same steps */
++			step-latency = <4 7 11 15>;
++			step-latency-freq = <0 1640000 2050000 2460000>;
+ 		};
+ 	};
+ 
+diff --git a/kernel/sched/ems/energy_step.c b/kernel/sched/ems/energy_step.c
+index ed17445..68222ba 100644
+--- a/kernel/sched/ems/energy_step.c
++++ b/kernel/sched/ems/energy_step.c
+@@ -51,6 +51,15 @@ struct esgov_policy {
+ 	int			margin_cnt;
+ 	int			margin_enabled;
+ 
++	/*
++	 * Step latency (S5E9965 step-latency): from latency_freq[i] up, a
++	 * frequency raise waits latency_ms[i] after the last frequency change.
++	 */
++	unsigned int		latency_freq[ESG_MARGIN_STEPS];
++	unsigned int		latency_ms[ESG_MARGIN_STEPS];
++	int			latency_cnt;
++	int			latency_enabled;
++
+ 	/* Tracking min max information */
+ 	int			min_cap;	/* allowed max capacity */
+ 	int			max_cap;	/* allowed min capacity */
+@@ -469,6 +478,10 @@ esg_show(margin_enabled);
+ esg_store(margin_enabled);
+ esg_attr_rw(margin_enabled);
+ 
++esg_show(latency_enabled);
++esg_store(latency_enabled);
++esg_attr_rw(latency_enabled);
++
+ static ssize_t show(struct kobject *kobj, struct attribute *at, char *buf)
+ {
+ 	struct esg_attr *fvattr = container_of(at, struct esg_attr, attr);
+@@ -491,6 +504,7 @@ static struct attribute *esg_attrs[] = {
+ 	&step_attr.attr,
+ 	&patient_mode_attr.attr,
+ 	&margin_enabled_attr.attr,
++	&latency_enabled_attr.attr,
+ 	NULL
+ };
+ 
+@@ -518,6 +532,24 @@ static void esgov_parse_margin(struct device_node *dn,
+ 	esg_policy->margin_cnt = cnt;
+ }
+ 
++static void esgov_parse_latency(struct device_node *dn,
++				struct esgov_policy *esg_policy)
++{
++	int cnt = of_property_count_u32_elems(dn, "step-latency");
++
++	esg_policy->latency_enabled = 1;
++	if (cnt <= 0)
++		return;
++	if (cnt > ESG_MARGIN_STEPS ||
++	    of_property_count_u32_elems(dn, "step-latency-freq") != cnt ||
++	    of_property_read_u32_array(dn, "step-latency", esg_policy->latency_ms, cnt) ||
++	    of_property_read_u32_array(dn, "step-latency-freq", esg_policy->latency_freq, cnt)) {
++		pr_warn("esg: invalid step-latency table, raising without step latency\n");
++		return;
++	}
++	esg_policy->latency_cnt = cnt;
++}
++
+ static struct esgov_policy *esgov_policy_alloc(struct cpufreq_policy *policy)
+ {
+ 	struct device_node *dn = NULL;
+@@ -556,6 +588,7 @@ static struct esgov_policy *esgov_policy_alloc(struct cpufreq_policy *policy)
+ 	esg_policy->patient_mode = val;
+ 
+ 	esgov_parse_margin(dn, esg_policy);
++	esgov_parse_latency(dn, esg_policy);
+ 
+ 	esg_policy->rate_delay_ns = 4 * NSEC_PER_MSEC;
+ 
+@@ -943,6 +976,40 @@ static bool esgov_postpone_freq_update(struct esgov_policy *esg_policy,
+ 		return true;
+ }
+ 
++/*
++ * Step latency (from the S5E9965 EGO): the higher the frequency a raise
++ * asks for, the longer it waits after the last frequency change, so a
++ * cluster climbs into its least efficient top range only under sustained
++ * load. A raise from below the level start goes to that start at once (no
++ * delay for the climb itself). Lowering is never delayed. Returns true when
++ * the raise must wait; may lower *target_freq to the level start.
++ */
++static bool esgov_step_latency_postpone(struct esgov_policy *esg_policy, u64 time,
++					unsigned int *target_freq)
++{
++	unsigned int cur = esg_policy->policy->cur;
++	int i, level = 0;
++
++	if (!esg_policy->latency_cnt || !READ_ONCE(esg_policy->latency_enabled) ||
++	    *target_freq <= cur)
++		return false;
++
++	for (i = 1; i < esg_policy->latency_cnt; i++)
++		if (*target_freq >= esg_policy->latency_freq[i])
++			level = i;
++
++	if (time - esg_policy->last_freq_update_time >=
++	    (u64)esg_policy->latency_ms[level] * NSEC_PER_MSEC)
++		return false;
++
++	if (level && esg_policy->latency_freq[level] > cur) {
++		*target_freq = esg_policy->latency_freq[level];
++		return false;
++	}
++
++	return true;
++}
++
+ static void
+ esgov_update(struct update_util_data *hook, u64 time, unsigned int flags)
+ {
+@@ -985,6 +1052,10 @@ esgov_update(struct update_util_data *hook, u64 time, unsigned int flags)
+ 	if (esgov_postpone_freq_update(esg_policy, esg_cpu->cpu, time, target_freq))
+ 		goto out;
+ 
++	if (esgov_step_latency_postpone(esg_policy, time, &target_freq) ||
++	    esg_policy->target_freq == target_freq)
++		goto out;
++
+ 	if (!esg_policy->work_in_progress) {
+ 		esg_policy->last_caller = smp_processor_id();
+ 		esg_policy->work_in_progress = true;

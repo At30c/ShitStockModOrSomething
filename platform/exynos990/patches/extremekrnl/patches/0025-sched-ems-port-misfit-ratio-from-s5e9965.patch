@@ -1,0 +1,472 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: port misfit ratio from the S5E9965
+
+The Exynos 990 EMS judges a task misfit above 80% of the cpu capacity and
+a cpu overutilized above 80%, for every task. The S5E9965 EMS makes this
+a per-set, per-cpu and per-group ratio (misfit_ratio): a task fits while
+its util is below its group's ratio, and a cpu is overutilized above the
+lowest ratio of its groups.
+
+Port it as a misfit_ratio emstune node (one value per cpu for each
+schedtune group, 0 = 80%) used by the misfit status of the load
+balancer, the energy cpu selection and ontime's overutilized source
+check. Sets without the node inherit the mode's default set.
+
+As in the S5E9965 normal set, background, root and rt work uses 95% in the
+default sets of the everyday modes (normal, power-scenario, light-video,
+balance, pinned), so it stays on the smaller cores longer; foreground and
+top-app keep 80%, since past the mid cluster comes the Mongoose one (the
+S5E9965 uses 70% there). Touch and big boost sets keep 80% everywhere.
+cur_set shows the active ratios.
+---
+diff --git a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+index d8ccfc3..7d0377f 100644
+--- a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
++++ b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
+@@ -289,6 +289,15 @@
+ 				idx = <0>;
+ 				desc = "normal default";
+ 
++				/* misfit ratio (S5E9965): background work stays on the smaller cores longer */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 95  95  95  95  95  95  95  95>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 95  95  95  95  95  95  95  95>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 95  95  95  95  95  95  95  95>;
++				};
++
+ 				/* core sparing: ecs dynamic with the domain defaults */
+ 				ecs {
+ 					enabled = <1>;
+@@ -452,6 +461,15 @@
+ 				idx = <2>;
+ 				desc = "normal touch boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+@@ -494,6 +512,15 @@
+ 				idx = <3>;
+ 				desc = "normal big boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+@@ -592,6 +619,15 @@
+ 				idx = <4>;
+ 				desc = "power-scenario default";
+ 
++				/* misfit ratio (S5E9965): background work stays on the smaller cores longer */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 95  95  95  95  95  95  95  95>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 95  95  95  95  95  95  95  95>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 95  95  95  95  95  95  95  95>;
++				};
++
+ 				/* core sparing: ecs dynamic with the domain defaults */
+ 				ecs {
+ 					enabled = <1>;
+@@ -756,6 +792,15 @@
+ 				idx = <6>;
+ 				desc = "power-scenario touch boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+@@ -798,6 +843,15 @@
+ 				idx = <7>;
+ 				desc = "power-scenario big boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+@@ -1453,6 +1507,15 @@
+ 				idx = <16>;
+ 				desc = "light-video default";
+ 
++				/* misfit ratio (S5E9965): background work stays on the smaller cores longer */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 95  95  95  95  95  95  95  95>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 95  95  95  95  95  95  95  95>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 95  95  95  95  95  95  95  95>;
++				};
++
+ 				/* core sparing: ecs dynamic with the domain defaults */
+ 				ecs {
+ 					enabled = <1>;
+@@ -1616,6 +1679,15 @@
+ 				idx = <18>;
+ 				desc = "light-video touch boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+@@ -1657,6 +1729,15 @@
+ 				idx = <19>;
+ 				desc = "light-video big boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* core sparing off: touch/launch may use every core */
+ 				ecs {
+ 					enabled = <0>;
+@@ -1754,6 +1835,15 @@
+ 				idx = <20>;
+ 				desc = "balance default";
+ 
++				/* misfit ratio (S5E9965): background work stays on the smaller cores longer */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 95  95  95  95  95  95  95  95>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 95  95  95  95  95  95  95  95>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 95  95  95  95  95  95  95  95>;
++				};
++
+ 				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
+ 				fmax {
+ 					max-freq = <0 0 2210000>;
+@@ -1912,6 +2002,15 @@
+ 				idx = <22>;
+ 				desc = "balance touch boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <200 200 200 200 100 100  20  25>;
+@@ -1948,6 +2047,15 @@
+ 				idx = <23>;
+ 				desc = "balance big boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* adaptive fmax: no ceiling while boosting */
+ 				fmax {
+ 					max-freq = <0 0 0>;
+@@ -2039,6 +2147,15 @@
+ 				idx = <24>;
+ 				desc = "pinned default";
+ 
++				/* misfit ratio (S5E9965): background work stays on the smaller cores longer */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 95  95  95  95  95  95  95  95>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 95  95  95  95  95  95  95  95>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 95  95  95  95  95  95  95  95>;
++				};
++
+ 				/* adaptive fmax: big cluster ceiling, lifted by big boost and game modes */
+ 				fmax {
+ 					max-freq = <0 0 2210000>;
+@@ -2256,6 +2373,15 @@
+ 				idx = <26>;
+ 				desc = "pinned touch boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* weight (%) applied to active cpu's efficiency */
+ 				weight {           /* cpu    0   1   2   3   4   5   6   7 */
+ 					root            = <200 200 200 200 100 100  20  25>;
+@@ -2344,6 +2470,15 @@
+ 				idx = <27>;
+ 				desc = "pinned big boost";
+ 
++				/* misfit ratio: stock 80% while boosting */
++				misfit_ratio {     /* cpu    0   1   2   3   4   5   6   7 */
++					root            = < 80  80  80  80  80  80  80  80>;
++					foreground      = < 80  80  80  80  80  80  80  80>;
++					background      = < 80  80  80  80  80  80  80  80>;
++					top-app         = < 80  80  80  80  80  80  80  80>;
++					rt              = < 80  80  80  80  80  80  80  80>;
++				};
++
+ 				/* adaptive fmax: no ceiling while boosting */
+ 				fmax {
+ 					max-freq = <0 0 0>;
+diff --git a/kernel/sched/ems/ems.h b/kernel/sched/ems/ems.h
+index f8adbda..0c45809 100644
+--- a/kernel/sched/ems/ems.h
++++ b/kernel/sched/ems/ems.h
+@@ -262,6 +262,19 @@ struct emstune_ecs {
+ 	struct kobject kobj;
+ };
+ 
++/*
++ * emstune - misfit ratio (from the S5E9965 EMS): a task fits a cpu while its
++ * util is below ratio % of the cpu capacity, per cpu and schedtune group;
++ * a cpu is overutilized above the lowest ratio of its groups. 0 = 80%.
++ */
++#define DEFAULT_MISFIT_RATIO	80
++
++struct emstune_misfit_ratio {
++	bool overriding;
++	int ratio[NR_CPUS][STUNE_GROUP_COUNT];
++	struct kobject kobj;
++};
++
+ struct emstune_set {
+ 	int				idx;
+ 	const char			*desc;
+@@ -281,6 +294,7 @@ struct emstune_set {
+ 	struct emstune_migov		migov;
+ 	struct emstune_fmax		fmax;
+ 	struct emstune_ecs		ecs;
++	struct emstune_misfit_ratio	misfit_ratio;
+ 
+ 	struct kobject	  		kobj;
+ };
+@@ -297,6 +311,8 @@ struct emstune_mode {
+ 
+ extern bool emstune_can_migrate_task(struct task_struct *p, int dst_cpu);
+ extern int emstune_eff_weight(struct task_struct *p, int cpu, int idle);
++extern int emstune_misfit_ratio(struct task_struct *p, int cpu);
++extern bool ems_cpu_overutilized(int cpu, unsigned long capacity, unsigned long util);
+ extern const struct cpumask *emstune_cpus_allowed(struct task_struct *p);
+ extern int emstune_sched_policy(struct task_struct *p);
+ extern int emstune_ontime(struct task_struct *p);
+diff --git a/kernel/sched/ems/energy_select.c b/kernel/sched/ems/energy_select.c
+index cf85574..07a82e6 100644
+--- a/kernel/sched/ems/energy_select.c
++++ b/kernel/sched/ems/energy_select.c
+@@ -161,7 +161,7 @@ static void find_energy_candidates(struct tp_env *env, struct cpumask *candidate
+ 			}
+ 
+ 			/* check overutil with fair util only */
+-			if (cpu_overutilized(capacity, cpu_util))
++			if (ems_cpu_overutilized(cpu, capacity, cpu_util))
+ 				continue;
+ 
+ 			/* Add rt util */
+diff --git a/kernel/sched/ems/load_balance.c b/kernel/sched/ems/load_balance.c
+index 01d3adc..9204c90 100644
+--- a/kernel/sched/ems/load_balance.c
++++ b/kernel/sched/ems/load_balance.c
+@@ -233,9 +233,9 @@ done:
+ 	return overutilized;
+ }
+ 
+-static bool lb_task_fits_capacity(struct task_struct *p, unsigned long capacity)
++static bool lb_task_fits_capacity(struct task_struct *p, int cpu, unsigned long capacity)
+ {
+-	return capacity * 1024 > ml_boosted_task_util(p) * 1280;
++	return capacity * 100 > ml_boosted_task_util(p) * emstune_misfit_ratio(p, cpu);
+ }
+ 
+ void lb_update_misfit_status(struct task_struct *p, struct rq *rq,
+@@ -252,14 +252,14 @@ void lb_update_misfit_status(struct task_struct *p, struct rq *rq,
+ 	}
+ 
+ 	capacity = capacity_cpu(cpu, USS);
+-	overutilized = cpu_overutilized(capacity, ml_cpu_util(cpu));
++	overutilized = ems_cpu_overutilized(cpu, capacity, ml_cpu_util(cpu));
+ 
+ 	/*
+ 	 * Criteria for determining fit task:
+-	 *  1) boosted task util < 80% of cpu capacity
++	 *  1) boosted task util < misfit ratio (default 80%) of cpu capacity
+ 	 *  2) nr_running > 1 or cpu is not overutilized
+ 	 */
+-	if (lb_task_fits_capacity(p, capacity) &&
++	if (lb_task_fits_capacity(p, cpu, capacity) &&
+ 	    !(rq->cfs.nr_running == 1 && overutilized)) {
+ 		per_cpu(lbt_overutil, cpu)->misfit_task = false;
+ 		rq->misfit_task_load = 0;
+diff --git a/kernel/sched/ems/ontime.c b/kernel/sched/ems/ontime.c
+index 7d90a74..dce21ad 100644
+--- a/kernel/sched/ems/ontime.c
++++ b/kernel/sched/ems/ontime.c
+@@ -453,7 +453,7 @@ int ontime_can_migrate_task(struct task_struct *p, int dst_cpu)
+ 		 * migration if the task is not very heavy.
+ 		 * (criteria : task util is under 75% of cpu util)
+ 		 */
+-		if (cpu_overutilized(capacity_cpu(src_cpu, 0), ml_cpu_util(src_cpu)) &&
++		if (ems_cpu_overutilized(src_cpu, capacity_cpu(src_cpu, 0), ml_cpu_util(src_cpu)) &&
+ 			ml_task_util(p) * 100 < (_ml_cpu_util(src_cpu, p->sse) * 75)) {
+ 			trace_ontime_can_migrate_task(p, dst_cpu, true, "src overutil");
+ 			return true;
+diff --git a/kernel/sched/ems/tune.c b/kernel/sched/ems/tune.c
+index 77406c1..fde4674 100644
+--- a/kernel/sched/ems/tune.c
++++ b/kernel/sched/ems/tune.c
+@@ -98,6 +98,7 @@ static void __update_cur_set(struct emstune_set *next_set)
+ 	update_cur_set_field(migov);
+ 	update_cur_set_field(fmax);
+ 	update_cur_set_field(ecs);
++	update_cur_set_field(misfit_ratio);
+ 
+ 	emstune_notify_mode_update();
+ 	emstune_fmax_schedule();
+@@ -406,6 +407,64 @@ parse_sched_policy(struct device_node *dn, struct emstune_set *set)
+ /******************************************************************************
+  * efficiency weight                                                          *
+  ******************************************************************************/
++/******************************************************************************
++ * misfit ratio                                                               *
++ ******************************************************************************/
++static int misfit_ratio_of(int cpu, int group)
++{
++	int ratio = cur_set.misfit_ratio.ratio[cpu][group];
++
++	return ratio > 0 ? ratio : DEFAULT_MISFIT_RATIO;
++}
++
++int emstune_misfit_ratio(struct task_struct *p, int cpu)
++{
++	if (unlikely(!emstune_initialized))
++		return DEFAULT_MISFIT_RATIO;
++
++	return misfit_ratio_of(cpu, schedtune_task_group_idx(p));
++}
++
++/* Overutilized above the lowest ratio of the groups (S5E9965 semantics). */
++bool ems_cpu_overutilized(int cpu, unsigned long capacity, unsigned long util)
++{
++	int group, ratio = 100;
++
++	if (unlikely(!emstune_initialized))
++		return cpu_overutilized(capacity, util);
++
++	for (group = 0; group < STUNE_GROUP_COUNT; group++)
++		ratio = min(ratio, misfit_ratio_of(cpu, group));
++
++	return capacity * ratio < util * 100;
++}
++
++static int
++parse_misfit_ratio(struct device_node *dn, struct emstune_set *set)
++{
++	struct emstune_misfit_ratio *misfit_ratio = &set->misfit_ratio;
++	int cpu, group;
++	int val[NR_CPUS];
++
++	if (!dn)
++		return 0;
++
++	for (group = 0; group < STUNE_GROUP_COUNT; group++) {
++		if (of_property_read_u32_array(dn,
++				stune_group_name[group], val, NR_CPUS))
++			return -EINVAL;
++
++		for_each_possible_cpu(cpu)
++			misfit_ratio->ratio[cpu][group] = val[cpu];
++	}
++
++	misfit_ratio->overriding = true;
++
++	of_node_put(dn);
++
++	return 0;
++}
++
+ #define DEFAULT_WEIGHT	(100)
+ int emstune_eff_weight(struct task_struct *p, int cpu, int idle)
+ {
+@@ -1470,6 +1529,20 @@ show_cur_set(struct kobject *k, struct kobj_attribute *attr, char *buf)
+ 	}
+ 	ret += sprintf(buf + ret, "\n");
+ 
++	ret += sprintf(buf + ret, "[misfit-ratio] (%%, 0 = %d)\n", DEFAULT_MISFIT_RATIO);
++	ret += sprintf(buf + ret, "     ");
++	for (group = 0; group < STUNE_GROUP_COUNT; group++)
++		ret += sprintf(buf + ret, "%5s", stune_group_simple_name[group]);
++	ret += sprintf(buf + ret, "\n");
++	for_each_possible_cpu(cpu) {
++		ret += sprintf(buf + ret, "cpu%d:", cpu);
++		for (group = 0; group < STUNE_GROUP_COUNT; group++)
++			ret += sprintf(buf + ret, "%5d",
++					cur_set.misfit_ratio.ratio[cpu][group]);
++		ret += sprintf(buf + ret, "\n");
++	}
++	ret += sprintf(buf + ret, "\n");
++
+ 	ret += sprintf(buf + ret, "[freq-boost]\n");
+ 	ret += sprintf(buf + ret, "     ");
+ 	for (group = 0; group < STUNE_GROUP_COUNT; group++)
+@@ -2154,6 +2227,7 @@ emstune_set_init(struct device_node *dn, struct emstune_set *set)
+ 	parse(migov);
+ 	parse(fmax);
+ 	parse(ecs);
++	parse(misfit_ratio);
+ 
+ 	return 0;
+ }

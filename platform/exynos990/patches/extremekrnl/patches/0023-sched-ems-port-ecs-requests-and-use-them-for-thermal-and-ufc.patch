@@ -1,0 +1,653 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sched/ems: port ECS requests and use them for thermal and UFC
+
+Port the ECS request interface of the S5E9965 EMS (ecs.c of the S947B
+kernel source): ecs_request_register/unregister, ecs_request and
+ecs_request_wo_migrate, with ECS_MIN (guarantee), ECS_MAX (limit) and
+ECS_RECOMMEND requests. The cpus that get tasks are
+((governor cpus, or all while the set turns the governor off) | MIN)
+& RECOMMEND & MAX, and cpu0 always stays. Max requests apply even in the
+touch and boost sets.
+
+When a request spares a cpu, its stopper moves the queued cfs tasks to
+the least loaded allowed cpu (detach under the source runqueue lock,
+attach on each destination), as ecs_migration_cpu_stop does on the
+S5E9965. Governor changes still only steer placement: they run under a
+runqueue lock and only spare cpus the governor does not need.
+
+On the S5E9965 the thermal and UFC drivers request cpus this way instead
+of cpu hotplug. Do the same here: the DTM limit of exynos_tmu_v2 (only
+the first coregroup above hotplug_out_threshold) and the UFC domain
+limit become ECS max requests, so the cpus stay online, reach deep idle
+and come back without the hotplug latency. Without EMS the requests fall
+back to exynos_cpuhp. /sys/kernel/ems/ecs/requests lists them, and
+user_cpu_max/user_cpu_min take userspace requests (USER_MAX/USER_MIN,
+a cpu list), as ecs_user_cpu_max/min do on the S5E9965.
+---
+diff --git a/drivers/cpufreq/exynos-ufc.c b/drivers/cpufreq/exynos-ufc.c
+index 8dd6d66..3133380 100644
+--- a/drivers/cpufreq/exynos-ufc.c
++++ b/drivers/cpufreq/exynos-ufc.c
+@@ -121,28 +121,31 @@ static bool ufc_check_little_domain(struct ufc_domain *ufc_dom)
+ 	return false;
+ }
+ 
++/*
++ * A domain limited to 0 is taken off the task placement through an ECS max
++ * request (as on the S5E9965) instead of cpu hotplug: its cpus stay online,
++ * reach deep idle and come back without the hotplug latency.
++ */
++static struct cpumask ufc_ecs_cpus = CPU_MASK_ALL;
++
+ static void
+ disable_domain_cpus(struct ufc_domain *ufc_dom)
+ {
+-	struct cpumask mask;
+-
+ 	if (ufc_check_little_domain(ufc_dom))
+ 		return;
+ 
+-	cpumask_andnot(&mask, cpu_online_mask, &ufc_dom->cpus);
+-	exynos_cpuhp_request("UFC", mask, 0);
++	cpumask_andnot(&ufc_ecs_cpus, &ufc_ecs_cpus, &ufc_dom->cpus);
++	ecs_request("UFC", &ufc_ecs_cpus, ECS_MAX);
+ }
+ 
+ static void
+ enable_domain_cpus(struct ufc_domain *ufc_dom)
+ {
+-	struct cpumask mask;
+-
+ 	if (ufc_check_little_domain(ufc_dom))
+ 		return;
+ 
+-	cpumask_or(&mask, cpu_online_mask, &ufc_dom->cpus);
+-	exynos_cpuhp_request("UFC", mask, 0);
++	cpumask_or(&ufc_ecs_cpus, &ufc_ecs_cpus, &ufc_dom->cpus);
++	ecs_request("UFC", &ufc_ecs_cpus, ECS_MAX);
+ }
+ 
+ unsigned int get_cpufreq_max_limit(void)
+@@ -1040,7 +1043,8 @@ void __init exynos_ufc_init(void)
+ 		return;
+ 	}
+ 
+-	if (exynos_cpuhp_register("UFC", *cpu_online_mask, 0)) {
++	cpumask_copy(&ufc_ecs_cpus, cpu_possible_mask);
++	if (ecs_request_register("UFC", cpu_possible_mask, ECS_MAX)) {
+ 		pr_err("exynos-ufc: Failed to register cpuhp\n");
+ 		ufc_free_all();
+ 		return;
+diff --git a/drivers/thermal/samsung/exynos_tmu_v2.c b/drivers/thermal/samsung/exynos_tmu_v2.c
+index 613c58d..6fbbd4e 100644
+--- a/drivers/thermal/samsung/exynos_tmu_v2.c
++++ b/drivers/thermal/samsung/exynos_tmu_v2.c
+@@ -57,6 +57,7 @@
+ #include "soc/samsung/exynos-pmu.h"
+ #endif
+ #include <soc/samsung/exynos-cpuhp.h>
++#include <linux/ems.h>
+ 
+ #define EXYNOS_GPU_THERMAL_ZONE_ID		(3)
+ 
+@@ -631,7 +632,7 @@ static int exynos_throttle_cpu_hotplug(void *p, int temp)
+ 			 * If current temperature is lower than low threshold,
+ 			 * call cluster1_cores_hotplug(false) for hotplugged out cpus.
+ 			 */
+-			exynos_cpuhp_request("DTM", *cpu_possible_mask, 0);
++			ecs_request("DTM", cpu_possible_mask, ECS_MAX);
+ 			is_cpu_hotplugged_out = false;
+ 		}
+ 	} else {
+@@ -642,7 +643,7 @@ static int exynos_throttle_cpu_hotplug(void *p, int temp)
+ 			 */
+ 			is_cpu_hotplugged_out = true;
+ 			cpumask_and(&mask, cpu_possible_mask, cpu_coregroup_mask(0));
+-			exynos_cpuhp_request("DTM", mask, 0);
++			ecs_request("DTM", &mask, ECS_MAX);
+ 		}
+ 	}
+ 
+@@ -1002,7 +1003,12 @@ static int exynos_tmu_probe(struct platform_device *pdev)
+ 	 * requesting irq and calling exynos_tmu_control().
+ 	 */
+ 	if (data->hotplug_enable) {
+-		exynos_cpuhp_register("DTM", *cpu_online_mask, 0);
++		/*
++		 * Above hotplug_out_threshold only the first coregroup gets
++		 * tasks. ECS (as on the S5E9965) spares the other cpus at once
++		 * and lets them reach deep idle, instead of hotplugging them.
++		 */
++		ecs_request_register("DTM", cpu_possible_mask, ECS_MAX);
+ 	}
+ 
+ 	data->tzd = thermal_zone_of_sensor_register(&pdev->dev, 0, data,
+diff --git a/include/linux/ems.h b/include/linux/ems.h
+index 9c6f6d8..9b9812e 100644
+--- a/include/linux/ems.h
++++ b/include/linux/ems.h
+@@ -25,6 +25,16 @@ enum {
+ 	NUM_OF_REQUESTS,
+ };
+ 
++enum ecs_type {
++	ECS_MIN = 0,
++	ECS_MAX = 1,
++	ECS_RECOMMEND = 2,
++};
++
++#ifndef CONFIG_SCHED_EMS
++#include <soc/samsung/exynos-cpuhp.h>
++#endif
++
+ #ifdef CONFIG_SCHED_EMS
+ /*
+  * core
+@@ -104,6 +114,16 @@ extern void set_lbt_overutil_with_migov(int enabled);
+  */
+ extern void ecs_update(void);
+ extern int ecs_is_sparing_cpu(int cpu);
++
++/*
++ * ECS requests (from the S5E9965 EMS): a driver limits (ECS_MAX) or
++ * guarantees (ECS_MIN) the cpus that get tasks, without cpu hotplug.
++ * cpus = ((governor cpus) | MIN) & RECOMMEND & MAX; cpu0 always stays.
++ */
++extern int ecs_request_register(char *name, const struct cpumask *mask, enum ecs_type type);
++extern int ecs_request_unregister(char *name, enum ecs_type type);
++extern int ecs_request(char *name, const struct cpumask *mask, enum ecs_type type);
++extern int ecs_request_wo_migrate(char *name, const struct cpumask *mask, enum ecs_type type);
+ #else /* CONFIG_SCHED_EMS */
+ 
+ /*
+@@ -203,6 +223,23 @@ static inline void set_lbt_overutil_with_migov(int enabled) { }
+  */
+ static inline void ecs_update(void) { }
+ static inline int ecs_is_sparing_cpu(int cpu) { return 0; }
++
++/* Without EMS, requests fall back to cpu hotplug, as on the S5E9965. */
++static inline int ecs_request_register(char *name, const struct cpumask *mask,
++				       enum ecs_type type)
++{
++	return type == ECS_MAX ? exynos_cpuhp_register(name, *mask, 0) : 0;
++}
++static inline int ecs_request_unregister(char *name, enum ecs_type type) { return 0; }
++static inline int ecs_request(char *name, const struct cpumask *mask, enum ecs_type type)
++{
++	return type == ECS_MAX ? exynos_cpuhp_request(name, *mask, 0) : 0;
++}
++static inline int ecs_request_wo_migrate(char *name, const struct cpumask *mask,
++					 enum ecs_type type)
++{
++	return ecs_request(name, mask, type);
++}
+ #endif /* CONFIG_SCHED_EMS */
+ 
+ /*
+diff --git a/kernel/sched/ems/ems.h b/kernel/sched/ems/ems.h
+index 79efed8..f8adbda 100644
+--- a/kernel/sched/ems/ems.h
++++ b/kernel/sched/ems/ems.h
+@@ -128,6 +128,7 @@ extern unsigned int get_diff_num_levels(int cpu, unsigned int freq1, unsigned in
+ 
+ /* core sparing */
+ extern struct cpumask *ecs_cpus_allowed(void);
++extern struct list_head *lb_cfs_tasks(struct rq *rq, int sse);
+ struct emstune_ecs;
+ extern void ecs_emstune_update(bool enable, const struct emstune_ecs *ecs);
+ 
+diff --git a/kernel/sched/ems/sparing.c b/kernel/sched/ems/sparing.c
+index d584154..6c1b8bd 100644
+--- a/kernel/sched/ems/sparing.c
++++ b/kernel/sched/ems/sparing.c
+@@ -10,6 +10,8 @@
+ #include <trace/events/ems.h>
+ #include <trace/events/ems_debug.h>
+ 
++#include <linux/stop_machine.h>
++
+ #include "../sched.h"
+ #include "ems.h"
+ 
+@@ -62,6 +64,291 @@ struct ecs_governor {
+ static DEFINE_SPINLOCK(ecs_lock);
+ static DEFINE_RAW_SPINLOCK(ecs_load_lock);
+ 
++/**********************************************************************************
++ *			ECS requests (from the S5E9965 EMS ecs.c)		  *
++ *										  *
++ * Drivers limit (ECS_MAX: thermal, UFC) or guarantee (ECS_MIN) the cpus that	  *
++ * get tasks. The cpus tasks may use are						  *
++ *   ((governor cpus, or all cpus while the set turns the governor off) | MIN)	  *
++ *   & RECOMMEND & MAX								  *
++ * and cpu0 always stays. Spared cpus stay online and reach their deep idle	  *
++ * state, which is why the S5E9965 uses this instead of cpu hotplug. When a	  *
++ * request spares a cpu, the cfs tasks queued there are moved to an allowed cpu  *
++ * by its stopper. Governor changes only steer new placements: they run under	  *
++ * a runqueue lock, and the governor only spares cpus it does not need.		  *
++ **********************************************************************************/
++#define ECS_REQ_NAME_LEN	16
++
++struct ecs_request {
++	struct list_head	list;
++	char			name[ECS_REQ_NAME_LEN];
++	struct cpumask		cpus;
++};
++
++static LIST_HEAD(ecs_requests_min);
++static LIST_HEAD(ecs_requests_max);
++static LIST_HEAD(ecs_requests_recommend);
++static DEFINE_RAW_SPINLOCK(ecs_req_lock);
++
++/* combined requests and the resulting cpus, updated under ecs_lock */
++static struct cpumask ecs_req_min_cpus = CPU_MASK_NONE;
++static struct cpumask ecs_req_max_cpus = CPU_MASK_ALL;
++static struct cpumask ecs_req_recommend_cpus = CPU_MASK_ALL;
++static struct cpumask ecs_allowed_cpus = CPU_MASK_ALL;
++
++static DEFINE_PER_CPU(struct cpu_stop_work, ecs_migration_work);
++static DEFINE_PER_CPU(int, ecs_migration_pending);
++
++/* Called with ecs_lock held. */
++static void ecs_refresh_allowed_cpus(void)
++{
++	struct cpumask cpus;
++
++	if (ecs_gov.enabled)
++		cpumask_and(&cpus, &ecs_gov.cpus, cpu_active_mask);
++	else
++		cpumask_copy(&cpus, cpu_possible_mask);
++	cpumask_or(&cpus, &cpus, &ecs_req_min_cpus);
++	cpumask_and(&cpus, &cpus, &ecs_req_recommend_cpus);
++	cpumask_and(&cpus, &cpus, &ecs_req_max_cpus);
++	cpumask_set_cpu(0, &cpus);
++
++	cpumask_copy(&ecs_allowed_cpus, &cpus);
++}
++
++static int ecs_find_migration_dst(struct task_struct *p)
++{
++	unsigned long min_util = ULONG_MAX;
++	int cpu, dst = -1;
++
++	for_each_cpu_and(cpu, &ecs_allowed_cpus, cpu_active_mask) {
++		unsigned long util;
++
++		if (!cpumask_test_cpu(cpu, &p->cpus_allowed))
++			continue;
++		util = ml_cpu_util(cpu) + cpu_util_rt(cpu_rq(cpu));
++		if (util < min_util) {
++			min_util = util;
++			dst = cpu;
++		}
++	}
++
++	return dst;
++}
++
++/* Runs as the stopper of a cpu that a request just spared. */
++static int ecs_migration_cpu_stop(void *data)
++{
++	struct rq *src_rq = this_rq(), *dst_rq;
++	int src_cpu = cpu_of(src_rq);
++	struct task_struct *p, *n;
++	LIST_HEAD(tasks);
++	int sse;
++
++	raw_spin_lock_irq(&src_rq->lock);
++	if (!cpumask_test_cpu(src_cpu, &ecs_allowed_cpus)) {
++		update_rq_clock(src_rq);
++		for (sse = 0; sse <= 1; sse++) {
++			list_for_each_entry_safe(p, n, lb_cfs_tasks(src_rq, sse),
++						 se.group_node) {
++				int dst;
++
++				if (task_running(src_rq, p) || p->exit_state)
++					continue;
++				dst = ecs_find_migration_dst(p);
++				if (dst < 0 || dst == src_cpu)
++					continue;
++
++				p->on_rq = TASK_ON_RQ_MIGRATING;
++				deactivate_task(src_rq, p, DEQUEUE_NOCLOCK);
++				set_task_cpu(p, dst);
++				list_add(&p->se.group_node, &tasks);
++			}
++		}
++	}
++	per_cpu(ecs_migration_pending, src_cpu) = 0;
++	raw_spin_unlock(&src_rq->lock);
++
++	list_for_each_entry_safe(p, n, &tasks, se.group_node) {
++		list_del_init(&p->se.group_node);
++		dst_rq = task_rq(p);
++		raw_spin_lock(&dst_rq->lock);
++		update_rq_clock(dst_rq);
++		activate_task(dst_rq, p, ENQUEUE_NOCLOCK);
++		p->on_rq = TASK_ON_RQ_QUEUED;
++		check_preempt_curr(dst_rq, p, 0);
++		raw_spin_unlock(&dst_rq->lock);
++	}
++
++	local_irq_enable();
++
++	return 0;
++}
++
++static void ecs_move_from_spared_cpus(const struct cpumask *spared)
++{
++	int cpu;
++
++	for_each_cpu_and(cpu, spared, cpu_active_mask) {
++		if (available_idle_cpu(cpu))
++			continue;
++		/* one queued work per cpu: the stopper work cannot be requeued */
++		if (xchg(&per_cpu(ecs_migration_pending, cpu), 1))
++			continue;
++		stop_one_cpu_nowait(cpu, ecs_migration_cpu_stop, NULL,
++				    &per_cpu(ecs_migration_work, cpu));
++	}
++}
++
++static struct list_head *ecs_request_list(enum ecs_type type)
++{
++	switch (type) {
++	case ECS_MIN:
++		return &ecs_requests_min;
++	case ECS_MAX:
++		return &ecs_requests_max;
++	case ECS_RECOMMEND:
++		return &ecs_requests_recommend;
++	}
++	return NULL;
++}
++
++static struct ecs_request *ecs_find_request(char *name, enum ecs_type type)
++{
++	struct list_head *head = ecs_request_list(type);
++	struct ecs_request *req;
++
++	if (!head)
++		return NULL;
++	list_for_each_entry(req, head, list)
++		if (!strncmp(req->name, name, ECS_REQ_NAME_LEN))
++			return req;
++
++	return NULL;
++}
++
++/* Called with ecs_req_lock held; migrate only from process context. */
++static void ecs_request_combine_and_apply(bool migrate)
++{
++	struct cpumask max = CPU_MASK_ALL, recommend = CPU_MASK_ALL, min = CPU_MASK_NONE;
++	struct cpumask prev, spared;
++	struct ecs_request *req;
++	unsigned long flags;
++
++	list_for_each_entry(req, &ecs_requests_max, list)
++		cpumask_and(&max, &max, &req->cpus);
++	if (cpumask_empty(&max) || !cpumask_test_cpu(0, &max)) {
++		WARN_ONCE(1, "ECS max request %*pbl drops cpu0; keeping cpu0\n",
++			  cpumask_pr_args(&max));
++		cpumask_set_cpu(0, &max);
++	}
++	list_for_each_entry(req, &ecs_requests_recommend, list)
++		cpumask_and(&recommend, &recommend, &req->cpus);
++	cpumask_and(&recommend, &recommend, &max);
++	list_for_each_entry(req, &ecs_requests_min, list)
++		cpumask_or(&min, &min, &req->cpus);
++	cpumask_and(&min, &min, cpu_possible_mask);
++
++	spin_lock_irqsave(&ecs_lock, flags);
++	cpumask_copy(&prev, &ecs_allowed_cpus);
++	cpumask_copy(&ecs_req_max_cpus, &max);
++	cpumask_copy(&ecs_req_recommend_cpus, &recommend);
++	cpumask_copy(&ecs_req_min_cpus, &min);
++	ecs_refresh_allowed_cpus();
++	cpumask_andnot(&spared, &prev, &ecs_allowed_cpus);
++	spin_unlock_irqrestore(&ecs_lock, flags);
++
++	if (migrate)
++		ecs_move_from_spared_cpus(&spared);
++}
++
++int ecs_request_register(char *name, const struct cpumask *mask, enum ecs_type type)
++{
++	struct ecs_request *req;
++	unsigned long flags;
++
++	if (!ecs_request_list(type))
++		return -EINVAL;
++	req = kzalloc(sizeof(*req), GFP_KERNEL);
++	if (!req)
++		return -ENOMEM;
++	strlcpy(req->name, name, ECS_REQ_NAME_LEN);
++	if (mask)
++		cpumask_copy(&req->cpus, mask);
++	else if (type == ECS_MIN)
++		cpumask_clear(&req->cpus);
++	else
++		cpumask_setall(&req->cpus);
++
++	raw_spin_lock_irqsave(&ecs_req_lock, flags);
++	if (ecs_find_request(name, type)) {
++		raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++		kfree(req);
++		pr_err("ECS: request %s (type %d) already registered\n", name, type);
++		return -EEXIST;
++	}
++	list_add(&req->list, ecs_request_list(type));
++	ecs_request_combine_and_apply(false);
++	raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++
++	pr_info("ECS: registered request %s, type %d, cpus %*pbl\n",
++		name, type, cpumask_pr_args(&req->cpus));
++
++	return 0;
++}
++
++int ecs_request_unregister(char *name, enum ecs_type type)
++{
++	struct ecs_request *req;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&ecs_req_lock, flags);
++	req = ecs_find_request(name, type);
++	if (!req) {
++		raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++		return -ENODEV;
++	}
++	list_del(&req->list);
++	ecs_request_combine_and_apply(false);
++	raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++	kfree(req);
++
++	return 0;
++}
++
++static int __ecs_request(char *name, const struct cpumask *mask, enum ecs_type type,
++			 bool migrate)
++{
++	struct ecs_request *req;
++	unsigned long flags;
++
++	raw_spin_lock_irqsave(&ecs_req_lock, flags);
++	req = ecs_find_request(name, type);
++	if (!req) {
++		raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++		return -EINVAL;
++	}
++	if (!cpumask_equal(&req->cpus, mask)) {
++		cpumask_copy(&req->cpus, mask);
++		if (type == ECS_MAX)
++			pr_info("ECS: [%s] max request %*pbl\n", name, cpumask_pr_args(mask));
++		ecs_request_combine_and_apply(migrate);
++	}
++	raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++
++	return 0;
++}
++
++int ecs_request(char *name, const struct cpumask *mask, enum ecs_type type)
++{
++	return __ecs_request(name, mask, type, true);
++}
++
++int ecs_request_wo_migrate(char *name, const struct cpumask *mask, enum ecs_type type)
++{
++	return __ecs_request(name, mask, type, false);
++}
++
+ /**********************************************************************************
+  *			ECS dynamic governor (from the S5E9965 EMS)		  *
+  *										  *
+@@ -283,8 +570,10 @@ static void ecs_dynamic_update(void)
+ 		return;
+ 
+ 	spin_lock_irqsave(&ecs_lock, flags);
+-	if (ecs_gov.enabled)
++	if (ecs_gov.enabled) {
+ 		cpumask_copy(&ecs_gov.cpus, &target);
++		ecs_refresh_allowed_cpus();
++	}
+ 	spin_unlock_irqrestore(&ecs_lock, flags);
+ 
+ 	trace_ecs_update(0, 0, *(unsigned int *)cpumask_bits(&target));
+@@ -377,6 +666,7 @@ static int ecs_update_spared_cpus(struct ecs_mode *target_mode)
+ 
+ 	ecs_gov.cur_mode = target_mode;
+ 	cpumask_copy(&ecs_gov.cpus, &target_mode->cpus);
++	ecs_refresh_allowed_cpus();
+ 
+ unlock:
+ 	spin_unlock_irqrestore(&ecs_lock, flags);
+@@ -424,15 +714,12 @@ unlock:
+ 
+ int ecs_is_sparing_cpu(int cpu)
+ {
+-	if (!ecs_gov.enabled)
+-		return false;
+-
+-	return !cpumask_test_cpu(cpu, &ecs_gov.cpus);
++	return !cpumask_test_cpu(cpu, &ecs_allowed_cpus);
+ }
+ 
+ struct cpumask *ecs_cpus_allowed(void)
+ {
+-	return &ecs_gov.cpus;
++	return &ecs_allowed_cpus;
+ }
+ 
+ /**********************************************************************************
+@@ -590,6 +877,7 @@ static int ecs_set_enable(bool enable)
+ 	ecs_gov.enabled = enable;
+ 	ecs_gov.cur_mode = base_mode;
+ 	cpumask_copy(&ecs_gov.cpus, &base_mode->cpus);
++	ecs_refresh_allowed_cpus();
+ 
+ unlock:
+ 	spin_unlock_irqrestore(&ecs_lock, flags);
+@@ -696,8 +984,83 @@ static ssize_t show_dynamic(struct kobject *kobj, char *buf)
+ 	return ret;
+ }
+ 
++static ssize_t show_requests(struct kobject *kobj, char *buf)
++{
++	static const char * const type_name[] = { "min", "max", "recommend" };
++	struct ecs_request *req;
++	unsigned long flags;
++	ssize_t ret = 0;
++	int type;
++
++	raw_spin_lock_irqsave(&ecs_req_lock, flags);
++	for (type = ECS_MIN; type <= ECS_RECOMMEND; type++)
++		list_for_each_entry(req, ecs_request_list(type), list)
++			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%-9s %-16s %*pbl\n",
++					 type_name[type], req->name,
++					 cpumask_pr_args(&req->cpus));
++	ret += scnprintf(buf + ret, PAGE_SIZE - ret,
++			 "combined: min %*pbl, recommend %*pbl, max %*pbl -> cpus %*pbl\n",
++			 cpumask_pr_args(&ecs_req_min_cpus),
++			 cpumask_pr_args(&ecs_req_recommend_cpus),
++			 cpumask_pr_args(&ecs_req_max_cpus),
++			 cpumask_pr_args(&ecs_allowed_cpus));
++	raw_spin_unlock_irqrestore(&ecs_req_lock, flags);
++
++	return ret;
++}
++
++/* Userspace requests (S5E9965 ecs_user_cpu_max/min): a cpu list. */
++static struct cpumask ecs_user_cpu_max = CPU_MASK_ALL;
++static struct cpumask ecs_user_cpu_min = CPU_MASK_NONE;
++
++static ssize_t store_ecs_user_cpus(struct cpumask *dst, char *name,
++				   enum ecs_type type, const char *buf, size_t count)
++{
++	struct cpumask mask;
++	char str[64];
++
++	/* an empty write clears a min request */
++	if (count >= sizeof(str))
++		return -EINVAL;
++	if (sscanf(buf, "%63s", str) != 1)
++		str[0] = '\0';
++	if (cpulist_parse(str, &mask))
++		return -EINVAL;
++	cpumask_and(&mask, &mask, cpu_possible_mask);
++	if (type == ECS_MAX && !cpumask_test_cpu(0, &mask))
++		return -EINVAL;
++	if (ecs_request(name, &mask, type))
++		return -ENODEV;
++	cpumask_copy(dst, &mask);
++
++	return count;
++}
++
++static ssize_t show_user_cpu_max(struct kobject *kobj, char *buf)
++{
++	return sprintf(buf, "%*pbl\n", cpumask_pr_args(&ecs_user_cpu_max));
++}
++
++static ssize_t store_user_cpu_max(struct kobject *kobj, const char *buf, size_t count)
++{
++	return store_ecs_user_cpus(&ecs_user_cpu_max, "USER_MAX", ECS_MAX, buf, count);
++}
++
++static ssize_t show_user_cpu_min(struct kobject *kobj, char *buf)
++{
++	return sprintf(buf, "%*pbl\n", cpumask_pr_args(&ecs_user_cpu_min));
++}
++
++static ssize_t store_user_cpu_min(struct kobject *kobj, const char *buf, size_t count)
++{
++	return store_ecs_user_cpus(&ecs_user_cpu_min, "USER_MIN", ECS_MIN, buf, count);
++}
++
+ ecs_attr_rw(enabled);
+ ecs_attr_ro(dynamic);
++ecs_attr_ro(requests);
++ecs_attr_rw(user_cpu_max);
++ecs_attr_rw(user_cpu_min);
+ 
+ ecs_attr_ro(domain_name);
+ ecs_attr_rw(cpu_heavy_thr);
+@@ -711,6 +1074,9 @@ ecs_attr_rw(mode_enabled);
+ static struct attribute *ecs_attrs[] = {
+ 	&enabled.attr,
+ 	&dynamic.attr,
++	&requests.attr,
++	&user_cpu_max.attr,
++	&user_cpu_min.attr,
+ 	NULL
+ };
+ 
+@@ -1067,6 +1433,9 @@ static int __init init_core_sparing(void)
+ 	if (ecs_sysfs_init())
+ 		goto failure;
+ 
++	ecs_request_register("USER_MAX", cpu_possible_mask, ECS_MAX);
++	ecs_request_register("USER_MIN", NULL, ECS_MIN);
++
+ 	/* Start in the base mode; emstune decides whether to spare cpus. */
+ 	ecs_set_enable(true);
+ 	WRITE_ONCE(ecs_ready, true);

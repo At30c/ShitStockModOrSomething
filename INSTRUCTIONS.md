@@ -13159,3 +13159,26 @@ Requisitos e garantias:
   data`.
 * **Aparelho de teste do usuário: y2slte (G985F).** Kernel de teste:
   `build.sh -m y2slte -k y -r n`; a ROM/OTA continua com o alvo y2s.
+
+## `ecs_request`, step latency e misfit ratio do S26+ (10/11/2026)
+
+* **Patch 0023 (`ecs_request`):** API do `ecs.c` do S947B. Drivers pedem
+  `ECS_MAX` (limite), `ECS_MIN` (garantia) ou `ECS_RECOMMEND`; os núcleos com
+  tarefas são `((governor ou todos, se o set o desliga) | MIN) & RECOMMEND &
+  MAX`, sempre com a CPU 0. Quando um pedido poupa um núcleo, o stopper dele
+  move as tarefas CFS para o núcleo permitido menos carregado (sem hotplug).
+  O DTM do `exynos_tmu_v2` (>= 96 °C só o coregroup 0) e o limite de domínio
+  da UFC trocaram `exynos_cpuhp_request` por `ECS_MAX`. A tabela max-limit da
+  UFC do 990 nunca zera um cluster, então esse caminho só existe por
+  compatibilidade. `/sys/kernel/ems/ecs/requests` lista os pedidos;
+  `user_cpu_max`/`user_cpu_min` (lista de CPUs; vazio limpa o min) criam
+  pedidos `USER_MAX`/`USER_MIN`. Validado no #51: `user_cpu_max=0-5` tira as
+  tarefas do Mongoose na hora com `online` em 0-7.
+* **Patch 0024 (step latency):** subida da frequência espera 4/7/11/15 ms
+  conforme a faixa pedida (mesmos degraus da pelt-margin), como o EGO do
+  S5E9965; descida e boosts por PM QoS não esperam.
+  `energy_step/coregroupN/latency_enabled`.
+* **Patch 0025 (misfit ratio):** limite de misfit/overutil por set, CPU e
+  grupo do schedtune (0 = 80%). Modos do dia a dia: background/root/rt 95%,
+  foreground/top-app 80% (o S26+ usa 70% no cluster do meio, mas no 990 o
+  próximo é o Mongoose); sets de boost 80%. Aparece em `emstune/cur_set`.
