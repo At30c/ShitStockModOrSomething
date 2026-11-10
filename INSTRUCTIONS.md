@@ -13181,7 +13181,10 @@ Requisitos e garantias:
 * **Patch 0025 (misfit ratio):** limite de misfit/overutil por set, CPU e
   grupo do schedtune (0 = 80%). Modos do dia a dia: background/root/rt 95%,
   foreground/top-app 80% (o S26+ usa 70% no cluster do meio, mas no 990 o
-  próximo é o Mongoose); sets de boost 80%. Aparece em `emstune/cur_set`.
+  próximo é o Mongoose); sets de boost 80%. Aparece em `emstune/cur_set`;
+  `emstune/aio_tuner` índice 20 muda um valor sem rebuild:
+  `echo "<modo>,<nível>,20,<cpu>,<grupo> <ratio>" > aio_tuner` (grupos
+  0-4 = root/fg/bg/ta/rt; a escrita torna esse set o atual).
 * **Patches 0026/0027 (acordadas de núcleo poupado):** um Mongoose poupado
   pelo ECS fica ~100% em C2 (o cluster pode entrar em CPD); o que sobrava era
   o `sx9360_debug_work_func` (sensor de grip, a cada 2 s, com leitura I2C cuja
@@ -13191,3 +13194,78 @@ Requisitos e garantias:
   de ~100 para 8-16 em 15 s e sem a IRQ `15d10000.hsi2c`. Para medir:
   `user_cpu_max=0-5`, diferença de `/proc/interrupts` e trace
   `workqueue_execute_start`/`timer_expire_entry` com `tracing_cpumask=c0`.
+
+### Medições, avaliação do S26+ e pendências (10/11/2026)
+
+* **Step latency (0024), A/B com carga em rajadas** (2 threads, ~50 ms
+  ocupadas e ~100 ms paradas, 60 s, `time_in_state`): ligado desloca tempo
+  para baixo no mid (>= 90% da máxima: 28,1/27,1% ligado contra 30,3%
+  desligado) e no Mongoose (75-90%: 12,1/8,8% contra 16,2%); little igual.
+  Efeito pequeno e consistente. O Mongoose não passa de 81% da máxima nos
+  sets do dia a dia por causa do teto de 2,21 GHz do 0018.
+* **Misfit ratio (0025), A/B pendente:** `/data/local/tmp/ab_misfit.sh` (no
+  aparelho; cópia no scratchpad da sessão) roda um processo persistente do
+  grupo root com ~88% de ocupação no little (laço de 4 500 iterações + 12 ms
+  parado) e amostra a CPU dele por 60 s com o ratio do root nas CPUs 0-3 em
+  95% -> 80% -> 95% (`aio_tuner`, modo 0, níveis 0 e 1). Esperado: mais tempo
+  no little com 95%. Um processo novo por rajada não serve (o PELT não cresce).
+* **Kernel de teste do aparelho do usuário (y2slte):**
+  `out/kernel_tmp-exynos990/build.sh -m y2slte -k y -r n`; copiar
+  `build/out/y2slte/boot.img` para uma pasta com o nome `boot.img` (o
+  `SIGN_IMAGE_WITH_AVB` deduz a partição pelo nome), carimbar com
+  `stamp_boot_bootargs.py boot.img unica.timestamp=$(date +%s)`, assinar,
+  fazer backup da partição boot (`dd` + `sha256sum` da cópia e da partição)
+  e gravar com `dd`. A árvore em `out/kernel_tmp-exynos990` já tem os patches
+  aplicados; patch novo = diff numa cópia dos arquivos (git temporário),
+  `git apply` na árvore e o mesmo diff em `patches/`. O reboot encerra
+  scripts em segundo plano do `/data/local/tmp` (religar o logger do D2TW).
+* **Grupos do emstune do S26+ não portados (avaliados):** `ptb-margin`/
+  `pelt-boost` (sobrepõem o `freq_boost`), `fclamp` (o fmax do 0018 cobre o
+  teto), `gsc`, `ntu` e `dslt` (dependem do MLT/IPC por PMU), HALO
+  (`cpuidle_gov`), `dsu_slice_down` e `et` (hardware/driver do S5E9965),
+  `support_uclamp` (o 4.19 não tem uclamp), `should_spread`,
+  `cgroup_boost`, `small_task` (efeito pequeno). `high_prio` ficou como
+  candidato.
+* **MLT (multi load tracker) adiado:** ~1 700 linhas no S26+, com ganchos em
+  enqueue/dequeue/troca de contexto/tick e leitura de PMU a cada troca. Só a
+  parte runnable (~60 linhas: `nr_running x tempo` por janela de tick) serve
+  ao ECS dinâmico e é o próximo passo quando for retomado; hoje o 0021 usa
+  média móvel amostrada por tick.
+* **`ecs_request` no S26+:** sem `CONFIG_SCHED_EMS_IDLE_SELECT` a API cai em
+  `exynos_cpuhp` (hotplug). Chamadores lá: térmico (`exynos_tmu_v2`,
+  `exynos_amb_control`), `exynos-ufcc`, `exynos-mcinfo`, `exynos-idle-lat`
+  (MAX), UFS perf, NPU, `cpif_tp_monitor` (MIN) e `game/dct` (RECOMMEND).
+  No 990 só o DTM e a UFC pediam hotplug, e foram convertidos no 0023.
+* **Núcleo poupado x hotplug:** poupado fica ~100% em C2 (lion-cpu-sleep,
+  `cpd_cl1/2` ativos) e acordava ~1 vez/s (`mct_tick`, IPIs de
+  reescalonamento); depois do 0026/0027 sobra pouco além de `vmstat_update`
+  e `writeout_period`. O hotplug real não compensa (latência, cpufreq/EMS).
+  No pós-boot, tarefas com afinidade só para os núcleos big ainda rodam
+  neles (o EMS respeita a afinidade, como o S26+); não investigado.
+
+### D2TW e digital com a tela apagada na ultra economia (em investigação)
+
+Relato: depois de muito tempo ocioso no modo de ultra economia, o duplo
+toque para acordar e a digital com a tela apagada param e não voltam ao
+sair do modo nem com reboot (a digital funciona com a tela ligada); depois
+voltaram. Descartado com o aparelho funcionando: HALs vivos
+(`sysinput@1.3`, `biometrics.fingerprint@3.0`), touch aceita
+`aot_enable`/`fod_enable`/`spay_enable`, sem erros (`comm_err_count`,
+`ic_reset_count`, `mode_change_failed_count`), `wet:1` do status é só
+capacidade (`get_wet_mode:0`), `input/enabled=0` com a tela apagada é normal
+(o touch fica em LPM). O buffer do kernel (`/proc/last_kmsg`) cobre só ~2 min
+antes de um reboot. Logger: `/data/local/tmp/d2tw_logger.sh` (logcat de
+sysinput/digital/emergência/Doze + `*:E`, kmsg de `sec_ts`/`qbt`/suspend e
+estado a cada 30 s em `/data/local/tmp/d2tw/`), agendado para 11/11 08:00
+por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
+`kill $(cat /data/local/tmp/d2tw/pids)`). Rodadas anteriores em
+`d2tw/run_1108` e `d2tw/run_1110_evening`. O driver `sec_ts` registra
+`sec_ts_set_lowpowermode: ENTER/EXIT(3C)` e os comandos do sysinput.
+
+### Pendências do kernel
+
+* Enviar 0023-0027 para a ROM (a release publicada tem o kernel #49).
+* Concluir o A/B do misfit ratio; medir o efeito do 0025 no uso real.
+* Opcionais: MLT runnable, zram com lz4 (hoje só `lzo`/`lzo-rle`), esperas
+  ociosas do TEEgris/`iwlog` com `TASK_IDLE` (o load average fica ~16 em
+  repouso por 16 kthreads em estado D), `high_prio`.

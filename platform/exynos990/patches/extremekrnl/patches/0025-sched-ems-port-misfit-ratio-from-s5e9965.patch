@@ -17,7 +17,8 @@ default sets of the everyday modes (normal, power-scenario, light-video,
 balance, pinned), so it stays on the smaller cores longer; foreground and
 top-app keep 80%, since past the mid cluster comes the Mongoose one (the
 S5E9965 uses 70% there). Touch and big boost sets keep 80% everywhere.
-cur_set shows the active ratios.
+cur_set shows the active ratios; aio_tuner index 20
+(<mode,level,20,cpu,group> <ratio>) changes one.
 ---
 diff --git a/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi b/arch/arm64/boot/dts/exynos/exynos9830-ems.dtsi
 index d8ccfc3..7d0377f 100644
@@ -365,7 +366,7 @@ index 7d90a74..dce21ad 100644
  			trace_ontime_can_migrate_task(p, dst_cpu, true, "src overutil");
  			return true;
 diff --git a/kernel/sched/ems/tune.c b/kernel/sched/ems/tune.c
-index 77406c1..fde4674 100644
+index 77406c1..fb38b57 100644
 --- a/kernel/sched/ems/tune.c
 +++ b/kernel/sched/ems/tune.c
 @@ -98,6 +98,7 @@ static void __update_cur_set(struct emstune_set *next_set)
@@ -462,7 +463,43 @@ index 77406c1..fde4674 100644
  	ret += sprintf(buf + ret, "[freq-boost]\n");
  	ret += sprintf(buf + ret, "     ");
  	for (group = 0; group < STUNE_GROUP_COUNT; group++)
-@@ -2154,6 +2227,7 @@ emstune_set_init(struct device_node *dn, struct emstune_set *set)
+@@ -1737,6 +1810,10 @@ show_aio_tuner(struct kobject *k, struct kobj_attribute *attr, char *buf)
+ 	ret += sprintf(buf + ret, "	# echo <mode,level,19> <enable> > aio_tuner\n");
+ 	ret += sprintf(buf + ret, "	(set enabled for this mode, level ))\n");
+ 	ret += sprintf(buf + ret, "\n");
++	ret += sprintf(buf + ret, "misfit_ratio(index=20)\n");
++	ret += sprintf(buf + ret, "	# echo <mode,level,20,cpu,group> <ratio> > aio_tuner\n");
++	ret += sprintf(buf + ret, "	(group0/1/2/3/4=root/fg/bg/ta/rt, ratio 0 = 80)\n");
++	ret += sprintf(buf + ret, "\n");
+ 
+ 	return ret;
+ }
+@@ -1762,6 +1839,7 @@ enum {
+ 	frt_active_ratio,
+ 	patient_mode,
+ 	migov,
++	misfit_ratio_idx,
+ 	field_count,
+ };
+ 
+@@ -2072,6 +2150,16 @@ store_aio_tuner(struct kobject *k, struct kobj_attribute *attr,
+ 		set->migov.migov_en = !!(int)group;
+ 		set->migov.overriding = true;
+ 		break;
++	case misfit_ratio_idx:
++		cpu = keys[3];
++		group = keys[4];
++		if (sanity_check_option(cpu, group, 0, 0))
++			return -EINVAL;
++		if (sanity_check_convert_value(arg1, VAL_TYPE_RATIO, &v) || v > 100)
++			return -EINVAL;
++		set->misfit_ratio.ratio[cpu][group] = v;
++		set->misfit_ratio.overriding = true;
++		break;
+ 	}
+ 
+ 	update_cur_set(set);
+@@ -2154,6 +2242,7 @@ emstune_set_init(struct device_node *dn, struct emstune_set *set)
  	parse(migov);
  	parse(fmax);
  	parse(ecs);
