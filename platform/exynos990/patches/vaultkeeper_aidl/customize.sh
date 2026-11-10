@@ -19,11 +19,6 @@
 
 SKIPUNZIP=1
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
-    LOG "- VaultKeeper AIDL front-end is limited to y2s/y2slte; skipping target"
-    return 0
-fi
-
 VK_AIDL_SERVICE="bin/vendor.samsung.hardware.security.vaultkeeper-service"
 VK_AIDL_NDK="lib64/vendor.samsung.hardware.security.vaultkeeper-V1-ndk.so"
 VK_AIDL_RC="etc/init/vendor.samsung.hardware.security.vaultkeeper-service.rc"
@@ -59,7 +54,7 @@ VK_MISSING_SYMBOLS="$(LC_ALL=C comm -23 \
     <(nm -D --undefined-only "$VK_DONOR/vendor/$VK_AIDL_SERVICE" | awk '{print $2}' | grep VaultKeeperManager | LC_ALL=C sort -u) \
     <(nm -D --defined-only "$WORK_DIR/vendor/lib64/libvkmanager_vendor.so" | awk '{print $3}' | LC_ALL=C sort -u))"
 if [ "$VK_MISSING_SYMBOLS" ]; then
-    ABORT "y2s libvkmanager_vendor.so lacks symbols the AIDL service needs: $VK_MISSING_SYMBOLS"
+    ABORT "The target libvkmanager_vendor.so lacks symbols the AIDL service needs: $VK_MISSING_SYMBOLS"
     return 1
 fi
 

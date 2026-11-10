@@ -528,15 +528,11 @@ SET_PROP "product" "bluetooth.profile.vcp.controller.enabled" "false"
 # The Exynos 990 audio proxy can leave its A2DP session suspended when the
 # Android 17 Bluetooth stack negotiates SBC during the first connection after
 # boot.  AudioFlinger then routes media correctly, but audio.primary drops
-# every PCM buffer with "BT A2DP Off/suspended".  The y2s/y2slte target does
-# not need the Exynos DSP offload path: force the Bluetooth stack to encode
-# A2DP in software so the stream does not depend on that stale offload state.
-# Keep the original policy for the other Exynos 990 devices.
-if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
-    SET_PROP "product" "persist.bluetooth.a2dp_offload.disabled" "true"
-else
-    SET_PROP "product" "persist.bluetooth.a2dp_offload.disabled" "false"
-fi
+# every PCM buffer with "BT A2DP Off/suspended".  Exynos 990 devices do not
+# need the DSP offload path (and bluetooth_audio_aidl starts with software
+# SBC): force the Bluetooth stack to encode A2DP in software so the stream
+# does not depend on that stale offload state.
+SET_PROP "product" "persist.bluetooth.a2dp_offload.disabled" "true"
 SET_PROP "product" "persist.bluetooth.samsung.a2dp_offload.cap" "aptx-ssc-hifi"
 
 if [[ "$SOURCE_PLATFORM_SDK_VERSION" -ge 36 ]]; then

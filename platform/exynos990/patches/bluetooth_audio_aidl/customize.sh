@@ -2,11 +2,6 @@
 
 SKIPUNZIP=1
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
-    LOG "- Bluetooth Audio AIDL provider is limited to y2s/y2slte; skipping target"
-    return 0
-fi
-
 # The Android 17 Bluetooth apex first asks for the AIDL provider factory. The
 # old y2s vendor only advertises Samsung's HIDL provider, so the apex falls
 # back to the legacy audio.primary path and can leave SBC in a permanently

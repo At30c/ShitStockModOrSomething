@@ -281,8 +281,12 @@ require_text 'android.hardware.graphics.composer3.IComposer/default' \
 require_text '<version>5</version>' \
     "$COMPOSER3_MODULE_DIR/vendor/etc/vintf/manifest/android.hardware.graphics.composer3-exynos990.xml" \
     'VINTF declara Composer3 V5'
-require_text 'TARGET_CODENAME' "$COMPOSER3_MODULE_DIR/customize.sh" \
-    'módulo limita instalação a y2s/y2slte'
+# The module serves every Exynos 990 target (same Mali/HWC2 vendor stack).
+if grep -q -F 'TARGET_CODENAME' "$COMPOSER3_MODULE_DIR/customize.sh"; then
+    fail 'módulo não deve limitar a instalação a um aparelho do Exynos 990'
+else
+    pass 'módulo vale para todos os alvos Exynos 990'
+fi
 
 printf '%s\n' '' '[9/9] Fechamento das dependências HIDL de allocator/mapper'
 HIDL_RETIREMENT_AUDIT="$MODULE_DIR/audit_hidl_retirement.sh"

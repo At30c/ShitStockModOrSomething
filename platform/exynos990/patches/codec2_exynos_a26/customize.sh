@@ -2,11 +2,6 @@
 
 SKIPUNZIP=1
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
-    LOG "- A26 Codec2 HAL is limited to y2s/y2slte; skipping target"
-    return 0
-fi
-
 # stage_vendor_changes.sh is shared with scripts/repack_vendor_dd.sh: it patches
 # the service instance name to "exynos0" and writes the .rc and the merged
 # sec_c2_manifest_default.xml, so both install paths ship the same files.

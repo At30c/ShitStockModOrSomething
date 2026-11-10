@@ -9,11 +9,6 @@
 
 SKIPUNZIP=1
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
-    LOG "- Exynos 990 AIDL graphics chain is limited to y2s/y2slte; skipping target"
-    return 0
-fi
-
 GRAPHICS_PREBUILT="$SRC_DIR/prebuilts/exynos990/graphics_aidl"
 VENDOR_FILE_CONTEXTS="$WORK_DIR/vendor/etc/selinux/vendor_file_contexts"
 VENDOR_SERVICE_CONTEXTS="$WORK_DIR/vendor/etc/selinux/vendor_service_contexts"

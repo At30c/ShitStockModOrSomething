@@ -10,11 +10,6 @@ SKIPUNZIP=1
 # provider AIDL e substitui a declaração/serviço HIDL para não anunciar duas
 # pilhas para os mesmos sensores.
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
-    LOG "- Camera3 AIDL port is limited to y2s/y2slte; skipping target"
-    return 0
-fi
-
 CAMERA_AIDL_MODE="${EXYNOS990_CAMERA_AIDL:-1}"
 case "$CAMERA_AIDL_MODE" in
     0|1) ;;
