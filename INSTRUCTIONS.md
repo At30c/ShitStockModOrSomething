@@ -13182,3 +13182,12 @@ Requisitos e garantias:
   grupo do schedtune (0 = 80%). Modos do dia a dia: background/root/rt 95%,
   foreground/top-app 80% (o S26+ usa 70% no cluster do meio, mas no 990 o
   próximo é o Mongoose); sets de boost 80%. Aparece em `emstune/cur_set`.
+* **Patches 0026/0027 (acordadas de núcleo poupado):** um Mongoose poupado
+  pelo ECS fica ~100% em C2 (o cluster pode entrar em CPD); o que sobrava era
+  o `sx9360_debug_work_func` (sensor de grip, a cada 2 s, com leitura I2C cuja
+  IRQ o `i2c-exynos5` fixa na CPU que iniciou a transferência) preso na
+  workqueue por CPU. 0026 liga `CONFIG_WQ_POWER_EFFICIENT_DEFAULT` e 0027 põe
+  esse trabalho na `system_power_efficient_wq`. No #53, CPU 6 poupada: ticks
+  de ~100 para 8-16 em 15 s e sem a IRQ `15d10000.hsi2c`. Para medir:
+  `user_cpu_max=0-5`, diferença de `/proc/interrupts` e trace
+  `workqueue_execute_start`/`timer_expire_entry` com `tracing_cpumask=c0`.

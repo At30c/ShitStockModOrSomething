@@ -1,0 +1,25 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] arm64: configs: exynos9830: enable power efficient workqueues
+
+With ECS (and the cpus the energy aware placement leaves idle) a spared
+Mongoose core stays power gated in C2 almost all the time, but it still
+woke about once per second, mostly for its mct_tick timer: work queued
+on per-cpu workqueues runs on the cpu that queued it, so its timers keep
+firing there. Make workqueues created with WQ_POWER_EFFICIENT unbound by
+default (workqueue.power_efficient=1), as most Android kernels do, so
+that work runs on a cpu that is already awake and idle cores are left
+alone. Timer migration is already on.
+---
+diff --git a/arch/arm64/configs/exynos9830_defconfig b/arch/arm64/configs/exynos9830_defconfig
+index 7af82cf..822f853 100644
+--- a/arch/arm64/configs/exynos9830_defconfig
++++ b/arch/arm64/configs/exynos9830_defconfig
+@@ -518,7 +518,7 @@ CONFIG_PM_SLEEP_DEBUG=y
+ # CONFIG_DPM_WATCHDOG is not set
+ CONFIG_PM_CLK=y
+ CONFIG_PM_GENERIC_DOMAINS=y
+-# CONFIG_WQ_POWER_EFFICIENT_DEFAULT is not set
++CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
+ CONFIG_PM_GENERIC_DOMAINS_SLEEP=y
+ CONFIG_PM_GENERIC_DOMAINS_OF=y
+ CONFIG_CPU_PM=y

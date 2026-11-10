@@ -1,0 +1,39 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] sensorhub: sx9360: run the debug work on the power efficient wq
+
+The grip sensor debug work re-arms itself every 2 s for the lifetime of
+the device (Hall IC state, periodic I2C reads). On the per-cpu system
+workqueue it stays on the cpu where it first ran, so a cpu spared by ECS
+(Mongoose, in a 5 s trace: tick timer, delayed work and the hsi2c
+interrupt of each I2C read) kept waking for it. Queue it on
+system_power_efficient_wq, unbound with workqueue.power_efficient (0026),
+so it runs on a cpu that is already awake.
+---
+diff --git a/drivers/sensorhub/brcm/sx9360.c b/drivers/sensorhub/brcm/sx9360.c
+index fc60c85..936eaf9 100644
+--- a/drivers/sensorhub/brcm/sx9360.c
++++ b/drivers/sensorhub/brcm/sx9360.c
+@@ -536,7 +536,7 @@ static void sx9360_set_debug_work(struct sx9360_p *data, u8 enable,
+ {
+ 	if (enable == ON) {
+ 		data->debug_count = 0;
+-		schedule_delayed_work(&data->debug_work,
++		queue_delayed_work(system_power_efficient_wq, &data->debug_work,
+ 			msecs_to_jiffies(time_ms));
+ 	} else {
+ 		cancel_delayed_work_sync(&data->debug_work);
+@@ -1470,7 +1470,13 @@ static void sx9360_debug_work_func(struct work_struct *work)
+ 		data->debug_zero_count++;
+ 	}
+ 
+-	schedule_delayed_work(&data->debug_work, msecs_to_jiffies(2000));
++	/*
++	 * Re-armed every 2 s for the lifetime of the device: keep it off the
++	 * per-cpu system workqueue, where it pins itself to one cpu and wakes
++	 * it (and its I2C interrupt) even when that cpu is spared.
++	 */
++	queue_delayed_work(system_power_efficient_wq, &data->debug_work,
++			   msecs_to_jiffies(2000));
+ }
+ 
+ static irqreturn_t sx9360_interrupt_thread(int irq, void *pdata)
