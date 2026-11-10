@@ -6,7 +6,7 @@
 # mixed image makes Keyguard enter KNOXGUARD with kg.state=Error.  Stop the
 # build instead of silently creating an image that can lock the device.
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
+if [[ "$TARGET_PLATFORM" != "exynos990" ]]; then
     return 0
 fi
 

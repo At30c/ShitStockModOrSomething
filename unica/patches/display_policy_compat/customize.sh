@@ -6,10 +6,6 @@
 # HWC2 and immediately requests FHD again.  Keep the Android 17 display stack,
 # but make its policy match the target vendor/HWC configuration.
 
-if [[ "$TARGET_CODENAME" != "y2s" && "$TARGET_CODENAME" != "y2slte" ]]; then
-    return 0
-fi
-
 if [[ "$TARGET_PLATFORM" != "exynos990" ]]; then
     return 0
 fi

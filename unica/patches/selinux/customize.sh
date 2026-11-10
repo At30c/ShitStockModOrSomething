@@ -84,7 +84,7 @@ VENDOR_SEPOLICY="$WORK_DIR/vendor/etc/selinux/vendor_sepolicy.cil"
 # labelled platform_app_36 on these targets, while its source policy omitted
 # the matching socket grant.  Add only the four operations used by
 # UEventObserver; do not grant write, connect or send permissions.
-if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
+if [[ "$TARGET_PLATFORM" == "exynos990" ]]; then
     LOCKSECURED_PROPERTY_CONTEXT="sys.locksecured u:object_r:aod_prop:s0 exact bool"
     if ! grep -qE '^sys\.locksecured[[:space:]]' "$SYSTEM_EXT_SELINUX/system_ext_property_contexts"; then
         printf '%s\n' "$LOCKSECURED_PROPERTY_CONTEXT" >> "$SYSTEM_EXT_SELINUX/system_ext_property_contexts"

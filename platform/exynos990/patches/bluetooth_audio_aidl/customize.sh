@@ -89,12 +89,8 @@ ADD_TO_WORK_DIR "$MODPATH" "vendor" \
     "etc/bluetooth_audio_policy_configuration.xml" \
     0 0 644 "u:object_r:vendor_configs_file:s0" || return 1
 
-# Keep the software SBC path for the first validation. This avoids reusing the
-# stale Exynos 990 DSP-offload session while the AIDL/FMQ provider is being
-# introduced. The provider itself still exposes offload capabilities for a
+# The software SBC path (persist.bluetooth.a2dp_offload.disabled) is set by
+# the miscs module; the provider still exposes offload capabilities for a
 # later per-codec test.
-if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
-    SET_PROP "product" "persist.bluetooth.a2dp_offload.disabled" "true"
-fi
 
 unset SOURCE_CANDIDATES SOURCE_MODEL SOURCE_CSC CANDIDATE DONOR LIB AIDL_AUDIO_LIBS

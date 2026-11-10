@@ -298,8 +298,7 @@ fi
 # libfloatingfeature is consumed from both system and vendor on Exynos 990.
 # SET_FLOATING_FEATURE_CONFIG updates only the system table, so keep the vendor
 # copy in lockstep for the resolution/HFR values used by the framework.
-if [[ "$TARGET_PLATFORM" == "exynos990" ]] && \
-        [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
+if [[ "$TARGET_PLATFORM" == "exynos990" ]]; then
     VENDOR_FLOATING_FEATURE="$WORK_DIR/vendor/etc/floating_feature.xml"
     if [ -f "$VENDOR_FLOATING_FEATURE" ]; then
         SYNC_VENDOR_DISPLAY_FEATURE()

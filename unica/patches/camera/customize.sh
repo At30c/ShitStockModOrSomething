@@ -65,7 +65,7 @@ fi
 # source-firmware tracker/plugin stack and its detector model. Import only this isolated
 # closure from the source firmware; do not replace the camera HAL or all
 # source camera blobs.
-if [[ "$TARGET_CODENAME" == "y2s" ]]; then
+if [[ "$TARGET_CODENAME" == "y2s" || "$TARGET_CODENAME" == "y2slte" ]]; then
     AUTOFRAME_FILES=(
         "vendor/lib64/libaivideocentral.arcsoft.so"
         "vendor/lib64/libzoomroi_lite.samsung.so"
