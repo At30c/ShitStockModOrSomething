@@ -13203,12 +13203,18 @@ Requisitos e garantias:
   desligado) e no Mongoose (75-90%: 12,1/8,8% contra 16,2%); little igual.
   Efeito pequeno e consistente. O Mongoose não passa de 81% da máxima nos
   sets do dia a dia por causa do teto de 2,21 GHz do 0018.
-* **Misfit ratio (0025), A/B pendente:** `/data/local/tmp/ab_misfit.sh` (no
-  aparelho; cópia no scratchpad da sessão) roda um processo persistente do
-  grupo root com ~88% de ocupação no little (laço de 4 500 iterações + 12 ms
-  parado) e amostra a CPU dele por 60 s com o ratio do root nas CPUs 0-3 em
-  95% -> 80% -> 95% (`aio_tuner`, modo 0, níveis 0 e 1). Esperado: mais tempo
-  no little com 95%. Um processo novo por rajada não serve (o PELT não cresce).
+* **Misfit ratio (0025), A/B (kernel #54):** `/data/local/tmp/ab_misfit.sh`
+  roda um processo persistente do grupo root com ~88% de ocupação no little
+  (laço de 4 500 iterações + 12 ms parado; um processo novo por rajada não
+  serve, o PELT não cresce) e amostra a CPU dele por 60 s com o ratio do root
+  nas CPUs 0-3 em 95% -> 80% -> 95% (`aio_tuner`, modo 0, níveis 0 e 1).
+  Resultado: mid 91/96/96% nas três rodadas, sem diferença. No 990 a CPU de
+  cada wakeup sai da seleção por eficiência do EMS, e o set normal dá peso
+  100 ao little, 200 ao mid e 20/25 ao Mongoose para todos os grupos
+  (`[weight]` em `cur_set`); o misfit ratio só entra no status de misfit do
+  balanceador e nas checagens de overutil. O 0025 fica (inofensivo,
+  ajustável, igual ao S26+), mas para manter trabalho de fundo no little a
+  alavanca é o nó `weight` do set, não o misfit ratio.
 * **Kernel de teste do aparelho do usuário (y2slte):**
   `out/kernel_tmp-exynos990/build.sh -m y2slte -k y -r n`; copiar
   `build/out/y2slte/boot.img` para uma pasta com o nome `boot.img` (o
@@ -13265,7 +13271,8 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
 ### Pendências do kernel
 
 * Enviar 0023-0027 para a ROM (a release publicada tem o kernel #49).
-* Concluir o A/B do misfit ratio; medir o efeito do 0025 no uso real.
+* Avaliar se vale baixar o peso do mid para os grupos bg/root no set normal
+  (o misfit ratio não muda a escolha de CPU no wakeup).
 * Opcionais: MLT runnable, zram com lz4 (hoje só `lzo`/`lzo-rle`), esperas
   ociosas do TEEgris/`iwlog` com `TASK_IDLE` (o load average fica ~16 em
   repouso por 16 kthreads em estado D), `high_prio`.
