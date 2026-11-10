@@ -49,6 +49,11 @@ INCREMENTAL_PREV="$INCREMENTAL_DIR/base-target-files.prev"
 INCREMENTAL_TARGET="$INCREMENTAL_DIR/target-files"
 INCREMENTAL_LEGACY_BASE="$INCREMENTAL_DIR/base-target-files.zip"
 INCREMENTAL_LEGACY_PREV="$INCREMENTAL_DIR/base-target-files.prev.zip"
+# Target files of published releases (pinned by fota_release.py upload
+# --publish): the builds that devices actually run. -i diffs against the
+# newest $ROM_INCREMENTAL_BASES of them, one zip each.
+INCREMENTAL_PUBLISHED="$INCREMENTAL_DIR/published"
+INCREMENTAL_MAX_BASES="${ROM_INCREMENTAL_BASES:-2}"
 
 GET_PATCHED_APK_HASH()
 {
@@ -441,12 +446,30 @@ if $BUILD_ZIP; then
     mkdir -p "$INCREMENTAL_DIR"
     rm -rf "$INCREMENTAL_TARGET" "$INCREMENTAL_DIR/target-files.zip"
 
-    INCREMENTAL_SOURCE=""
+    # Incremental zips start from published builds, not from the last build:
+    # base-target-files follows every build, including test builds that are
+    # never published, and the published one used to be rotated away.
+    INCREMENTAL_SOURCES=()
     if $BUILD_INCREMENTAL; then
-        if [ -d "$INCREMENTAL_BASE" ]; then
-            INCREMENTAL_SOURCE="$INCREMENTAL_BASE"
-        elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
-            INCREMENTAL_SOURCE="$INCREMENTAL_LEGACY_BASE"
+        if [ -d "$INCREMENTAL_PUBLISHED" ]; then
+            while IFS= read -r d; do
+                INCREMENTAL_SOURCES+=("$d")
+            done < <(
+                for d in "$INCREMENTAL_PUBLISHED"/*/; do
+                    d="${d%/}"
+                    [ -f "$d/build_info.txt" ] || continue
+                    echo "$(sed -n "s/^timestamp=//p" "$d/build_info.txt" | head -n 1) $d"
+                done | sort -rn | head -n "$INCREMENTAL_MAX_BASES" | cut -d " " -f 2-
+            )
+        fi
+        if [ "${#INCREMENTAL_SOURCES[@]}" = 0 ]; then
+            if [ -d "$INCREMENTAL_BASE" ]; then
+                INCREMENTAL_SOURCES=("$INCREMENTAL_BASE")
+            elif [ -f "$INCREMENTAL_LEGACY_BASE" ]; then
+                INCREMENTAL_SOURCES=("$INCREMENTAL_LEGACY_BASE")
+            fi
+            [ "${#INCREMENTAL_SOURCES[@]}" != 0 ] && \
+                LOGW "No published baseline in ${INCREMENTAL_PUBLISHED//$SRC_DIR\//}; using the last build as the incremental base"
         fi
     fi
 
@@ -464,17 +487,20 @@ if $BUILD_ZIP; then
     fi
     LOG_STEP_OUT
 
-    if [ "$INCREMENTAL_SOURCE" ]; then
-        LOG_STEP_IN true "Creating incremental ROM zip"
-        "$SRC_DIR/scripts/build_flashable_zip.sh" \
-            --incremental "$INCREMENTAL_SOURCE" "$INCREMENTAL_TARGET" || exit 1
+    if [ "${#INCREMENTAL_SOURCES[@]}" != 0 ]; then
+        for INCREMENTAL_SOURCE in "${INCREMENTAL_SOURCES[@]}"; do
+            LOG_STEP_IN true "Creating incremental ROM zip from ${INCREMENTAL_SOURCE//$SRC_DIR\//}"
+            "$SRC_DIR/scripts/build_flashable_zip.sh" \
+                --incremental "$INCREMENTAL_SOURCE" "$INCREMENTAL_TARGET" || exit 1
+            LOG_STEP_OUT
+        done
     else
         $BUILD_INCREMENTAL && \
             LOGW "No incremental base exists; creating a full ZIP and establishing the baseline"
         LOG_STEP_IN true "Creating zip"
         "$SRC_DIR/scripts/build_flashable_zip.sh" "$INCREMENTAL_TARGET" || exit 1
+        LOG_STEP_OUT
     fi
-    LOG_STEP_OUT
 
     # Promote the target only after the ZIP was generated successfully. A
     # failed build must never destroy the last known installable baseline.

@@ -234,6 +234,16 @@ O `upload` sem argumentos envia o último `prepare`. Tudo pode ser trocado:
   a API direto, com `application/octet-stream`. Um arquivo que já existe com
   outro tipo é recusado; `--clobber` substitui. O tipo do DD em si não é
   conferido.
+- **Bases do incremental.** Ao publicar (`upload --publish`), o script fixa
+  o target-files de cada build da release em
+  `out/target/<device>/incremental/published/<timestamp>` (hardlinks, sem
+  espaço extra enquanto a `base-target-files` for a mesma build) e guarda as
+  3 mais novas; `fota_release.py pin [tag]` faz o mesmo à mão. O
+  `make_rom.sh -i` gera um incremental a partir de cada uma das 2 publicadas
+  mais novas (`ROM_INCREMENTAL_BASES` muda o número), e não mais da última
+  build: a `base-target-files` acompanha toda build, inclusive as de teste
+  nunca publicadas, e em 09/11 a base publicada chegou a ser apagada.
+  Sem nenhuma publicada, volta à última build e avisa.
 
 ## Hospedagem
 

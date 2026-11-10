@@ -39,6 +39,15 @@ only over HTTPS to uploads.github.com without redirects.
 The release stays a draft unless --publish is given: the manifest URL
 (releases/latest/download/...) only sees published releases, so publishing
 is what offers the update to devices.
+
+    fota_release.py pin [--repo owner/name] [--keep-published N] [tag]
+
+Done by upload --publish. Hard links the target files of each build of the
+release (out/target/<device>/incremental/base-target-files or .prev) to
+out/target/<device>/incremental/published/<timestamp>, keeping the newest N
+(default 3). make_rom.sh -i builds one incremental zip from each of the
+newest $ROM_INCREMENTAL_BASES (default 2) of them, so test builds that are
+never published no longer move the base of the next update.
 """
 
 import argparse
@@ -66,6 +75,8 @@ SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(SRC_DIR, "out")
 FOTA_DIR = os.path.join(OUT_DIR, "fota")
 DEFAULT_CHANGELOG = os.path.join(SRC_DIR, "changelog.txt")
+# Published builds whose target files stay pinned as incremental bases.
+DEFAULT_PUBLISHED_KEEP = 3
 
 
 def die(msg):
@@ -529,10 +540,87 @@ def upload(args):
         gh("release", "edit", tag, "-R", args.repo, "--draft=false", "--latest")
         # Publishing moves the release from its untagged draft URL to the tag.
         rel = find_release(args.repo, tag) or dict(rel, draft=False)
+        pin_published(args.repo, tag, DEFAULT_PUBLISHED_KEEP)
     state = "draft" if rel.get("draft") else "published"
     print(f"\nRelease {tag} ({state}): {rel['html_url']}")
     if rel.get("draft"):
         print(f"Publish it with: scripts/fota_release.py upload --publish {args.dir}")
+
+
+def target_files_timestamp(path):
+    try:
+        with open(os.path.join(path, "build_info.txt"), encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("timestamp="):
+                    return int(line.split("=", 1)[1])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def release_builds(repo, tag):
+    """(device, timestamp) of every build in the manifest of a release."""
+    rel = find_release(repo, tag)
+    if rel is None:
+        die(f"no release {tag} in {repo}")
+    builds = set()
+    for asset in rel["assets"]:
+        if not re.fullmatch(r"ota-[A-Za-z0-9_.-]+\.json", asset["name"]):
+            continue
+        data = gh("release", "download", tag, "-R", repo, "-p", asset["name"], "-O", "-")
+        try:
+            manifest = json.loads(data)
+            for b in manifest["builds"]:
+                builds.add((manifest["device"], int(b["timestamp"])))
+        except (ValueError, KeyError, TypeError) as e:
+            die(f"{asset['name']} of {tag} is not a valid manifest ({e})")
+    return builds
+
+
+def pin_published(repo, tag, keep):
+    """Keep the target files of the builds of a published release as bases
+    for the next incremental updates (make_rom.sh -i diffs against them).
+
+    make_rom.sh rotates base-target-files on every build, published or not,
+    so the build that devices run was lost after two more builds. The copy is
+    hard linked: no extra space while the base is the same build."""
+    for device, timestamp in sorted(release_builds(repo, tag)):
+        inc_dir = os.path.join(OUT_DIR, "target", device, "incremental")
+        pub_dir = os.path.join(inc_dir, "published")
+        dest = os.path.join(pub_dir, str(timestamp))
+        if os.path.isdir(dest):
+            print(f"- {device} {timestamp}: already pinned")
+        else:
+            source = None
+            for name in ("base-target-files", "base-target-files.prev", "target-files"):
+                path = os.path.join(inc_dir, name)
+                if target_files_timestamp(path) == timestamp:
+                    source = path
+                    break
+            if source is None:
+                warn(f"{device} {timestamp}: no target files of this build left in "
+                     f"{os.path.relpath(inc_dir, SRC_DIR)}; the next incremental "
+                     "cannot start from it")
+                continue
+            os.makedirs(pub_dir, exist_ok=True)
+            tmp = dest + ".tmp"
+            shutil.rmtree(tmp, ignore_errors=True)
+            subprocess.run(["cp", "-al", source, tmp], check=True)
+            os.rename(tmp, dest)
+            print(f"- {device} {timestamp}: pinned {os.path.relpath(source, SRC_DIR)} "
+                  f"as {os.path.relpath(dest, SRC_DIR)}")
+
+        pinned = sorted((int(n) for n in os.listdir(pub_dir) if n.isdigit()), reverse=True)
+        for old in pinned[keep:]:
+            shutil.rmtree(os.path.join(pub_dir, str(old)))
+            print(f"  dropped the pinned base {old} (keeping {keep})")
+
+
+def pin(args):
+    tag = args.tag
+    if not tag:
+        tag = json.loads(gh("api", f"repos/{args.repo}/releases/latest"))["tag_name"]
+    pin_published(args.repo, tag, args.keep_published)
 
 
 def main():
@@ -570,6 +658,14 @@ def main():
                     help="publish the release after the upload (devices see it)")
     up.add_argument("dir", nargs="?", help="default: the last prepared directory")
     up.set_defaults(func=upload)
+
+    pn = sub.add_parser("pin", help="keep the target files of a published release "
+                        "as incremental bases (done by upload --publish)")
+    pn.add_argument("--repo", default=DEFAULT_REPO)
+    pn.add_argument("--keep-published", type=int, default=DEFAULT_PUBLISHED_KEEP,
+                    help="pinned builds to keep per device (default %(default)s)")
+    pn.add_argument("tag", nargs="?", help="default: the latest release")
+    pn.set_defaults(func=pin)
 
     args = p.parse_args()
     if args.cmd == "prepare" and args.part_size <= 0:
