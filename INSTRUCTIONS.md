@@ -13319,3 +13319,75 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
 * **GPU e memória:** adiado para outro dia, começando por medir o tempo em
   cada frequência da GPU e da MIF no uso real (rolagem, vídeo, jogo). Com a
   tela apagada o ganho é praticamente zero (GPU desligada, MIF no mínimo).
+
+### Consumo com a tela apagada e rádio (10/11/2026, noite)
+
+* **Medição de idle** (`/data/local/tmp/idle_probe.sh`, roda no aparelho e
+  mede pelo relógio de parede, 15 min sem cabo; a versão antiga usava
+  `sleep`, que para durante a suspensão): kernel #54, 17,6 min, acordado
+  ~35% (47% medido, incluindo ~3 min já com o cabo), 22 suspensões e 5
+  falhas. Enquanto acordado os núcleos ficam 79-89% (little) e 93-98%
+  (mid/big) em C2; WFI só 6-9% no little. **O governor de idle não é o
+  gargalo e o HALO não compensa.**
+* **O que segura o aparelho acordado é o rádio** (`/sys/kernel/debug/
+  wakeup_sources`, ~1,5 h de boot): `BT_host_wake` 606 vezes / 1 611 s
+  (2,7 s cada), `wlan_rx_wake` 1 235 / 1 088 s (0,9 s), `wlan_txfl_wake`
+  1 179 / 1 078 s (0,9 s), `BT_bt_wake` 160 / 419 s, modem (`s5100`,
+  `umts_ipc`) ~440 s. O trabalho de cada evento leva milissegundos; o resto
+  é o wakelock temporizado dos drivers: `BT_host_wake` segura 1 s depois que
+  o chip solta o sinal (`drivers/bluetooth/bcm43xx.c`, `HZ`), e cada pacote
+  recebido segura 500 ms (`DHD_PACKET_TIMEOUT_MS`). O Wi-Fi do y2s/y2slte é o
+  BCM4375 no `bcmdhd_101_16` (o 101_12 também compila; o 101_10 é do
+  BCM4389).
+* **Patch 0028 (não commitado, teste pendente):** `BT_host_wake` 1 s ->
+  250 ms e `DHD_PACKET_TIMEOUT_MS` 500 -> 200 ms; envio
+  (`wlan_txfl_wake`, `MAX_TX_TIMEOUT`) e `BT_bt_wake` sem mudança. No
+  aparelho como kernel de teste #55. Falta repetir a medição de 15 min sem
+  cabo e confirmar que notificações (WhatsApp, Galaxy Fit3) chegam na hora;
+  o buffer `events` do logcat foi aumentado para 4 MB e o logger do D2TW
+  passou a gravar `notification_enqueue`/`notification_cancel` e os
+  contadores dos wakelocks de rádio a cada 30 s.
+* **Multicast:** o único multicast lock é do `com.samsung.android.rubin.app`
+  (Serviço de personalização, `household-multicast-lock`), que desliga o
+  filtro de multicast do firmware. Medido com o cabo: 23 pacotes acordando o
+  processador em 3 min com o lock e 17 sem. Pouco a ganhar; deixado como
+  está. O HAL de Wi-Fi não informa motivos de acordada (`Wlan Wake
+  Reasons:null`).
+* **Interrupção térmica suspeita:** `10090000.BIG/MID/LITTLE` (TMU da CPU)
+  e `100a0000.G3D/ISP/NPU` dispararam ~25 mil vezes cada em 17 min
+  (~24/s). Pode ser temperatura oscilando em um limite de alerta; falta
+  comparar com o kernel #49 (o 0023 mexeu no DTM).
+* **Outras configurações que acordam o rádio:** sincronização e medições
+  contínuas do relógio, busca de Wi-Fi/Bluetooth em Localização, busca de
+  dispositivos próximos, Quick Share para todos, Find My Mobile offline.
+
+### Recursos de Galaxy AI que falham no Exynos 990 (10/11/2026)
+
+* **Pacote de idiomas ("Samsung Language Core",
+  `com.samsung.android.offline.languagemodel` 4.1.01.24):** o Galaxy Store
+  baixa, valida a assinatura e o Play Protect aprova, mas o sistema recusa:
+  `INSTALL_FAILED_MISSING_SHARED_LIBRARY: ... requires unavailable native
+  shared library libenn_user_lib.so`. É o runtime de NPU ENN dos Exynos
+  novos; a vendor do 990 tem o Eden (`libeden_*`, `libenn_dsp_dal.so`) e
+  não declara `libenn_user_lib.so`. Declarar um stub só faria o app
+  instalar e falhar ao usar a NPU; portar o ENN do S26+ não é viável
+  (driver/firmware de NPU de outra geração, ARMv8.3). Aberto a partir da
+  tradução de chamadas (`telephonyui`, `fsOrigin=stubUpdateCheck`).
+* **Cartão personalizado do Now Brief / Now Bar**
+  (`com.samsung.android.smartsuggestions`): `ScsApi@Configuration:
+  language pack is not installed` e `NowBrief.LLMPolicy: Exception occurred
+  in isLLMSupportedLanguage` às 22:26:10 — depende do mesmo modelo de
+  linguagem local. Também aparece `Unknown authority
+  com.android.systemui.aibrief.provider.AiBriefContentProvider`, mas esse
+  provider não existe nem na SystemUI original do S947B; é só aviso.
+  Outros: `SAServiceManager onReceiveAccessToken failed SAC_0401`, notícias
+  não suportadas (`com.samsung.android.app.spage` ausente).
+* **Notificações em destaque:** sem conclusão. A SystemUI tem
+  `SemHighlightsCoordinator` e só registra `resetHighlightsPanelOpenCount`;
+  o Now Brief registrou `[PriorityNotification] ... size=0`. O assistente
+  de notificações ativo é o do Google
+  (`com.google.android.ext.services/android.ext.services.notification.Assistant`),
+  não um da Samsung; falta descobrir quem classifica os destaques no S947B
+  e se também depende do modelo de linguagem local.
+* **Captura usada:** `/data/local/tmp/errcap/logcat.txt*` (logcat `-b all`,
+  22:19-22:29), copiada para o scratchpad da sessão.
