@@ -13276,3 +13276,46 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
 * Opcionais: MLT runnable, zram com lz4 (hoje só `lzo`/`lzo-rle`), esperas
   ociosas do TEEgris/`iwlog` com `TASK_IDLE` (o load average fica ~16 em
   repouso por 16 kthreads em estado D), `high_prio`.
+
+### Governors: o que existe, EGO do S26+ e idle (10/11/2026)
+
+* **Governors no kernel (y2slte, #54):** CPU `energy_step` (ESG, padrão;
+  também `performance` e `schedutil`), GPU Mali `Interactive` (também
+  `Default`, `Joint`, `Static`, `Booster`, `Dynamic`), devfreq (MIF, INT,
+  disp, cam, aud, dsp, dnc, mfc, npu, tnr) `interactive` (único compilado),
+  cpuidle `menu`, MIGov ativo. O kernel não troca o governor de CPU conforme
+  o uso: o que muda são os sets do emstune, escolhidos pelo HAL de
+  desempenho via `emstune/req_mode`.
+* **Por que o misfit ratio não decide a CPU e não deve decidir:** pela
+  tabela `/sys/kernel/ems/energy_table`, uma tarefa no little custa 0,53x a
+  do mid com carga 40, empata em ~120 e custa 1,8-1,9x com 200-240 (little
+  a ~65-80% da capacidade). Os pesos do EMS (mid 200, little 100) acertam;
+  o 0025 fica só pelo efeito no ECS: com o root a 95% no mid, uma tarefa de
+  sistema a ~88% no mid deixou o Mongoose liberado 2-6% do tempo, contra
+  21% com 80% (`/data/local/tmp/ab_misfit_mid.sh`, #54).
+* **"Desligar cluster" = CPD** (estado de idle, não governor): com todos os
+  núcleos de um cluster em C2 e ociosidade prevista longa, o cluster inteiro
+  é desligado (`/sys/power/cpupm/cpd_cl1` = mid, `cpd_cl2` = big, ambos
+  `enabled`; o cluster little, onde fica a CPU 0, não tem CPD). Acima disso,
+  `sicd` desliga o SoC. O ECS ajuda o CPD ao poupar todos os núcleos de um
+  cluster. Em idle o governor de frequência pouco importa (núcleos em C2);
+  quem decide é o cpuidle (`menu`). Candidato se a medição de tela apagada
+  mostrar ganho: HALO, o governor de idle do S26+ (`halo.c`).
+* **EGO (S26+, `ego.c`, ~2 500 linhas) comparado ao ESG do 990:** o EGO é a
+  evolução do ESG (mesmos passos de energia `step`). Já existe no 990:
+  passos de energia, margem por frequência (0019), step latency (0024),
+  fmax adaptativo (0018, via PM QoS), boost de I/O (`iowait_boost` no ESG) e
+  slack timer (no `exynos-acme`). Só no EGO: quick ramp-up (por uclamp e por
+  tarefas pesadas/sustain-high do MLT; o 4.19 não tem uclamp), util da
+  tarefa mais pesada (`ems_rq_htask`, MLT), `pelt-boost`, `ptb-margin`,
+  alvo de util ajustável por API (`margin_util_target`), resolução de
+  "freq reversal", faixa adaptativa low/high por API (jogos), `fclamp` e
+  `somac wall`. Depende de `et_*` (tabela de energia: o 990 tem a mesma
+  informação em `energy.c`), egg/sysbusy/gsc (ausentes) e dos ganchos de
+  cpufreq do 6.12. Conclusão: portar o EGO inteiro duplicaria o que o ESG
+  já tem e o resto depende do MLT/uclamp; o ganho real vem depois do MLT
+  runnable (quick ramp-up e tarefa pesada). Peças isoladas viáveis já:
+  `pelt-boost`/`ptb-margin` (sobrepõem o `freq_boost`) e freq reversal.
+* **GPU e memória:** adiado para outro dia, começando por medir o tempo em
+  cada frequência da GPU e da MIF no uso real (rolagem, vídeo, jogo). Com a
+  tela apagada o ganho é praticamente zero (GPU desligada, MIF no mínimo).
