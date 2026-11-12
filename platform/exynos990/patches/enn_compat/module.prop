@@ -1,0 +1,7 @@
+id=enn_compat
+name=Exynos 990 ENN compatibility bridge
+version=0.1
+versionCode=1
+author=At30c, OpenAI
+priority=45
+description=Compatibility bridge for the legacy Exynos 990 ENN/Eden runtime. It is disabled until the legacy ENN service endpoint is validated.

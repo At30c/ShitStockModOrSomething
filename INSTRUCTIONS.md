@@ -13369,10 +13369,231 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
   `INSTALL_FAILED_MISSING_SHARED_LIBRARY: ... requires unavailable native
   shared library libenn_user_lib.so`. É o runtime de NPU ENN dos Exynos
   novos; a vendor do 990 tem o Eden (`libeden_*`, `libenn_dsp_dal.so`) e
-  não declara `libenn_user_lib.so`. Declarar um stub só faria o app
-  instalar e falhar ao usar a NPU; portar o ENN do S26+ não é viável
-  (driver/firmware de NPU de outra geração, ARMv8.3). Aberto a partir da
-  tradução de chamadas (`telephonyui`, `fsOrigin=stubUpdateCheck`).
+  não declara `libenn_user_lib.so`. Em 11/11 foi validado no aparelho que
+  isto não é ausência de NPU: `eden_runtime` e NNAPI 1.3 estão ativos, com
+  `ro.vendor.eden.devices=CPU1_GPU0_NPU2`. O problema é a ABI pública.
+  O `libenn_user_lib.so` do S947B exporta cerca de 100 operações ENN e chama
+  `libenn_engine_lib.so`, que por sua vez usa o serviço AIDL
+  `vendor.samsung_slsi.hardware.enn_aidl`. O y2s usa Eden e não publica esse
+  serviço AIDL.
+
+  A firmware original G986 contém uma API ENN anterior no system
+  (`libenn_sys_public_api_cpp.so` e `libenn_sys_user.samsung_slsi.so`), cuja
+  maior parte das operações básicas coincide com a API atual e fala o HIDL
+  `vendor.samsung_slsi.hardware.enn@1.0`. Portanto, o único caminho viável
+  para executar o pacote é um **adaptador novo** `libenn_user_lib.so` que
+  exponha a ABI ENN requerida e encaminhe somente as operações suportadas à
+  pilha Eden/HIDL do 990, com fallback de erro explícito para batch, fences,
+  modelos com pesos e APIs de perfil novas. Antes disso é necessário validar
+  se o modelo baixado usa apenas essa interseção e restaurar/implementar o
+  endpoint HIDL que o cliente antigo espera; a ROM atual não contém nem o
+  cliente antigo nem `vendor.samsung_slsi.hardware.enn@1.0.so`.
+
+  Declarar só um XML de biblioteca ou um stub vazio permite a instalação, mas
+  não executa inferência e não é correção. Também não copiar ENN do S26+: ele
+  exige o serviço AIDL, `npu.ko`, firmware e o formato de modelos do S5E9965.
+  Como alternativa limitada, é possível patchar o APK para remover a
+  dependência obrigatória e usar apenas funções remotas/sem modelo local, se
+  a análise do APK confirmar que há esse fallback.
+
+  **Prova no aparelho (11/11):** foi compilada a sonda
+  `platform/exynos990/patches/enn_compat` com SONAME
+  `libenn_user_lib.so`. Ela carregou as bibliotecas legadas originais em
+  `/data/local/tmp`, sem gravar em `system` ou `vendor`, e chamou a
+  inicialização real. O processo caiu dentro de
+  `enn::interface::EnnMediumInterface::init()` da
+  `libenn_sys_user.samsung_slsi.so`: `EnnInitialize` chama
+  `IEnnInterface::getService()` e a ROM não publica esse serviço; o cliente
+  antigo não verifica o ponteiro nulo antes da chamada virtual. O tombstone
+  aponta `EnnInitialize` -> `EnnContextManager::init()` ->
+  `EnnMediumInterface::init()` (PC `0x333bc`).
+
+  O Eden em execução oferece os contratos necessários para uma ponte:
+  `openModel`, `openModelFromFd`, `openModelFromMemory`, alocação/carregamento
+  de buffers de entrada e saída, `executeReq`, consulta de dimensões e
+  `closeModel`. Inicialmente considerou-se um serviço HIDL
+  `vendor.samsung_slsi.hardware.enn@1.0`, mas a sonda direta posterior do
+  SDK Eden mostrou que ele é desnecessário: a ponte deve falar a API C Eden
+  diretamente. Não se deve publicar `libenn_user_lib.so` enquanto a tradução
+  de modelo, buffers e requests não estiver implementada; isso só trocaria o
+  erro de instalação por crash ao abrir o recurso. Os arquivos temporários da
+  sonda foram removidos do aparelho após a coleta.
+
+  **Driver ENN do S26+ rejeitado (11/11):** a cadeia foi testada apenas em
+  `/data/local/tmp`, com `libenn_user_lib.so`, `libenn_engine_lib.so`, os
+  drivers CPU/GPU/unified e todas as dependências ENN do S947B. Ela recebeu
+  `SIGILL` durante o `dlopen`, antes de qualquer chamada de inferência. A
+  instrução que falhou é `retaa` em `libenn_common_utils.so`; a biblioteca é
+  compilada com propriedades AArch64 **BTI + PAC**, indisponíveis no Cortex-A77
+  do Exynos 990. Mesmo se essa barreira fosse removida, o driver unified do
+  S26 abre `/dev/vertex10` e `/dev/vertex11` e usa VS4L API v4/v5. O y2s não
+  possui esses nós: seu kernel 4.19 fornece Eden/NNAPI e o NPU Exynos antigo.
+  Portanto, não é possível usar o driver binário do S26+ no S20+; recompilar
+  essa pilha sem PAC também não resolveria o contrato de kernel e firmware.
+  Ela serve apenas como referência de API. O caminho válido permanece a ponte
+  nova ENN HIDL -> Eden descrita acima.
+
+  **Sonda Eden direta aprovada (11/11):** `enn_compat/eden_probe` carregou a
+  `libeden_wrapper_sdk.so` da própria vendor e chamou `Initialize()` e
+  `Shutdown()` sem arquivos adicionais: ambos retornaram `0`. O log confirma
+  que a execução alcançou o NPU real: Exynos 990/S5E9830, dois núcleos NPU,
+  NCP 21, mailbox 7 e User API 4. A biblioteca expõe também abertura de
+  modelo, buffers e execução (`OpenEdenModel*`, `Allocate*Buffers`,
+  `ExecuteModel` e `CloseModel`). A ponte não deve mais tentar carregar
+  `libenn_sys_user.samsung_slsi.so`, pois ela aborta na ausência do serviço
+  HIDL ENN; deve traduzir a ABI ENN diretamente para essa API C Eden.
+
+  **Conclusão: ponte inviável (11/11, mesmo dia).** O APK do Language Core
+  (3.1.20.27, 3,1 GB) é o próprio modelo: LLM local de ~3B parâmetros
+  (`embed_size` 3072, 34 subcamadas, contexto 8704) com LoRAs por recurso.
+  Todos os grafos são `NNC3`/`NPU_BINARY` gerados com `nncontainer-gen -c NPU
+  --soc-type Solomon --multi_ncp` e quantização em hardware; as configs são
+  `9955_*nncgraph_config.json`. Ou seja, código e layout de pesos do NPU do
+  S5E9955, sem grafo CPU/GPU/TFLite de fallback. O NPU do 9830 (Eden v1.6)
+  não executa isso, então a ponte ENN -> Eden não tem o que rodar. O pacote
+  usa ~75 funções `Enn*` via `libenn_public_api_cpp_lib.so`. Pacote de
+  idiomas, cartão do Now Brief e demais recursos de LLM local ficam
+  indisponíveis no Exynos 990; `enn_compat` permanece só como registro das
+  sondas, desabilitado.
+
+  **Stub do S947B testado (11/11):** o `OfflineLanguageModel_stub.apk`
+  (1.0.00.38, 4,7 MB, só dex, `VERSION=stub`, sem lib nativa nem serviço) é
+  barrado por instalação direta pelo ASKS (`Violate security policy of MSTG`,
+  `-3001 INSTALL_FAILED_REJECTED_BY_BUILDTYPE`, inclusive com o Galaxy Store
+  como instalador). Montado em `/system/priv-app` por módulo KernelSU
+  temporário, foi registrado como app de sistema, mas os clientes o tratam
+  como `not provider supported app` e o Now Brief deu o mesmo erro. O módulo
+  foi removido; o stub continua no debloat.
+
+  **Plano: portar a cadeia ENN 2.4.26 do S26+ (11/11, em andamento).**
+  Objetivo: `libenn_user_lib.so` e o serviço AIDL
+  `vendor.samsung_slsi.hardware.enn_aidl` funcionando no 990 com os drivers
+  de CPU e GPU. O LLM do Language Core continua fora de alcance (binário de
+  NPU do S5E9955 apenas); o ganho é a ENN para modelos CPU/GPU e a
+  instalação do pacote. Levantamento (desmontagem completa em
+  `llvm-objdump` e decompilação Ghidra 12.2 das 10 peças principais):
+
+  - Cadeia: `libenn_public_api_cpp_lib` -> `libenn_user_lib` ->
+    `libenn_engine_lib` (no mesmo processo) -> drivers `cpu`
+    (`libenn_user_driver_cpu` + `libenn_cpu_operators`), `gpu`
+    (`libenn_user_driver_gpu_lib`, OpenCL) e `unified` (NPU); o serviço AIDL
+    usa a variante `libenn_engine.so`. Todas dependem de
+    `libenn_common_utils` e `libdmabufheap`.
+  - Instruções que o A77 não executa: ~8.150 `retaa` (as `paciasp`,
+    `autiasp` e `bti` são HINT e viram NOP) e 66 LRCPC2 (`ldapur*`/`stlur*`,
+    todas com deslocamento). LSE, `sdot` e `ldapr` são suportados.
+  - Memória: o 990 só tem ION (`/dev/ion`, sem `/dev/dma_heap`). A ENN chama
+    `BufferAllocator::MapNameToIonHeap` e pede `system-uncached` e
+    `dmabuf_system_heap`; a `libdmabufheap` do system tem `CheckIonSupport`.
+  - NPU: o 990 expõe `/dev/vertex10` com VS4L 5 e NCP v21; o driver
+    `unified` do S26+ fala VS4L 6 e NCP 26-29 (driver de kernel do S947B:
+    `drivers/vision/npu`, codinomes Thetis=9965, Solomon=9955). O `unified`
+    tem de ficar bloqueado para não mandar estruturas VS4L 6 ao NPU antigo.
+  - GPU: `/vendor/lib64/libOpenCL.so` -> `egl/libGLES_mali.so` existe.
+
+  Etapas (cada uma documentada e validada antes da próxima):
+  1. Ferramenta reprodutível de patch binário: `retaa`/`retab` -> `ret`
+     (equivalente, pois o `paciasp` do prólogo não assina o LR no A77).
+  2. LRCPC2: emulação no kernel por `undef_hook` (raro, fora de laços
+     quentes) ou ilhas de código `add base` / `ldapr|stlr` / `sub base`.
+  3. Prova em `/data/local/tmp` com `LD_LIBRARY_PATH`: `EnnInitialize`,
+     enumeração de dispositivos e um modelo CPU, sem tocar a vendor.
+  4. Bloquear o `unified` (sem dispositivo NPU compatível) e validar a
+     alocação ION.
+  5. Instalação na vendor via dd (libs, serviço AIDL `enn-lazy.rc`, VINTF e
+     sepolicy) e `uses-native-library` atendido.
+
+  **Origem trocada para o S24+ (11/11).** O firmware estável One UI 9 do
+  SM-S926B (`S926BXXSIEZJ1`, Android 17/SDK 37, patch 2026-10-05) mantém a
+  vendor Android 14 (`erd9945`, Exynos 2400) e traz a ENN 2.2.29 com a mesma
+  estrutura (`libenn_user_lib` -> `libenn_engine_lib` -> drivers cpu/gpu/
+  unified, serviço `enn_aidl` e `enn-lazy.rc`). Diferente da 2.4.26 do S26+,
+  ela não tem nenhum `retaa` nem LRCPC2, nem SVE/i8mm/BF16 (só `paciasp`/
+  `autiasp`, que são NOP no A77, além de `sdot`/`ldapr`/LSE, suportados), então
+  deve rodar no 990 sem patch binário nem emulação no kernel; as etapas 1 e 2
+  ficam dispensadas (ferramenta `enn_compat/tools/patch_pac.py` mantida como
+  referência). O `unified` compara a versão VS4L do driver
+  (`VS4L API version is different. From RoHw_Prop(%d) vs DD(%d)`) antes de
+  usar `/dev/vertex10/11`. Os compiladores `libnpu_compiler`/
+  `libsait_npu_compiler` da vendor do S24+ servem ao HAL NNAPI
+  (`android.hardware.neuralnetworks-service-enn`), não ao Language Core, que
+  chega como `OfflineLanguageModel_stub` + pacote da Galaxy Store por chip.
+  A ENN do S26+ também mostrou que NNC cifrado começa com `BiEn` e exige
+  `/dev/decrypt`; os 19 grafos do Language Core (variante 9955) estão em claro.
+  Firmware extraído em `out/odin/SM-S926B_EUX/` (vendor e imagens).
+
+  **Prova no aparelho (11/11, `/data/local/tmp/enn24`, vendor intocada).**
+  As 9 libs da ENN 2.2.29 carregam no A77 sem SIGILL (com a 2.4.26 do S26+ o
+  `dlopen` morria). O `EnnInitialize` aborta com `Fail to find 990 in
+  pre-defined SOC list`: `SocInfo::cache_soc_data` extrai o número de
+  `ro.hardware` (`exynos990` -> `990`) e procura num mapa estático que só tem
+  8825, 9925, 9935, 8835, 9945, 8845, 9840 e exynosauto9; com o nome vazio o
+  `NpuUserDriverProxy` lança `Wrong flow`. Com SoC conhecido e sem NPU ele só
+  registra `NPU is not available!` e segue. Teste com calço `LD_PRELOAD` que
+  responde `exynos9840` (Exynos 2100) só para `ro.hardware`:
+  `EnnInitialize=0`, `Set SOC name as 9840`, `Open v5 dal(/dev/vertex10)
+  Failed, errno(13)` (shell sem permissão) -> `Unified Driver is not
+  available!`, `GpuUserDriver::Initialize started`, engine e contexto
+  criados e liberados sem erro. Para produção, `ro.hardware` não pode mudar
+  (os HALs do 990 são `*.exynos990.so`): a ENN precisa ler outra
+  propriedade (patch da string na `libenn_common_utils`) ou ter o 990 no
+  mapa.
+
+  **Limite prático:** todos os modelos ENN do firmware do S24+ são binário de
+  NPU do 9945: 24 da vendor (`firmware/*.nnc`, Midas), 4 do retrato e os do
+  `mediacontextanalyzer` (os sem marcador são links para os `_s5e9945_`).
+  Nenhum tem seção de CPU/GPU. Portar a ENN dá a `libenn_user_lib.so`, os
+  drivers de CPU/GPU e o serviço AIDL, mas não há modelo Samsung que rode
+  neles; o ganho real fica na instalação do Language Core e em apps que
+  tratem a falha de carga do modelo.
+
+  **Teste com o app (11/11, módulo KernelSU `ennport_test`).** Ajustes:
+  `tools/patch_enn_soc.py` troca a chave `9840` por `990` nas 6 cópias da
+  tabela de SoCs da `libenn_common_utils` (`Set SOC name as 990`,
+  `EnnInitialize=0` sem calço); `libenn_user_lib.so` entra em
+  `/vendor/etc/public.libraries.txt`; a `libdmabufheap.so` do system vai
+  para a vendor (não é exportada ao namespace da vendor A11). Com isso o
+  Galaxy Store instalou o Language Core 4.1.01.24, variante `9965` (o system
+  se apresenta como SM-S947B), e o aviso `language pack is not installed`
+  sumiu; o cartão personalizado do Now Brief continuou falhando sem o app
+  carregar a ENN. As libs do APK não têm `retaa`; a
+  `libenn_public_api_cpp_lib` dele importa `EnnExecuteModelWithSessionIdAndFlag`,
+  ausente na 2.2.29: `src/enn_user_shim.c` vira a `libenn_user_lib.so`
+  pública, depende da original renomeada `libenn_user_s24.so` (SONAME de
+  mesmo tamanho) e implementa só essa função (na 2.4 a antiga é a nova com
+  flag 0). As 2 LRCPC2 e 16 "SVE" da `libsnap_vndk` ficam em
+  `0x153xxx-0x156xxx`, região de dados dentro do `.text` (`<unknown>` ao
+  redor): não são executadas e não exigem emulação no kernel.
+
+  **Resultado com apps (11/11).** Entre namespaces o app só resolve símbolos
+  nos DT_NEEDED diretos, então o calço passou a exportar as 102 entradas C
+  da ENN como desvios (`tools/gen_enn_user_shim.py` gera o `.S`; tabela
+  preenchida por `dlopen("libenn_user_s24.so")` no construtor). No processo
+  do app a vendor usa a libc++ da VNDK v30: a `libdmabufheap` do system A17
+  falha (`__libcpp_verbose_abort`); a do system do G986B (A13) não usa esse
+  símbolo e exporta todo o `BufferAllocator` que a ENN chama (usar essa).
+  O cartão personalizado do Now Brief é nuvem: o servidor da conta Samsung
+  recusa o token do `smartsuggestions` (`AuthWithTncMandatory` -> `e90` ->
+  `SAC_0401`), também após novo login, enquanto outros clientes recebem
+  token; não envolve a ENN. A edição de imagem do `SamsungAiCore`
+  (`SS_SR_INOUTPAINT_KOALA`, `backendType LSI_NPU`, `chipset lsi_s5e9965`)
+  carrega a `libSSNeuralCoreVNDK` mas para em
+  `SSNeuralCoreContextImpl::checkChipset()`: compara `ro.soc.model`
+  ("Exynos 990") com a lista de chipsets suportados (há um desvio de
+  depuração `SSNEURAL_FORCE_DEVICE=1` no ambiente) e responde `Device is not
+  supported`; a UI fica esperando o modelo. A `libssneural_vndk` do
+  Language Core tem a mesma checagem. Conclusão: a ENN 2.2.29 roda no 990,
+  mas todos os modelos Samsung (LLM, edição de imagem, câmera) são binário
+  do NPU do chip de origem e os apps barram o chipset antes; o port não
+  habilita nenhum recurso. Módulo `ennport_test` mantido só para testes.
+
+  **Galeria e cartão (12/11).** A borracha generativa do editor funciona com
+  "Processar dados apenas no dispositivo" desligado (nuvem); ligada, o editor
+  exige o modelo local `SS_SR_INOUTPAINT_KOALA` (NPU do 9965) e trava, com
+  ou sem ENN. Teste com módulo `system.prop` anunciando `SM-S926B` (só
+  `ro.product{,.product,.system,.system_ext}.model`): o servidor continua
+  recusando o token do `smartsuggestions` (`e90` -> `SAC_0401`); o modelo
+  anunciado não é o critério. Módulo removido.
 * **Cartão personalizado do Now Brief / Now Bar**
   (`com.samsung.android.smartsuggestions`): `ScsApi@Configuration:
   language pack is not installed` e `NowBrief.LLMPolicy: Exception occurred
