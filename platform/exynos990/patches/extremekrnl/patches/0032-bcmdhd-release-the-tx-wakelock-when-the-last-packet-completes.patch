@@ -1,0 +1,44 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] bcmdhd: release the tx wakelock when the last packet completes
+
+dhd_prot_txdata() takes wlan_txfl_wake for MAX_TX_TIMEOUT (500 ms) on
+every queued packet, and nothing ever calls dhd_txfl_wake_unlock(): each
+transmit keeps the AP awake for the full timeout even though the dongle
+reports completion within milliseconds. With the screen off the y2slte
+recorded 1179 wlan_txfl_wake wakeups and 1078 s held in about 1.5 h.
+
+Drop the wakelock in dhd_prot_txstatus_process() once active_tx_count
+reaches zero. The timeout is kept as a safety net for lost completions;
+if a completion races ahead of the counter increment the old behavior
+(timeout only) applies.
+---
+diff --git a/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd_msgbuf.c b/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd_msgbuf.c
+--- a/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd_msgbuf.c
++++ b/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd_msgbuf.c
+@@ -6503,6 +6503,7 @@
+ 	void *dmah;
+ 	void *secdma;
+ 	bool pkt_fate;
++	int tx_pending;
+ 	msgbuf_ring_t *ring = &dhd->prot->d2hring_tx_cpln;
+ #if defined(TX_STATUS_LATENCY_STATS)
+ 	flow_info_t *flow_info;
+@@ -6555,8 +6556,17 @@
+ #endif
+ 
+ 	DHD_INFO(("txstatus for pktid 0x%04x\n", pktid));
+-	if (OSL_ATOMIC_DEC_RETURN(dhd->osh, &prot->active_tx_count) < 0) {
++	tx_pending = OSL_ATOMIC_DEC_RETURN(dhd->osh, &prot->active_tx_count);
++	if (tx_pending < 0) {
+ 		DHD_ERROR(("Extra packets are freed\n"));
++	} else if (tx_pending == 0) {
++		/*
++		 * The last queued packet has completed, so the host has nothing
++		 * left to wait for: drop the tx wakelock now instead of letting
++		 * MAX_TX_TIMEOUT expire. The timeout stays as a safety net for
++		 * lost completions.
++		 */
++		DHD_TXFL_WAKE_UNLOCK(dhd);
+ 	}
+ 	ASSERT(pktid != 0);
+ 

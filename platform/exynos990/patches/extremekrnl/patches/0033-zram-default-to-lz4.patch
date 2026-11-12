@@ -1,0 +1,42 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] zram: default to lz4
+
+Android 17 leaves the zram compressor at the kernel default (mmd only
+configures recompression), which on 4.19 is lzo-rle, and lz4 was not
+even selectable because CONFIG_CRYPTO_LZ4 was off. Enable it and make
+lz4 the default compressor when it is built in: decompression, which is
+what returning to a swapped-out app waits on, is considerably faster
+than lzo-rle at a similar ratio. lzo-rle stays the default otherwise and
+remains selectable through comp_algorithm.
+---
+diff --git a/arch/arm64/configs/exynos9830_defconfig b/arch/arm64/configs/exynos9830_defconfig
+--- a/arch/arm64/configs/exynos9830_defconfig
++++ b/arch/arm64/configs/exynos9830_defconfig
+@@ -6342,7 +6342,7 @@
+ CONFIG_CRYPTO_DEFLATE=y
+ CONFIG_CRYPTO_LZO=y
+ # CONFIG_CRYPTO_842 is not set
+-# CONFIG_CRYPTO_LZ4 is not set
++CONFIG_CRYPTO_LZ4=y
+ # CONFIG_CRYPTO_LZ4HC is not set
+ # CONFIG_CRYPTO_ZSTD is not set
+ 
+diff --git a/drivers/block/zram/zram_drv.c b/drivers/block/zram/zram_drv.c
+--- a/drivers/block/zram/zram_drv.c
++++ b/drivers/block/zram/zram_drv.c
+@@ -54,7 +54,15 @@
+ static DEFINE_MUTEX(zram_index_mutex);
+ 
+ static int zram_major;
++/*
++ * lz4 decompresses considerably faster than lzo-rle on the Cortex-A77/A55
++ * with a similar ratio, which shortens swap-in when returning to cached apps.
++ */
++#if IS_ENABLED(CONFIG_CRYPTO_LZ4)
++static const char *default_compressor = "lz4";
++#else
+ static const char *default_compressor = "lzo-rle";
++#endif
+ 
+ /* Module params (documentation at end) */
+ static unsigned int num_devices = 1;

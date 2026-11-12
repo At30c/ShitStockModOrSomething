@@ -13268,9 +13268,42 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
 `d2tw/run_1108` e `d2tw/run_1110_evening`. O driver `sec_ts` registra
 `sec_ts_set_lowpowermode: ENTER/EXIT(3C)` e os comandos do sysinput.
 
+### Wakelock de envio do Wi-Fi, TMU e zram (12/11/2026)
+
+* **0032 (bcmdhd, não testado no aparelho):** `dhd_prot_txdata()` toma
+  `wlan_txfl_wake` por `MAX_TX_TIMEOUT` (500 ms) a cada pacote enfileirado e
+  nada chama `dhd_txfl_wake_unlock()`: todo envio segura o AP os 500 ms
+  inteiros, embora o dongle confirme em milissegundos (1 179 acordadas /
+  1 078 s em ~1,5 h). O patch libera o wakelock em
+  `dhd_prot_txstatus_process()` quando `active_tx_count` chega a zero; o
+  timeout fica como rede de segurança. Medir junto com o 0028 (15 min sem
+  cabo, `wakeup_sources`, notificações na hora).
+* **TMU (sem patch):** `exynos_tmu_initialize()` liga interrupção de subida
+  para todo trip não `passive`; BIG/MID/LITTLE têm um trip `cold` a 20 °C
+  (`active`, sem mapa de resfriamento) e o próximo a 55/76 °C. Nenhum patch
+  nosso mexe nos trips (é a configuração da Samsung) e o 0023 só trocou o
+  hotplug do DTM por pedido ECS. Quem programa o TMU é o firmware ACPM (IPC
+  `THRESHOLD`/`INTEN`/`IRQ_CLEAR`, sem código no kernel), que tem contador
+  próprio de frio (`cold cnt` no resume): o trip de 20 °C serve à compensação
+  de frio do firmware. Hipótese para as ~24 IRQs/s por zona: o firmware
+  reavalia a cada amostragem e reafirma a interrupção enquanto a temperatura
+  está acima de um limite ligado (20 °C sempre está). Medir antes de mudar:
+  delta de `/proc/interrupts` das linhas `10090000.*`/`100a0000.*` por 10 s
+  com as temperaturas das zonas, tela ligada e apagada, kernel atual e #49;
+  com `echo 1` no log do `exynos_acpm_tmu`, ver se o `stat` aponta o trip 0.
+  Se for o trip frio, o candidato é não ligar o bit dele em `inten` (o
+  firmware continua com a compensação), validando que o `cold cnt` ainda
+  conta abaixo de 20 °C.
+* **0033 (zram lz4):** no A17 o compressor principal fica o padrão do kernel
+  (o `mmd` só configura recompressão, inativa aqui), que no 4.19 é
+  `lzo-rle`, e lz4 nem era selecionável (`CONFIG_CRYPTO_LZ4` desligado).
+  O patch liga `CRYPTO_LZ4` e usa lz4 como padrão quando presente. Conferir
+  `cat /sys/block/zram0/comp_algorithm` com `[lz4]` após o boot.
+
 ### Pendências do kernel
 
-* Enviar 0023-0027 para a ROM (a release publicada tem o kernel #49).
+* Enviar 0023-0028, 0032 e 0033 para a ROM depois de medir 0028/0032 (a
+  release publicada tem o kernel #49).
 * Avaliar se vale baixar o peso do mid para os grupos bg/root no set normal
   (o misfit ratio não muda a escolha de CPU no wakeup).
 * Opcionais: MLT runnable, zram com lz4 (hoje só `lzo`/`lzo-rle`), esperas
