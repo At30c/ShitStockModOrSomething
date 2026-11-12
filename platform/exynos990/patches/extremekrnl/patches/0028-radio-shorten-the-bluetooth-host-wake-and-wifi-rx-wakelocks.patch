@@ -1,0 +1,54 @@
+From: At30c <At30c@users.noreply.github.com>
+Subject: [PATCH] radio: shorten the Bluetooth host wake and Wi-Fi rx wakelocks
+
+With the screen off the y2slte stayed awake about a third of the time,
+almost all of it in radio wakelocks: BT_host_wake (606 wakeups, 2.7 s on
+average each) and wlan_rx_wake (1235 wakeups, 0.9 s each) in about 1.5 h.
+The work behind each wakeup takes milliseconds; the rest is the timed
+wakelock the drivers keep so that the upper layers can take theirs.
+
+Keep it for 250 ms instead of 1 s after the Bluetooth chip deasserts
+host wake (bcm43xx), and for 200 ms instead of 500 ms after each received
+Wi-Fi packet (bcmdhd 101_16, DHD_PACKET_TIMEOUT_MS). The Bluetooth stack
+and the network stack take their own wakelocks while they process the
+data. Transmit and control wakelocks are unchanged.
+---
+diff --git a/drivers/bluetooth/bcm43xx.c b/drivers/bluetooth/bcm43xx.c
+index c6e828e..bb0876b 100644
+--- a/drivers/bluetooth/bcm43xx.c
++++ b/drivers/bluetooth/bcm43xx.c
+@@ -189,10 +189,13 @@ static void update_host_wake_locked(int host_wake)
+ 	} else  {
+ 		/* Take a timed wakelock, so that upper layers can take it.
+ 		 * The chipset deasserts the hostwake lock, when there is no
+-		 * more data to send.
++		 * more data to send. The Bluetooth stack takes its own wakelock
++		 * while it handles the data; 250 ms instead of 1 s, since each
++		 * of the frequent wearable/BLE wakeups kept the device awake for
++		 * the whole second (2.7 s on average per host wake).
+ 		 */
+-		pr_info("[BT] update_host_wake_locked host_wake is deasserted. release wakelock in 1s\n");
+-		wake_lock_timeout(&bt_lpm.host_wake_lock, HZ);
++		pr_info("[BT] update_host_wake_locked host_wake is deasserted. release wakelock in 250ms\n");
++		wake_lock_timeout(&bt_lpm.host_wake_lock, msecs_to_jiffies(250));
+ 
+         if (bt_lpm.dev_wake == 0)
+             exynos_update_ip_idle_status(idle_btip_index, STATUS_IDLE);
+diff --git a/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd.h b/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd.h
+index cc487ce..0c6eb1f 100644
+--- a/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd.h
++++ b/drivers/net/wireless/broadcom/bcmdhd_101_16/dhd.h
+@@ -1920,7 +1920,12 @@ extern void dhd_os_oob_irq_wake_unlock(dhd_pub_t *pub);
+ #define DHD_OS_OOB_IRQ_WAKE_UNLOCK(pub)			dhd_os_oob_irq_wake_unlock(pub)
+ #endif /* BCMPCIE_OOB_HOST_WAKE */
+ 
+-#define DHD_PACKET_TIMEOUT_MS	500
++/*
++ * Wakelock held after each received packet so that the network stack and
++ * the app can take theirs: 200 ms instead of 500 ms (0.9 s on average per
++ * rx wake on the y2slte with the screen off).
++ */
++#define DHD_PACKET_TIMEOUT_MS	200
+ #define DHD_EVENT_TIMEOUT_MS	1500
+ #define SCAN_WAKE_LOCK_TIMEOUT	10000
+ #define MAX_TX_TIMEOUT			500
