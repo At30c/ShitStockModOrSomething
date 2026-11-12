@@ -13302,8 +13302,9 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
 
 ### Pendências do kernel
 
-* Enviar 0023-0028, 0032 e 0033 para a ROM depois de medir 0028/0032 (a
-  release publicada tem o kernel #49).
+* 0023-0028 foram para a ROM na atualização só de kernel de 12/11 (0029-0033
+  ficaram fora: AOT sem commit, 0032/0033 sem teste no aparelho). Enviar
+  0032 e 0033 depois de medir 0028/0032.
 * Avaliar se vale baixar o peso do mid para os grupos bg/root no set normal
   (o misfit ratio não muda a escolha de CPU no wakeup).
 * Opcionais: MLT runnable, zram com lz4 (hoje só `lzo`/`lzo-rle`), esperas
