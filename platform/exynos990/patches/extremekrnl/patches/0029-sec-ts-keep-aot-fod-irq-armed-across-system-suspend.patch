@@ -1,0 +1,63 @@
+diff --git a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
+index 090e5e32586b..130fa084b89f 100644
+--- a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
++++ b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
+@@ -3451,6 +3451,7 @@ int sec_ts_start_device(struct sec_ts_data *ts)
+ static int sec_ts_pm_suspend(struct device *dev)
+ {
+ 	struct sec_ts_data *ts = dev_get_drvdata(dev);
++	int ret;
+ #if 0
+ 	int retval;
+ 
+@@ -3478,6 +3479,21 @@ static int sec_ts_pm_suspend(struct device *dev)
+ 
+ out:
+ #endif
++	/*
++	 * The display path arms the TSP IRQ when it enters LPM.  A long idle
++	 * period can subsequently suspend the I2C device without replaying that
++	 * path.  Keep one balanced wake reference across system suspend so that
++	 * the controller's AOT/FOD interrupt remains a wake source.
++	 */
++	if (ts->power_status == SEC_TS_STATE_LPM &&
++		device_may_wakeup(dev) && !ts->pm_irq_wake_armed) {
++		ret = enable_irq_wake(ts->client->irq);
++		if (ret)
++			input_err(true, &ts->client->dev,
++				"%s: failed to arm irq wake: %d\n", __func__, ret);
++		else
++			ts->pm_irq_wake_armed = true;
++	}
+ 	reinit_completion(&ts->resume_done);
+ 
+ 	return 0;
+@@ -3486,6 +3502,15 @@ static int sec_ts_pm_suspend(struct device *dev)
+ static int sec_ts_pm_resume(struct device *dev)
+ {
+ 	struct sec_ts_data *ts = dev_get_drvdata(dev);
++	int ret;
++
++	if (ts->pm_irq_wake_armed) {
++		ret = disable_irq_wake(ts->client->irq);
++		if (ret)
++			input_err(true, &ts->client->dev,
++				"%s: failed to release irq wake: %d\n", __func__, ret);
++		ts->pm_irq_wake_armed = false;
++	}
+ 
+ 	complete_all(&ts->resume_done);
+ 
+diff --git a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.h b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.h
+index 7e7227badf17..41e39ab40a1d 100644
+--- a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.h
++++ b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.h
+@@ -739,6 +739,8 @@ struct sec_ts_data {
+ 	volatile u8 touch_noise_status;
+ 	volatile u8 touch_pre_noise_status;
+ 	volatile bool input_closed;
++	/* Extra wake reference held only while the SoC is system-suspended. */
++	bool pm_irq_wake_armed;
+ 	long prox_power_off;
+ 
+ 	int touch_count;

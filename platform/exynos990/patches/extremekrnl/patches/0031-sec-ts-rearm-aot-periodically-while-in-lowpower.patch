@@ -1,0 +1,168 @@
+--- a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
++++ b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
+@@ -16,6 +16,8 @@
+ struct sec_ts_data *ts_dup;
+ bool shutdown_is_on_going_tsp;
+ 
++static void sec_ts_lpm_rearm_work(struct work_struct *work);
++
+ #ifdef USE_POWER_RESET_WORK
+ static void sec_ts_reset_work(struct work_struct *work);
+ #endif
+@@ -2589,6 +2591,8 @@
+ 	wake_lock_init(&ts->wakelock, WAKE_LOCK_SUSPEND, "tsp_wakelock");
+ 	init_completion(&ts->resume_done);
+ 	complete_all(&ts->resume_done);
++	INIT_WORK(&ts->lpm_rearm_work, sec_ts_lpm_rearm_work);
++	ts->lpm_rearm_ws = wakeup_source_register(&client->dev, "tsp_lpm_rearm");
+ 
+ 	input_info(true, &client->dev, "%s: init resource\n", __func__);
+ 
+@@ -3128,6 +3132,86 @@
+ 
+ }
+ 
++/*
++ * Replay the Sponge mode with the double-tap bit cleared and then restored.
++ * The touch firmware may keep advertising AOT while its double-tap detector
++ * is no longer armed; this sequence re-arms it without touching any other
++ * Sponge feature.  Without AOT the current mode is simply written once.
++ */
++static int sec_ts_rearm_doubletap(struct sec_ts_data *ts)
++{
++	int ret;
++
++	if (ts->lowpower_mode & SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP) {
++		u8 saved_lowpower_mode = ts->lowpower_mode;
++
++		ts->lowpower_mode &= ~SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP;
++		ret = sec_ts_set_custom_library(ts);
++		ts->lowpower_mode = saved_lowpower_mode;
++		if (ret < 0)
++			return ret;
++
++		sec_ts_delay(5);
++	}
++
++	ret = sec_ts_set_custom_library(ts);
++	if (ret >= 0)
++		ts->lpm_rearm_last = ktime_get_boottime();
++
++	return ret;
++}
++
++/*
++ * A re-arm at LPM entry alone is not enough: after hours in LPM the
++ * controller stops raising AOT and FOD interrupts entirely (the sec_ts IRQ
++ * count stays flat for the whole idle period) and only recovers when the
++ * screen is turned on.  The SoC resumes many times per hour for unrelated
++ * reasons, so piggyback on those resumes and replay the sequence once the
++ * last re-arm is older than SEC_TS_LPM_REARM_INTERVAL.  This adds no wakeups.
++ */
++#define SEC_TS_LPM_REARM_INTERVAL_MS	(10 * 60 * 1000)
++
++static void sec_ts_lpm_rearm_work(struct work_struct *work)
++{
++	struct sec_ts_data *ts = container_of(work, struct sec_ts_data,
++					      lpm_rearm_work);
++	int ret;
++
++	struct irq_desc *desc = irq_to_desc(ts->client->irq);
++	unsigned int depth;
++	int int_level;
++
++	mutex_lock(&ts->modechange);
++	if (ts->power_status == SEC_TS_STATE_LPM && !shutdown_is_on_going_tsp &&
++	    (ts->lowpower_mode & SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP)) {
++		depth = desc ? desc->depth : 0;
++		int_level = gpio_get_value(ts->plat_data->irq_gpio);
++
++		/*
++		 * Like sec_input_irq_enable() on newer Samsung kernels: in LPM
++		 * nothing may legitimately keep the TSP IRQ disabled, so drop
++		 * any reference leaked by an unbalanced disable_irq() path,
++		 * which would otherwise silence AOT/FOD until the next unblank.
++		 */
++		if (desc && depth > 0 && !ts->reset_is_on_going
++#ifdef CONFIG_INPUT_SEC_SECURE_TOUCH
++		    && atomic_read(&ts->secure_enabled) != SECURE_TOUCH_ENABLE
++#endif
++		    ) {
++			while (desc->depth > 0)
++				enable_irq(ts->client->irq);
++		}
++
++		ret = sec_ts_rearm_doubletap(ts);
++		input_info(true, &ts->client->dev,
++			   "%s: periodic AOT re-arm: %d (irq depth %u, int %d)\n",
++			   __func__, ret, depth, int_level);
++	}
++	mutex_unlock(&ts->modechange);
++
++	__pm_relax(ts->lpm_rearm_ws);
++}
++
+ int sec_ts_set_lowpowermode(struct sec_ts_data *ts, u8 mode)
+ {
+ 	int ret;
+@@ -3150,19 +3234,7 @@
+ 		 * immediately restores the gesture.  Do the same atomically before
+ 		 * each transition to LPM, preserving every other Sponge feature.
+ 		 */
+-		if (ts->lowpower_mode & SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP) {
+-			u8 saved_lowpower_mode = ts->lowpower_mode;
+-
+-			ts->lowpower_mode &= ~SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP;
+-			ret = sec_ts_set_custom_library(ts);
+-			ts->lowpower_mode = saved_lowpower_mode;
+-			if (ret < 0)
+-				goto i2c_error;
+-
+-			sec_ts_delay(5);
+-		}
+-
+-		ret = sec_ts_set_custom_library(ts);
++		ret = sec_ts_rearm_doubletap(ts);
+ 		if (ret < 0)
+ 			goto i2c_error;
+ 	} else {
+@@ -3335,6 +3407,9 @@
+ 	free_irq(ts->client->irq, ts);
+ 	input_info(true, &ts->client->dev, "%s: irq disabled\n", __func__);
+ 
++	cancel_work_sync(&ts->lpm_rearm_work);
++	wakeup_source_unregister(ts->lpm_rearm_ws);
++
+ #ifdef USE_POWER_RESET_WORK
+ 	cancel_delayed_work_sync(&ts->reset_work);
+ 	flush_delayed_work(&ts->reset_work);
+@@ -3533,6 +3608,16 @@
+ 
+ 	complete_all(&ts->resume_done);
+ 
++	if (ts->lpm_rearm_ws && ts->power_status == SEC_TS_STATE_LPM &&
++	    (ts->lowpower_mode & SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP) &&
++	    ktime_ms_delta(ktime_get_boottime(), ts->lpm_rearm_last) >=
++			SEC_TS_LPM_REARM_INTERVAL_MS) {
++		/* Keep the SoC up until the I2C replay has finished. */
++		__pm_stay_awake(ts->lpm_rearm_ws);
++		if (!queue_work(system_power_efficient_wq, &ts->lpm_rearm_work))
++			__pm_relax(ts->lpm_rearm_ws);
++	}
++
+ 	return 0;
+ }
+ #endif
+--- a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.h
++++ b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.h
+@@ -741,6 +741,10 @@
+ 	volatile bool input_closed;
+ 	/* Extra wake reference held only while the SoC is system-suspended. */
+ 	bool pm_irq_wake_armed;
++	/* Periodic AOT re-arm while the panel stays in LPM (see sec_ts_pm_resume). */
++	struct work_struct lpm_rearm_work;
++	struct wakeup_source *lpm_rearm_ws;
++	ktime_t lpm_rearm_last;
+ 	long prox_power_off;
+ 
+ 	int touch_count;

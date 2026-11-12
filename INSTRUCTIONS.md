@@ -13268,6 +13268,68 @@ por `/data/local/tmp/d2tw_at.sh` (pid em `d2tw/at.pid`; parar com
 `d2tw/run_1108` e `d2tw/run_1110_evening`. O driver `sec_ts` registra
 `sec_ts_set_lowpowermode: ENTER/EXIT(3C)` e os comandos do sysinput.
 
+O patch de kernel
+`platform/exynos990/patches/extremekrnl/patches/0029-sec-ts-keep-aot-fod-irq-armed-across-system-suspend.patch`
+mantém uma referência balanceada de wake da IRQ do `sec_ts` durante o
+suspend real do SoC e a libera no resume. Ele cobre o caminho comum de AOT e
+FOD depois de repouso profundo, sem reconfigurar os comandos de toque nem
+forçar a tela a ficar ligada.
+
+O teste do kernel com o 0029 mostrou que a IRQ e o Android continuavam
+operacionais, mas o firmware do touchscreen podia reter `AOT=1` e o Sponge
+`0x3c` sem o detector interno de duplo toque armado. Reenviar somente `0x3c`
+não recuperava o gesto. A sequência aceita pelo controlador e que recuperou
+o aparelho foi `0x1c` (todos os recursos anteriores, sem AOT) seguido de
+`0x3c` (AOT novamente). O patch
+`platform/exynos990/patches/extremekrnl/patches/0030-sec-ts-rearm-aot-before-lowpower.patch`
+faz essa sequência a cada entrada em LPM, com espera de 5 ms e sem alterar os
+bits AOD, single-tap ou FOD. Foi compilado no boot `y2slte`, assinado com AVB
+e instalado em 11/11. O log de validação registra
+`ENTER(3C)`, `Sponge (0x1c)`, `Sponge (0x3c)` e `power mode - write(1) read(1)`.
+Em seguida, com a tela apagada, `cmd deviceidle force-idle` colocou o Android
+em `IDLE` profundo; o D2TW acordou o aparelho nessa condição. O Doze foi
+desforçado após o teste e a configuração do usuário permaneceu
+`double_tap_to_wake=1`.
+
+**0029/0030 não bastam (trace de 11/11, 05:07-20:09).** Em 858 entradas em
+LPM, sessões de até ~30 min acordaram por duplo toque, mas as duas mais
+longas (08:05-11:55 e 13:07-17:48, 3h50 e 4h40) terminaram sem gesto, pelo
+botão. Durante elas o contador de IRQ do `sec_ts` em `/proc/interrupts` ficou
+parado (58790 do início ao fim em 4h40): nem AOT, nem FOD, nem status. Zero
+erros de I2C, nenhum `pm resume is not handled` e nenhum `Write prox set`
+(o modo `prox_power_off` não foi aplicado). O userspace desligou o bit
+`SINGLE_TAP` às 06:02 (Sponge `0x3c` -> `0x34`) e só religou às 19:37, mas o
+duplo toque funcionou 18 vezes em `0x34`, então esse bit não é a causa. Em
+4.19 o `/proc/interrupts` não conta IRQ com `depth > 0`, então o contador
+parado tem duas explicações: o CI do touch parou de detectar, ou alguma das
+dezenas de pares `disable_irq`/`enable_irq` do driver ficou desbalanceada e
+deixou a IRQ desligada até o próximo unblank.
+
+**Comparação com o kernel do S26+ (`sec_input`, STM/Synaptics do S5E9965):**
+não há rearme periódico. As diferenças são: (1) IRQ chegando com o SoC
+suspenso é adiada para um work que espera o resume e então roda o handler
+(o 990 espera 500 ms e, se estourar, retorna sem ler o evento do CI); (2)
+`enable_irq_wake` forçado até `wake_depth >= 1` na entrada em LPM e liberado
+na saída (o 0029 cobre); (3) `CLEAR_ALL_EVENT` antes de mudar o opmode; (4)
+`sec_input_irq_enable()` reabilita a IRQ em laço até `depth == 0`. O LP dump
+do Sponge é só um buffer de diagnóstico, lido no 990 por
+`/sys/class/sec/tsp/get_lp_dump`.
+
+**Patch 0031** (`0031-sec-ts-rearm-aot-periodically-while-in-lowpower.patch`):
+extrai a sequência do 0030 para `sec_ts_rearm_doubletap()` e a repete
+enquanto o painel continua em LPM. O gatilho é o próprio `sec_ts_pm_resume`:
+como o SoC já acorda várias vezes por hora (rádio, alarmes), quando o último
+rearme tem mais de 10 min (`ktime_get_boottime`, que conta o tempo em
+suspend) ele enfileira um work em `system_power_efficient_wq` segurando a
+wakeup source `tsp_lpm_rearm` até a escrita I2C terminar, sem criar wakeups.
+No work, com `modechange` travado, ele registra `irq depth` e o nível da
+linha INT (`gpio-8 sec,tsp_int`, ativo em nível baixo) e, como no S26+,
+reabilita a IRQ se `depth > 0` sem reset ou secure touch em andamento. A
+linha `periodic AOT re-arm: <ret> (irq depth N, int L)` no kmsg separa as
+hipóteses: `depth > 0` ou `int 0` com o contador parado aponta vazamento no
+host; `depth 0` e `int 1` aponta o firmware do CI. Também corrige no 0029 o
+`"\\n"` literal nas mensagens de erro do `enable/disable_irq_wake`.
+
 ### Wakelock de envio do Wi-Fi, TMU e zram (12/11/2026)
 
 * **0032 (bcmdhd, não testado no aparelho):** `dhd_prot_txdata()` toma

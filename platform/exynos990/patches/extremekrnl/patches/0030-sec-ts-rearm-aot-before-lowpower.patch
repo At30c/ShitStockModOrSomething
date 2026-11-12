@@ -1,0 +1,29 @@
+diff --git a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
+--- a/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
++++ b/drivers/input/touchscreen/sec_ts/y79a/sec_ts.c
+@@ -3143,6 +3143,25 @@ int sec_ts_set_lowpowermode(struct sec_ts_data *ts, u8 mode)
+ 
+ 		sec_ts_set_utc_sponge(ts);
+ 
++		/*
++		 * The touch firmware can retain the advertised AOT bit after a long
++		 * idle period while its internal double-tap detector is no longer
++		 * armed.  Replaying 0x1c -> 0x3c through the factory command path
++		 * immediately restores the gesture.  Do the same atomically before
++		 * each transition to LPM, preserving every other Sponge feature.
++		 */
++		if (ts->lowpower_mode & SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP) {
++			u8 saved_lowpower_mode = ts->lowpower_mode;
++
++			ts->lowpower_mode &= ~SEC_TS_MODE_SPONGE_DOUBLETAP_TO_WAKEUP;
++			ret = sec_ts_set_custom_library(ts);
++			ts->lowpower_mode = saved_lowpower_mode;
++			if (ret < 0)
++				goto i2c_error;
++
++			sec_ts_delay(5);
++		}
++
+ 		ret = sec_ts_set_custom_library(ts);
+ 		if (ret < 0)
+ 			goto i2c_error;
